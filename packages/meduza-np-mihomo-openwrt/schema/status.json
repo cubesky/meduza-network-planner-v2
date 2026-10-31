@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Mihomo (OpenClash) status",
+  "type": "object",
+  "required": [
+    "id",
+    "kind",
+    "state"
+  ],
+  "properties": {
+    "kind": {
+      "enum": [
+        "openclash",
+        "openclash-dns",
+        "openclash-subscription"
+      ]
+    },
+    "state": {
+      "enum": [
+        "up",
+        "starting",
+        "down",
+        "degraded",
+        "pending"
+      ]
+    },
+    "connections": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "overriddenKeys": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "selected": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "takenOver": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    }
+  }
+}

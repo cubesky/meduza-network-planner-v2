@@ -1,0 +1,3 @@
+# Installed package store: objects, views, staging, previous generation, update journal. Written only by the updater.
+[Volume]
+VolumeName=meduza-np-store

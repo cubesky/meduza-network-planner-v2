@@ -1,0 +1,19 @@
+[package]
+name = "meduza-np-runtime"
+version = "0.1.0"
+description = "Shared node runtime primitives: backoff/jitter gate, atomic files, ownership journal"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+meduza-np-protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+rand.workspace = true
+getrandom.workspace = true
+httpdate.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

@@ -1,0 +1,37 @@
+{
+  "formatVersion": 1,
+  "platformMapping": {
+    "linux/amd64": "mihomo-linux-amd64-compatible-{tag}.gz",
+    "linux/arm/v7": "mihomo-linux-armv7-{tag}.gz",
+    "linux/arm64": "mihomo-linux-arm64-{tag}.gz"
+  },
+  "upstream": "https://github.com/MetaCubeX/mihomo/releases",
+  "versions": [
+    {
+      "assets": [
+        {
+          "name": "mihomo-linux-amd64-compatible-v1.19.33.gz",
+          "platform": "linux/amd64",
+          "sha256": "386508bfb1c72c43b6a0eda73708ecdce82546581b0ebcb16366c53757c622b6",
+          "size": 22893972,
+          "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-linux-amd64-compatible-v1.19.33.gz"
+        },
+        {
+          "name": "mihomo-linux-armv7-v1.19.33.gz",
+          "platform": "linux/arm/v7",
+          "sha256": "c8a8f9bcaab914269fbdca7569e4a9f024cc667ecf12eb43e8ccdc01b3731604",
+          "size": 21190617,
+          "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-linux-armv7-v1.19.33.gz"
+        },
+        {
+          "name": "mihomo-linux-arm64-v1.19.33.gz",
+          "platform": "linux/arm64",
+          "sha256": "ba408b317080ee265c46cb923a50018c1b82cbd708551cdd46a1e3e307396187",
+          "size": 20824326,
+          "url": "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.33/mihomo-linux-arm64-v1.19.33.gz"
+        }
+      ],
+      "tag": "v1.19.33"
+    }
+  ]
+}

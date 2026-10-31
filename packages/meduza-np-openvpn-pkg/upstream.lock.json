@@ -1,0 +1,46 @@
+{
+  "lockVersion": 1,
+  "package": "meduza-np-openvpn-pkg",
+  "builder": {
+    "image": "docker.io/library/alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a",
+    "apk": ["build-base", "linux-headers", "perl", "autoconf", "automake", "libtool", "pkgconf", "git", "curl", "jq", "binutils"]
+  },
+  "sources": [
+    {
+      "name": "openvpn",
+      "version": "2.7.8",
+      "url": "https://swupdate.openvpn.org/community/releases/openvpn-2.7.8.tar.gz",
+      "sha256": "c070d1d2440b5a6fca6c2c68645c98cd492116ac36ef4f0946177115532c8e36",
+      "signature": {
+        "url": "https://swupdate.openvpn.org/community/releases/openvpn-2.7.8.tar.gz.asc",
+        "primaryKey": "F554A3687412CFFEBDEFE0A312F5F7B42F2B01E7",
+        "signingSubkey": "33DA8C9EAE0EAE8C73172C10822F6DF096D04874"
+      },
+      "license": "GPL-2.0-only WITH openvpn-openssl-exception",
+      "licenseFiles": ["COPYING", "COPYRIGHT.GPL"]
+    },
+    {
+      "name": "openssl",
+      "version": "3.5.9",
+      "url": "https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz",
+      "sha256": "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a",
+      "license": "Apache-2.0",
+      "licenseFiles": ["LICENSE.txt"]
+    },
+    {
+      "name": "libcap-ng",
+      "version": "0.9.6",
+      "git": "https://github.com/stevegrubb/libcap-ng.git",
+      "tag": "v0.9.6",
+      "commit": "c382c641ca5730442289c09d3c3d30cc2c8635a9",
+      "license": "LGPL-2.1-or-later",
+      "licenseFiles": ["COPYING.LIB"]
+    }
+  ],
+  "verifiedAt": "2026-10-22",
+  "verificationNotes": [
+    "openssl sha256 equals the upstream-published openssl-3.5.9.tar.gz.sha256.",
+    "openvpn tarball signature verified with gpg against subkey 33DA8C9E...96D04874 of primary key F554A368...2F2B01E7 (OpenVPN security key).",
+    "libcap-ng is pinned by commit; the build refuses a checkout whose HEAD differs."
+  ]
+}

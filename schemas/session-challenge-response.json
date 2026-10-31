@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "expiresInSeconds": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "nonce": {
+      "description": "Base64 random nonce, valid once for `expiresInSeconds`.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "nonce",
+    "expiresInSeconds"
+  ],
+  "title": "ChallengeResponse",
+  "type": "object"
+}

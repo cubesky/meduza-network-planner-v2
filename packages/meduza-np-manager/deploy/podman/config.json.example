@@ -1,0 +1,5 @@
+{
+  "RP_NAME": "Meduza NP Manager",
+  "SESSION_TTL_SECONDS": 43200,
+  "MAX_REQUEST_BODY_BYTES": 2097152
+}

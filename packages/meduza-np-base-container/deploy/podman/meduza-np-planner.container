@@ -1,0 +1,50 @@
+# Planner role, bridge mode (default). Starts once the updater has installed planner; manages the selected services
+# inside this container's network namespace. Publish ONLY the ports of the features you enable.
+[Unit]
+Description=Meduza NP planner (bridge network)
+Wants=network-online.target meduza-np-updater.service
+After=network-online.target meduza-np-updater.service
+
+[Container]
+ContainerName=meduza-np-planner
+Image=ghcr.io/meduza-np/meduza-np-base-container:stable
+Exec=planner
+EnvironmentFile=/etc/meduza-np/node.env
+# Declares the mode to planner: host-network features (routing, TPROXY, mDNS, NAT) are then reported as limited to
+# this container's namespace instead of as in effect for the host/LAN (AGENT §14.3.3).
+Environment=MEDUZA_NP_NETWORK_MODE=bridge
+Network=meduza-np.network
+Volume=meduza-np-node.volume:/var/lib/meduza-np
+Volume=meduza-np-store.volume:/var/lib/meduza-np/store:ro
+Volume=meduza-np-ipc.volume:/run/meduza-np
+# Only what the services need, not --privileged and not Podman's default set (§14.3.4, D44): VPN/routing in the
+# container namespace (NET_*), files and privilege drop for daemons running as their own users, signalling them.
+DropCapability=ALL
+AddCapability=CHOWN DAC_OVERRIDE FOWNER KILL SETUID SETGID NET_ADMIN NET_RAW NET_BIND_SERVICE
+# With the frr component: FRR daemons keep CAP_SYS_ADMIN (netns/VRF support) and refuse to start without it.
+#AddCapability=SYS_ADMIN
+AddDevice=/dev/net/tun
+Sysctl=net.ipv4.ip_forward=1
+Sysctl=net.ipv4.conf.all.src_valid_mark=1
+# Feature ports (uncomment what you enable):
+#PublishPort=51820:51820/udp
+#PublishPort=1194:1194/udp
+#PublishPort=655:655/tcp
+#PublishPort=655:655/udp
+#PublishPort=53:53/udp
+#PublishPort=53:53/tcp
+#PublishPort=8443:8443/tcp
+HealthCmd=/usr/lib/meduza-np/container/entrypoint.sh health-planner
+HealthInterval=60s
+HealthStartPeriod=10m
+LogDriver=journald
+
+[Service]
+Restart=always
+RestartSec=5
+# Per published UDP port: a peer that kept sending while the container was replaced holds a conntrack entry made
+# without the new port mapping and refreshes it forever; drop it once the container runs (needs conntrack-tools).
+#ExecStartPost=-/usr/sbin/conntrack -D -p udp --orig-port-dst 51820
+
+[Install]
+WantedBy=multi-user.target default.target

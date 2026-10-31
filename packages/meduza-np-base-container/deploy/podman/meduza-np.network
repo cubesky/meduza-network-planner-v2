@@ -1,0 +1,5 @@
+# Explicit bridge network (the default deployment mode, §14.3.3).
+[Network]
+NetworkName=meduza-np
+Driver=bridge
+IPv6=false

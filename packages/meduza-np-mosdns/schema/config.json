@@ -1,0 +1,221 @@
+{
+  "$defs": {
+    "Category": {
+      "enum": [
+        "local",
+        "block",
+        "ddns",
+        "global"
+      ],
+      "type": "string"
+    },
+    "DomainSets": {
+      "description": "Inline domain lists by category. `ddns` = dynamic hostnames answered without caching (not a DDNS updater).",
+      "properties": {
+        "block": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "ddns": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "global": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "local": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "DownloadPolicy": {
+      "properties": {
+        "directFallback": {
+          "default": false,
+          "description": "Retry directly when the proxy is unavailable. Off by default (explicit policy, §9.9).",
+          "type": "boolean"
+        },
+        "maxBytes": {
+          "default": 33554432,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "proxy": {
+          "default": null,
+          "description": "`http://127.0.0.1:7890` or `socks5h://127.0.0.1:7891` (e.g. a ready Mihomo).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timeoutSeconds": {
+          "default": 60,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "RuleFile": {
+      "properties": {
+        "category": {
+          "$ref": "#/$defs/Category",
+          "default": "local",
+          "description": "Domain set the file extends in the generated pipeline (unused with `pluginsYaml`)."
+        },
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "fileName": {
+          "description": "Name `pluginsYaml` refers to it by (`/etc/mosdns/<fileName>`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/StableId"
+        },
+        "refreshHours": {
+          "default": 24,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "url": {
+          "description": "`https://...` source. Downloaded into the state directory; the URL never becomes a path.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "url"
+      ],
+      "type": "object"
+    },
+    "StableId": {
+      "description": "Stable object id",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "advancedYaml": {
+      "description": "Advanced: replaces the generated configuration verbatim (listeners must still match listen/port).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "bootstrap": {
+      "description": "Bootstrap resolver for DoT/DoH upstream names — never the front end itself (§9.10 loop rule).",
+      "format": "ip",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cacheSize": {
+      "default": 4096,
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "domains": {
+      "$ref": "#/$defs/DomainSets",
+      "default": {
+        "block": [],
+        "ddns": [],
+        "global": [],
+        "local": []
+      }
+    },
+    "download": {
+      "$ref": "#/$defs/DownloadPolicy",
+      "default": {
+        "directFallback": false,
+        "maxBytes": 33554432,
+        "proxy": null,
+        "timeoutSeconds": 60
+      }
+    },
+    "enabled": {
+      "default": true,
+      "type": "boolean"
+    },
+    "listen": {
+      "default": "127.0.0.1",
+      "format": "ip",
+      "type": "string"
+    },
+    "localUpstreams": {
+      "default": [],
+      "description": "Domestic / default upstreams (`udp://1.2.3.4`, `tls://dns.example:853`, `https://...`). Not used with\n`pluginsYaml`/`advancedYaml`.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "pluginsYaml": {
+      "description": "Custom pipeline: the entries of MosDNS's `plugins:` list (YAML), replacing the generated pipeline. File\nreferences `/etc/mosdns/<name>` resolve to the inline lists (`etcd_local.txt`, `etcd_block.txt`,\n`etcd_ddns.txt`, `etcd_global.txt`) and to rule files by `fileName`. A server must listen on listen:port.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "port": {
+      "default": 1153,
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "probeName": {
+      "default": "example.com",
+      "type": "string"
+    },
+    "remoteSocks5": {
+      "description": "SOCKS5 proxy for remote upstreams (e.g. Mihomo `127.0.0.1:7891`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "remoteUpstreams": {
+      "default": [],
+      "description": "Upstreams for `global` domains, optionally through a proxy.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "ruleFiles": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/RuleFile"
+      },
+      "type": "array"
+    }
+  },
+  "title": "MosDNS",
+  "type": "object"
+}

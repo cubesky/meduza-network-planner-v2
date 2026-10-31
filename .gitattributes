@@ -1,0 +1,3 @@
+# Text files are LF everywhere, also when checked out or edited on Windows: the shell scripts, OpenWrt init scripts
+# and container entrypoints run on Linux, and CRLF breaks them.
+* text=auto eol=lf

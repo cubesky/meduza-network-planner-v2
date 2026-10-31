@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`/channels/<channel>.json` — the signed pointer that makes a complete group visible (§15.1 step 9).",
+  "properties": {
+    "channel": {
+      "type": "string"
+    },
+    "expiresAt": {
+      "description": "RFC 3339; updater rejects pointers past this time (freeze attack protection).",
+      "type": "string"
+    },
+    "formatVersion": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "groupVersion": {
+      "type": "string"
+    },
+    "manifest": {
+      "description": "Relative path of the group manifest, e.g. `releases/v0.2.0/manifest.json`.",
+      "type": "string"
+    },
+    "manifestSha256": {
+      "type": "string"
+    },
+    "publishedAt": {
+      "type": "string"
+    },
+    "sequence": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "formatVersion",
+    "channel",
+    "groupVersion",
+    "sequence",
+    "manifest",
+    "manifestSha256",
+    "expiresAt",
+    "publishedAt"
+  ],
+  "title": "ChannelPointer",
+  "type": "object"
+}

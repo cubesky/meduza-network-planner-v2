@@ -1,0 +1,68 @@
+{
+  "manifestVersion": 1,
+  "package": "meduza-np-mihomo",
+  "version": "0.1.0",
+  "role": "service-adapter",
+  "plannerApi": {
+    "min": 1,
+    "max": 1
+  },
+  "requires": [
+    "meduza-np-planner"
+  ],
+  "conflicts": [
+    "meduza-np-mihomo-openwrt"
+  ],
+  "provides": [
+    "mihomo.proxy",
+    "mihomo.tproxy",
+    "mihomo.dns",
+    "mihomo.subscriptions"
+  ],
+  "hostNetworkCapabilities": [
+    "mihomo.tproxy"
+  ],
+  "capabilitySwitches": [
+    {
+      "capability": "mihomo.tproxy",
+      "pointer": "/mode",
+      "equals": "tproxy"
+    },
+    {
+      "capability": "mihomo.dns",
+      "pointer": "/dns/enabled"
+    },
+    {
+      "capability": "mihomo.subscriptions",
+      "pointer": "/subscriptions"
+    }
+  ],
+  "providerSlot": "mihomo.binary",
+  "schemas": {
+    "config": "schema/config.json",
+    "status": "schema/status.json"
+  },
+  "ui": {
+    "descriptor": "ui/descriptor.json",
+    "version": 1
+  },
+  "entrypoint": "/usr/libexec/meduza-np/plugins/mihomo",
+  "operations": [
+    "validate",
+    "plan",
+    "probe",
+    "action"
+  ],
+  "systemDependencies": [
+    {
+      "kind": "binary",
+      "name": "mihomo",
+      "providerSlot": "mihomo.binary"
+    }
+  ],
+  "consumes": [
+    "services.mihomo",
+    "networks.lan",
+    "networks.privateLan"
+  ]
+}

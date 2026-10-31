@@ -1,0 +1,189 @@
+{
+  "uiVersion": 1,
+  "package": "meduza-np-avahi",
+  "requiresCapability": "mdns.avahi",
+  "title": "Avahi / mDNS",
+  "description": "mDNS on selected interfaces. Reflection across interfaces is off by default. The optional .local bridge lets the dnsmasq front end answer A/AAAA for .local names through Avahi; the system resolver is never changed.",
+  "settings": [
+    {
+      "path": "services.avahi",
+      "title": "Avahi",
+      "sections": [
+        {
+          "title": "运行",
+          "fields": [
+            "enabled",
+            "mode",
+            "hostName"
+          ]
+        },
+        {
+          "title": "接口",
+          "fields": [
+            "allowInterfaces",
+            "denyInterfaces",
+            "useIpv4",
+            "useIpv6"
+          ]
+        },
+        {
+          "title": "发布",
+          "fields": [
+            "publish.addresses",
+            "publish.workstation",
+            "publish.services"
+          ],
+          "when": "mode == \"managed\""
+        },
+        {
+          "title": "跨接口反射",
+          "fields": [
+            "reflector.enabled",
+            "reflector.reflectIpv"
+          ],
+          "when": "mode == \"managed\""
+        },
+        {
+          "title": ".local 解析桥接",
+          "fields": [
+            "bridge.enabled",
+            "bridge.port",
+            "bridge.maxInflight",
+            "bridge.timeoutMs",
+            "bridge.cacheSeconds"
+          ]
+        }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "id": "resolve",
+      "label": "解析 .local 名称",
+      "mutating": false
+    },
+    {
+      "id": "restart-instance",
+      "label": "重启",
+      "mutating": true
+    }
+  ],
+  "status": [
+    {
+      "title": "Avahi",
+      "instanceKind": "avahi",
+      "columns": [
+        "id",
+        "state",
+        "reason",
+        "mode",
+        "version",
+        "hostName",
+        "activeInterfaces",
+        "reflector"
+      ]
+    },
+    {
+      "title": "桥接",
+      "instanceKind": "mdns-bridge",
+      "columns": [
+        "id",
+        "state",
+        "listen",
+        "reason"
+      ]
+    }
+  ],
+  "i18n": {
+    "en": {
+      "text": {
+        ".local 解析桥接": ".local resolution bridge",
+        "发布": "Publishing",
+        "接口": "Interfaces",
+        "桥接": "Bridge",
+        "解析 .local 名称": "Resolve .local names",
+        "跨接口反射": "Reflection across interfaces",
+        "运行": "Runtime",
+        "重启": "Restart"
+      }
+    },
+    "zh-Hans": {
+      "text": {
+        ".local 解析桥接": ".local 解析桥接",
+        "Avahi": "Avahi",
+        "Avahi / mDNS": "Avahi / mDNS",
+        "mDNS on selected interfaces. Reflection across interfaces is off by default. The optional .local bridge lets the dnsmasq front end answer A/AAAA for .local names through Avahi; the system resolver is never changed.": "在选定接口上提供 mDNS。默认关闭跨接口反射。可选的 .local 桥接让 dnsmasq 前端通过 Avahi 回答 .local 名称的 A/AAAA 查询；系统解析器不会被修改。",
+        "发布": "发布",
+        "接口": "接口",
+        "桥接": "桥接",
+        "解析 .local 名称": "解析 .local 名称",
+        "跨接口反射": "跨接口反射",
+        "运行": "运行",
+        "重启": "重启"
+      },
+      "fields": {
+        "activeInterfaces": "生效接口",
+        "allowInterfaces": "允许的接口",
+        "cacheSeconds": "缓存时长（秒）",
+        "enabled": "启用",
+        "maxInflight": "最大并发查询",
+        "port": "端口",
+        "timeoutMs": "超时（毫秒）",
+        "denyInterfaces": "禁止的接口",
+        "hostName": "主机名",
+        "id": "ID",
+        "listen": "监听",
+        "mode": "模式",
+        "addresses": "地址",
+        "services": "服务",
+        "workstation": "工作站",
+        "reason": "原因",
+        "reflector": "反射器",
+        "reflectIpv": "反射 IP 版本",
+        "state": "状态",
+        "useIpv4": "使用 IPv4",
+        "useIpv6": "使用 IPv6",
+        "version": "版本"
+      }
+    },
+    "zh-Hant": {
+      "text": {
+        ".local 解析桥接": ".local 解析橋接",
+        "Avahi": "Avahi",
+        "Avahi / mDNS": "Avahi / mDNS",
+        "mDNS on selected interfaces. Reflection across interfaces is off by default. The optional .local bridge lets the dnsmasq front end answer A/AAAA for .local names through Avahi; the system resolver is never changed.": "在選定介面上提供 mDNS。預設關閉跨介面反射。選用的 .local 橋接讓 dnsmasq 前端透過 Avahi 回答 .local 名稱的 A/AAAA 查詢；系統解析器不會被修改。",
+        "发布": "發佈",
+        "接口": "介面",
+        "桥接": "橋接",
+        "解析 .local 名称": "解析 .local 名稱",
+        "跨接口反射": "跨介面反射",
+        "运行": "執行",
+        "重启": "重新啟動"
+      },
+      "fields": {
+        "activeInterfaces": "生效介面",
+        "allowInterfaces": "允許的介面",
+        "cacheSeconds": "快取時長（秒）",
+        "enabled": "啟用",
+        "maxInflight": "最大並行查詢",
+        "port": "連接埠",
+        "timeoutMs": "逾時（毫秒）",
+        "denyInterfaces": "禁止的介面",
+        "hostName": "主機名稱",
+        "id": "ID",
+        "listen": "監聽",
+        "mode": "模式",
+        "addresses": "位址",
+        "services": "服務",
+        "workstation": "工作站",
+        "reason": "原因",
+        "reflector": "反射器",
+        "reflectIpv": "反射 IP 版本",
+        "state": "狀態",
+        "useIpv4": "使用 IPv4",
+        "useIpv6": "使用 IPv6",
+        "version": "版本"
+      }
+    }
+  }
+}

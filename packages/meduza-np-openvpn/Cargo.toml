@@ -1,0 +1,23 @@
+[package]
+name = "meduza-np-openvpn"
+version = "0.1.0"
+description = "Meduza NP OpenVPN service plugin (Site2Site + Access instances) and the Access auth hook helper"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "meduza-np-openvpn"
+path = "src/main.rs"
+
+[[bin]]
+name = "openvpn-auth"
+path = "src/bin/openvpn-auth.rs"
+
+[dependencies]
+meduza-np-protocol.workspace = true
+meduza-np-plugin-sdk.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+ipnet.workspace = true

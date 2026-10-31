@@ -1,0 +1,25 @@
+[Unit]
+Description=Meduza NP updater (signed package-group updates)
+Documentation=https://github.com/meduza-np/meduza-network-planner
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+# the launcher restarts a self-updated updater in place (exit 75) and falls back to the baseline copy
+ExecStart=/usr/lib/meduza-np/updater-run
+Restart=always
+RestartSec=10
+TimeoutStopSec=30
+# /run/meduza-np is shared with planner (planner.sock, updater.sock): never removed when one service stops
+RuntimeDirectory=meduza-np
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+StateDirectory=meduza-np
+StateDirectoryMode=0700
+Environment=MEDUZA_NP_RUN_DIR=/run/meduza-np MEDUZA_NP_DATA_DIR=/var/lib/meduza-np
+EnvironmentFile=-/etc/meduza-np/updater.env
+LimitNOFILE=1024
+
+[Install]
+WantedBy=multi-user.target

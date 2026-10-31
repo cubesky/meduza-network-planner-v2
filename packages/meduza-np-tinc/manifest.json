@@ -1,0 +1,52 @@
+{
+  "manifestVersion": 1,
+  "package": "meduza-np-tinc",
+  "version": "0.1.0",
+  "role": "service-adapter",
+  "plannerApi": {
+    "min": 1,
+    "max": 1
+  },
+  "requires": [
+    "meduza-np-planner"
+  ],
+  "conflicts": [],
+  "provides": [
+    "tinc.mesh",
+    "tinc.keygen"
+  ],
+  "providerSlot": "tinc.binary",
+  "schemas": {
+    "config": "schema/config.json",
+    "status": "schema/status.json"
+  },
+  "ui": {
+    "descriptor": "ui/descriptor.json",
+    "version": 1
+  },
+  "entrypoint": "/usr/libexec/meduza-np/plugins/tinc",
+  "operations": [
+    "validate",
+    "plan",
+    "probe",
+    "action"
+  ],
+  "systemDependencies": [
+    {
+      "kind": "binary",
+      "name": "tincd",
+      "providerSlot": "tinc.binary"
+    },
+    {
+      "kind": "kernel-feature",
+      "name": "tun"
+    },
+    {
+      "kind": "binary",
+      "name": "ip"
+    }
+  ],
+  "consumes": [
+    "services.tinc"
+  ]
+}

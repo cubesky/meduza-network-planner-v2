@@ -1,0 +1,260 @@
+{
+  "$defs": {
+    "Action": {
+      "properties": {
+        "confirm": {
+          "description": "Text shown in the confirmation dialog describing the concrete impact (§6.2 dangerous operations).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "mutating": {
+          "default": false,
+          "type": "boolean"
+        },
+        "reauth": {
+          "default": false,
+          "description": "Requires recent Passkey re-verification (secret export).",
+          "type": "boolean"
+        },
+        "role": {
+          "default": "operator",
+          "description": "Minimum manager role: viewer, operator, admin.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "label"
+      ],
+      "type": "object"
+    },
+    "Collection": {
+      "properties": {
+        "actions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Action"
+          },
+          "type": "array"
+        },
+        "columns": {
+          "description": "Field paths; `runtime.*` columns come from the matching report instance.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "itemId": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "runtimeKind": {
+          "description": "Report instance kind whose entries match items of this collection by id.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sections": {
+          "items": {
+            "$ref": "#/$defs/Section"
+          },
+          "type": "array"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "itemId",
+        "columns",
+        "sections"
+      ],
+      "type": "object"
+    },
+    "Section": {
+      "properties": {
+        "advanced": {
+          "default": false,
+          "type": "boolean"
+        },
+        "fields": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "path": {
+          "description": "Nested collection path relative to the item (e.g. `peers`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "when": {
+          "description": "Show only when the expression holds: `<field> == <json literal>` or `<field> != <json literal>`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "widget": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "type": "object"
+    },
+    "SettingsBlock": {
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "sections": {
+          "items": {
+            "$ref": "#/$defs/Section"
+          },
+          "type": "array"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "title",
+        "sections"
+      ],
+      "type": "object"
+    },
+    "StatusPanel": {
+      "properties": {
+        "columns": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "instanceKind": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "instanceKind",
+        "columns"
+      ],
+      "type": "object"
+    },
+    "UiTranslations": {
+      "properties": {
+        "fields": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Field and column labels keyed by the field name as used in `fields` / `columns`.",
+          "type": "object"
+        },
+        "text": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Descriptor texts (titles, descriptions, action labels and confirmations) keyed by the text as written.",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "actions": {
+      "description": "Package-level actions (not bound to one instance).",
+      "items": {
+        "$ref": "#/$defs/Action"
+      },
+      "type": "array"
+    },
+    "collections": {
+      "description": "Multi-instance collections (`services.wireguard.instances`).",
+      "items": {
+        "$ref": "#/$defs/Collection"
+      },
+      "type": "array"
+    },
+    "description": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "i18n": {
+      "additionalProperties": {
+        "$ref": "#/$defs/UiTranslations"
+      },
+      "description": "Translations per interface language. Missing entries fall back to the text as written and to the\nhumanized field name, so a descriptor stays usable with partial or no translations.",
+      "type": "object"
+    },
+    "package": {
+      "type": "string"
+    },
+    "requiresCapability": {
+      "type": "string"
+    },
+    "settings": {
+      "description": "Singleton settings (`services.dnsmasq`).",
+      "items": {
+        "$ref": "#/$defs/SettingsBlock"
+      },
+      "type": "array"
+    },
+    "status": {
+      "description": "Read-only status panels bound to report instance kinds.",
+      "items": {
+        "$ref": "#/$defs/StatusPanel"
+      },
+      "type": "array"
+    },
+    "title": {
+      "type": "string"
+    },
+    "uiVersion": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "uiVersion",
+    "package",
+    "requiresCapability",
+    "title"
+  ],
+  "title": "UiDescriptor",
+  "type": "object"
+}

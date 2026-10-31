@@ -1,0 +1,232 @@
+{
+  "$defs": {
+    "AddressFamily": {
+      "enum": [
+        "ipv4",
+        "ipv6",
+        "any"
+      ],
+      "type": "string"
+    },
+    "HostEntry": {
+      "properties": {
+        "addresses": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "node": {
+          "description": "Managed node id this entry came from (informational).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "port": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "publicKey": {
+          "type": "string"
+        },
+        "subnets": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IpNet"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "name",
+        "publicKey"
+      ],
+      "type": "object"
+    },
+    "IpNet": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Ipv4Net"
+        },
+        {
+          "$ref": "#/$defs/Ipv6Net"
+        }
+      ],
+      "description": "An IPv4 or IPv6 address with prefix length",
+      "examples": [
+        "192.168.0.0/24",
+        "fd00::/32"
+      ],
+      "title": "IP network"
+    },
+    "Ipv4Net": {
+      "description": "An IPv4 address with prefix length",
+      "examples": [
+        "0.0.0.0/0",
+        "192.168.0.0/24"
+      ],
+      "maxLength": 18,
+      "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\\/(?:3[0-2]|[1-2][0-9]|[0-9])$",
+      "title": "IPv4 network",
+      "type": "string"
+    },
+    "Ipv6Net": {
+      "description": "An IPv6 address with prefix length",
+      "examples": [
+        "::/0",
+        "fd00::/32"
+      ],
+      "maxLength": 43,
+      "pattern": "^[0-9A-Fa-f:\\.]+\\/(?:[0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])$",
+      "title": "IPv6 network",
+      "type": "string"
+    },
+    "KeyFormat": {
+      "oneOf": [
+        {
+          "const": "rsa",
+          "description": "tinc 1.0 (`PrivateKeyFile`, RSA PEM).",
+          "type": "string"
+        },
+        {
+          "const": "ed25519",
+          "description": "tinc 1.1 (`Ed25519PrivateKeyFile`, `Ed25519PublicKey`).",
+          "type": "string"
+        }
+      ]
+    },
+    "Mode": {
+      "enum": [
+        "switch",
+        "router"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "This node's member settings of the mesh — the whole of `services.tinc`.",
+  "properties": {
+    "address": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/IpNet"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Address configured on the tinc device by `tinc-up`, e.g. `10.42.1.1/24`."
+    },
+    "addressFamily": {
+      "$ref": "#/$defs/AddressFamily",
+      "default": "ipv4"
+    },
+    "cipher": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "connectTo": {
+      "description": "Peers to actively connect to (names). Empty = every peer with a public address.",
+      "items": {
+        "type": "string"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "device": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "digest": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "enabled": {
+      "default": true,
+      "type": "boolean"
+    },
+    "hosts": {
+      "default": [],
+      "description": "Mesh membership resolved by the manager: public material of every other member.",
+      "items": {
+        "$ref": "#/$defs/HostEntry"
+      },
+      "type": "array"
+    },
+    "keyFormat": {
+      "$ref": "#/$defs/KeyFormat",
+      "default": "rsa"
+    },
+    "mode": {
+      "$ref": "#/$defs/Mode",
+      "default": "switch"
+    },
+    "name": {
+      "description": "This node's tinc name: `[A-Za-z0-9_]`. Defaults to the node id normalized (`gw-a` → `gw_a`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "port": {
+      "default": 655,
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "privateKeyRef": {
+      "type": "string"
+    },
+    "publicAddresses": {
+      "default": [],
+      "description": "Public `host` or `host:port` other members use to reach this node.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "publicKey": {
+      "description": "Public key text (PEM for RSA, base64 for Ed25519); filled by the manager from the key secret.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "subnets": {
+      "default": [],
+      "description": "Subnets this node announces (router mode); its own address is always included.",
+      "items": {
+        "$ref": "#/$defs/IpNet"
+      },
+      "type": "array"
+    },
+    "tcpOnly": {
+      "default": false,
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "privateKeyRef"
+  ],
+  "title": "Tinc",
+  "type": "object"
+}

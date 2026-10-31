@@ -1,0 +1,28 @@
+{
+	"admin/services/meduza-np": {
+		"title": "Meduza NP",
+		"order": 60,
+		"action": { "type": "firstchild" },
+		"depends": { "acl": ["luci-app-meduza-np"] }
+	},
+	"admin/services/meduza-np/overview": {
+		"title": "Overview",
+		"order": 10,
+		"action": { "type": "view", "path": "meduza-np/overview" }
+	},
+	"admin/services/meduza-np/instances": {
+		"title": "Instances",
+		"order": 20,
+		"action": { "type": "view", "path": "meduza-np/instances" }
+	},
+	"admin/services/meduza-np/updates": {
+		"title": "Packages & updates",
+		"order": 30,
+		"action": { "type": "view", "path": "meduza-np/updates" }
+	},
+	"admin/services/meduza-np/diagnostics": {
+		"title": "Diagnostics",
+		"order": 40,
+		"action": { "type": "view", "path": "meduza-np/diagnostics" }
+	}
+}

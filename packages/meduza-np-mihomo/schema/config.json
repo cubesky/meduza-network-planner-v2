@@ -1,0 +1,400 @@
+{
+  "$defs": {
+    "Api": {
+      "properties": {
+        "address": {
+          "default": "127.0.0.1",
+          "format": "ip",
+          "type": "string"
+        },
+        "port": {
+          "default": 9090,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "secretRef": {
+          "description": "Secret id; a per-node random secret, never a project-wide constant.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "IpNet": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Ipv4Net"
+        },
+        {
+          "$ref": "#/$defs/Ipv6Net"
+        }
+      ],
+      "description": "An IPv4 or IPv6 address with prefix length",
+      "examples": [
+        "192.168.0.0/24",
+        "fd00::/32"
+      ],
+      "title": "IP network"
+    },
+    "Ipv4Net": {
+      "description": "An IPv4 address with prefix length",
+      "examples": [
+        "0.0.0.0/0",
+        "192.168.0.0/24"
+      ],
+      "maxLength": 18,
+      "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\\/(?:3[0-2]|[1-2][0-9]|[0-9])$",
+      "title": "IPv4 network",
+      "type": "string"
+    },
+    "Ipv6Net": {
+      "description": "An IPv6 address with prefix length",
+      "examples": [
+        "::/0",
+        "fd00::/32"
+      ],
+      "maxLength": 43,
+      "pattern": "^[0-9A-Fa-f:\\.]+\\/(?:[0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])$",
+      "title": "IPv6 network",
+      "type": "string"
+    },
+    "MihomoDns": {
+      "properties": {
+        "defaultNameservers": {
+          "default": [],
+          "description": "Plain IP resolvers used to resolve DoH/DoT names and proxy servers (bootstrap path).",
+          "items": {
+            "format": "ip",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "fakeIp": {
+          "default": false,
+          "type": "boolean"
+        },
+        "listen": {
+          "default": "127.0.0.1:1053",
+          "type": "string"
+        },
+        "nameservers": {
+          "default": [],
+          "description": "Upstreams for Mihomo DNS. Must not include the dnsmasq front end (loop).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "Mode": {
+      "enum": [
+        "proxy",
+        "tproxy"
+      ],
+      "type": "string"
+    },
+    "Protocols": {
+      "enum": [
+        "tcp",
+        "udp",
+        "both"
+      ],
+      "type": "string"
+    },
+    "SideRouter": {
+      "description": "Side-router mode (D59). A port forward on the main router (WAN → lan_a:9009) reaches lan_a directly, but lan_a\nanswers through its gateway, this node. Such answers are never proxied and leave through `gateway` from a routing\ntable of their own, whatever BGP/OSPF installed in the main table.",
+      "properties": {
+        "gateway": {
+          "description": "The main router's LAN address.",
+          "format": "ipv4",
+          "type": "string"
+        },
+        "replyPorts": {
+          "default": [],
+          "description": "Source ports of the main router's forwarded services. TCP answers are recognized on their own (they never\nstart a connection); UDP answers only by these ports.",
+          "items": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "gateway"
+      ],
+      "type": "object"
+    },
+    "StableId": {
+      "description": "Stable object id",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+      "type": "string"
+    },
+    "Subscription": {
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "id": {
+          "$ref": "#/$defs/StableId"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "refreshHours": {
+          "default": 12,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "refreshSeconds": {
+          "description": "Refresh interval in seconds; replaces `refreshHours` (the manager sets it from the global Mihomo settings).",
+          "format": "uint32",
+          "minimum": 60,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "urlRef": {
+          "description": "Subscription URL secret (URLs usually embed a token).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "urlRef"
+      ],
+      "type": "object"
+    },
+    "Tproxy": {
+      "properties": {
+        "bypassRouted": {
+          "default": true,
+          "description": "Destinations routed over the mesh, VPN or Access devices (routes learned from BGP/OSPF or another routing\nsystem) are never proxied: they stay with the routing system.",
+          "type": "boolean"
+        },
+        "excludeDestinations": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IpNet"
+          },
+          "type": "array"
+        },
+        "excludePorts": {
+          "default": [],
+          "description": "Destination ports never proxied (TCP and UDP).",
+          "items": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "excludePrivateDestinations": {
+          "default": true,
+          "description": "Destinations in RFC 1918 and other private/special ranges are never proxied.",
+          "type": "boolean"
+        },
+        "excludeSources": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IpNet"
+          },
+          "type": "array"
+        },
+        "fwmark": {
+          "default": 19790,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "inboundInterfaces": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "port": {
+          "default": 7894,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "protocols": {
+          "$ref": "#/$defs/Protocols",
+          "default": "both",
+          "description": "Which protocols are proxied: tcp, udp or both."
+        },
+        "routeTable": {
+          "default": 4626,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rulePriority": {
+          "default": 9626,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "sideRouter": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SideRouter"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "This node is a side router: clients use it as their gateway (handed out by the main router's DHCP) while the\nmain router keeps the WAN and its port forwards."
+        },
+        "sources": {
+          "$ref": "#/$defs/TproxySources",
+          "default": {
+            "extra": [],
+            "lan": true,
+            "privateLan": false
+          },
+          "description": "Source ranges whose forwarded traffic is proxied (defaults to the node's LAN)."
+        },
+        "useConntrack": {
+          "default": true,
+          "description": "Decide once per connection and remember it in the connection's conntrack mark (needs nf_conntrack). Without\nconntrack every packet is classified again and established proxied TCP connections are found with a socket\nlookup (needs nft_socket).",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "TproxySources": {
+      "properties": {
+        "extra": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IpNet"
+          },
+          "type": "array"
+        },
+        "lan": {
+          "default": true,
+          "type": "boolean"
+        },
+        "privateLan": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "activeSubscription": {
+      "description": "Active subscription id.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "allowLan": {
+      "default": false,
+      "description": "Listen only on loopback unless explicitly allowed.",
+      "type": "boolean"
+    },
+    "api": {
+      "$ref": "#/$defs/Api",
+      "default": {
+        "address": "127.0.0.1",
+        "port": 9090
+      }
+    },
+    "bindAddress": {
+      "format": "ip",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "dns": {
+      "$ref": "#/$defs/MihomoDns",
+      "default": {
+        "defaultNameservers": [],
+        "enabled": false,
+        "fakeIp": false,
+        "listen": "127.0.0.1:1053",
+        "nameservers": []
+      }
+    },
+    "downloadProxy": {
+      "description": "Proxy used to fetch subscriptions (never Mihomo itself before it runs).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "enabled": {
+      "default": true,
+      "type": "boolean"
+    },
+    "mixedPort": {
+      "default": 7890,
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "mode": {
+      "$ref": "#/$defs/Mode",
+      "default": "proxy"
+    },
+    "subscriptions": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Subscription"
+      },
+      "type": "array"
+    },
+    "tproxy": {
+      "$ref": "#/$defs/Tproxy",
+      "default": {
+        "bypassRouted": true,
+        "excludeDestinations": [],
+        "excludePorts": [],
+        "excludePrivateDestinations": true,
+        "excludeSources": [],
+        "fwmark": 19790,
+        "inboundInterfaces": [],
+        "port": 7894,
+        "protocols": "both",
+        "routeTable": 4626,
+        "rulePriority": 9626,
+        "sources": {
+          "extra": [],
+          "lan": true,
+          "privateLan": false
+        },
+        "useConntrack": true
+      }
+    }
+  },
+  "title": "Mihomo",
+  "type": "object"
+}

@@ -1,0 +1,248 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: "1.99.1"
+  ZIG_VERSION: "0.13.0"
+  CARGO_ZIGBUILD_VERSION: "0.19.8"
+
+jobs:
+  rust:
+    name: rust fmt / clippy / test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal -c clippy,rustfmt
+          rustup default "$RUST_TOOLCHAIN"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-registry-
+      - uses: actions/cache@v4
+        with:
+          path: target
+          key: target-host-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+          restore-keys: target-host-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+
+  workflows:
+    name: actionlint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      # syntax, expressions, job graph, action inputs; the embedded shellcheck pass is off because the run scripts
+      # split optional flags ($base, $os, $pkgs) on purpose (checked once with it on, 2026-10-26: info/style only)
+      - run: docker run --rm -v "$PWD:/repo:ro" -w /repo docker.io/rhysd/actionlint:1.7.7 -no-color -oneline -shellcheck=
+      # scripts committed from Windows lose their executable bit; name them here instead of failing deep in a later job
+      - name: scripts are executable
+        run: sh tools/fix-exec-bits.sh --check
+
+  rust-targets:
+    name: build ${{ matrix.target }}
+    needs: rust
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            qemu: ""
+            machine: "Advanced Micro Devices X86-64"
+          - target: armv7-unknown-linux-musleabihf
+            qemu: qemu-arm-static
+            machine: "ARM"
+          - target: aarch64-unknown-linux-musl
+            qemu: qemu-aarch64-static
+            machine: "AArch64"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain and cross linker
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target ${{ matrix.target }}
+          rustup default "$RUST_TOOLCHAIN"
+          python3 -m pip install --user "ziglang==${ZIG_VERSION}" "cargo-zigbuild==${CARGO_ZIGBUILD_VERSION}"
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-user-static binutils
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-registry-
+      - uses: actions/cache@v4
+        with:
+          path: target/${{ matrix.target }}
+          key: target-${{ matrix.target }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock', 'Cargo.toml') }}
+          restore-keys: target-${{ matrix.target }}-${{ env.RUST_TOOLCHAIN }}-
+      - name: Build node binaries
+        run: cargo zigbuild --release --locked --workspace --bins --target ${{ matrix.target }}
+      - name: ELF checks (machine, static, no interpreter)
+        run: tools/check-elf.sh "target/${{ matrix.target }}/release" "${{ matrix.machine }}"
+      - name: QEMU / native smoke
+        run: tools/smoke-bins.sh "target/${{ matrix.target }}/release" "${{ matrix.qemu }}"
+
+  web:
+    name: web build / typecheck / test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r run typecheck
+      - run: pnpm -r run build
+      - run: pnpm -r run test
+        env:
+          MEDUZA_NP_SKIP_E2E: "1"
+
+  e2e:
+    name: planner ↔ manager end-to-end
+    needs: [rust, web]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            target
+          key: e2e-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
+      - run: cargo build --locked -p meduza-np-planner
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @meduza-np/manager run test
+
+  access-ldap:
+    name: OpenVPN Access hook → planner → manager → live OpenLDAP
+    needs: [rust, web]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            target
+          key: e2e-${{ runner.os }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
+      - run: cargo build --locked -p meduza-np-planner -p meduza-np-openvpn
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: OpenLDAP (ldaps + StartTLS, memberOf) in Docker, AccessService matrix + openvpn-auth hook chain
+        run: CONTAINER=docker tools/access-ldap-e2e.sh "$RUNNER_TEMP/access-ldap"
+
+  provider-recipes:
+    name: provider build ${{ matrix.package }} (linux/amd64)
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [meduza-np-openvpn-pkg, meduza-np-mosdns-pkg]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build with the pinned recipe (static ELF gate + smoke run inside the build)
+        working-directory: packages/${{ matrix.package }}
+        run: podman build --platform linux/amd64 -f build/Containerfile --output type=local,dest=out .
+      - name: Re-check the exported tree
+        working-directory: packages/${{ matrix.package }}
+        run: |
+          find out -type f | sort
+          jq . out/usr/share/meduza-np/packages/${{ matrix.package }}/build-info.json
+          for f in $(find out/usr/lib/meduza-np/providers -type f); do
+            readelf -h "$f" | grep -q 'Advanced Micro Devices X86-64' || { echo "wrong machine: $f"; exit 1; }
+            if readelf -l "$f" | grep -q 'Requesting program interpreter'; then echo "dynamic: $f"; exit 1; fi
+            if readelf -d "$f" 2>/dev/null | grep -q '(NEEDED)'; then echo "NEEDED entries: $f"; exit 1; fi
+          done
+
+  manager-image:
+    name: manager image smoke (rootless Podman)
+    needs: [web]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends podman jq curl
+      - name: build, hardened start, bootstrap, enrollment, admin tool, re-creation, Quadlet dry run
+        run: tools/manager-podman-smoke.sh "$RUNNER_TEMP/manager-smoke"
+
+  container-e2e:
+    name: base-container + dashboard-openwrt acceptance (rootful Podman)
+    needs: [rust, web]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target x86_64-unknown-linux-musl
+          rustup default "$RUST_TOOLCHAIN"
+          python3 -m pip install --user "ziglang==${ZIG_VERSION}" "cargo-zigbuild==${CARGO_ZIGBUILD_VERSION}"
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends podman jq
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            target
+          key: container-e2e-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
+      - name: bootstrap, re-creation, upgrade, rollback, dashboard
+        run: sudo -E env "PATH=$PATH" tools/container-e2e.sh "$RUNNER_TEMP/container-e2e"
+      # before native-e2e: its systemd units would shadow the Quadlet units of the same name
+      - name: base image replace / restore / rollback, run.sh and Quadlet (D53)
+        run: |
+          sudo apt-get install -y --no-install-recommends qemu-user-static curl
+          sudo -E env "PATH=$PATH" BASE_IMAGE_E2E_QUADLET=1 tools/base-image-e2e.sh "$RUNNER_TEMP/base-image-e2e"
+      - name: dashboard-openwrt over real procd/ubus/rpcd
+        run: sudo -E env "PATH=$PATH" tools/openwrt-luci-e2e.sh
+      - name: OpenWrt ipk/apk packages - install, updater upgrade, removal (D29)
+        run: sudo -E env "PATH=$PATH" tools/openwrt-pkg-e2e.sh "$RUNNER_TEMP/openwrt-pkg-e2e"
+      - name: native install per docs/operations.md (systemd; the runner is throwaway)
+        run: sudo -E env "PATH=$PATH" I_UNDERSTAND_THIS_MODIFIES_THE_HOST=1 tools/native-e2e.sh "$RUNNER_TEMP/native-e2e"

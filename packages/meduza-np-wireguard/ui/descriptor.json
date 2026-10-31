@@ -1,0 +1,268 @@
+{
+  "uiVersion": 1,
+  "package": "meduza-np-wireguard",
+  "requiresCapability": "wireguard.interfaces",
+  "title": "WireGuard",
+  "description": "Kernel WireGuard interfaces and peers. AllowedIPs select peers; they do not install routes.",
+  "collections": [
+    {
+      "path": "services.wireguard.instances",
+      "itemId": "id",
+      "title": "接口",
+      "runtimeKind": "wireguard-interface",
+      "columns": [
+        "name",
+        "device",
+        "enabled",
+        "listenPort",
+        "runtime.state",
+        "runtime.publicKey"
+      ],
+      "sections": [
+        {
+          "title": "接口",
+          "fields": [
+            "id",
+            "name",
+            "enabled",
+            "device",
+            "addresses",
+            "listenPort",
+            "mtu",
+            "publicEndpoint"
+          ]
+        },
+        {
+          "title": "密钥",
+          "fields": [
+            "privateKeyRef",
+            "publicKey"
+          ],
+          "widget": "keypair"
+        },
+        {
+          "title": "Peers",
+          "path": "peers",
+          "widget": "editable-table",
+          "fields": [
+            "id",
+            "name",
+            "enabled",
+            "publicKey",
+            "presharedKeyRef",
+            "allowedIps",
+            "endpoint",
+            "persistentKeepalive",
+            "bgp.remoteAsn",
+            "bgp.enabled",
+            "bgp.address",
+            "bgp.accept",
+            "bgp.acceptDefault",
+            "bgp.exportLan",
+            "bgp.exportInternal",
+            "bgp.exportMappings",
+            "bgp.exportAccessPools",
+            "bgp.exportDefaultRoute",
+            "bgp.exportExtra",
+            "bgp.noTransit",
+            "bgp.noForward",
+            "bgp.bfd",
+            "bgp.keepalive",
+            "bgp.hold",
+            "bgp.passwordRef",
+            "bgp.localPreference"
+          ]
+        },
+        {
+          "title": "高级",
+          "fields": [
+            "fwmark",
+            "handshakeTimeoutSeconds"
+          ],
+          "advanced": true
+        }
+      ],
+      "actions": [
+        {
+          "id": "generate-keypair",
+          "label": "生成密钥对",
+          "mutating": true,
+          "confirm": "生成新私钥后，所有对端必须更新公钥，现有连接会中断。"
+        },
+        {
+          "id": "restart-instance",
+          "label": "重载接口",
+          "mutating": true
+        },
+        {
+          "id": "export-wg-quick",
+          "label": "导出 wg-quick 配置",
+          "mutating": false,
+          "role": "admin",
+          "reauth": true
+        }
+      ]
+    }
+  ],
+  "status": [
+    {
+      "title": "Peer 握手",
+      "instanceKind": "wireguard-peer",
+      "columns": [
+        "id",
+        "state",
+        "latestHandshake",
+        "endpoint",
+        "rxBytes",
+        "txBytes",
+        "reasonCode"
+      ]
+    }
+  ],
+  "i18n": {
+    "en": {
+      "text": {
+        "Peer 握手": "Peer handshakes",
+        "密钥": "Keys",
+        "导出 wg-quick 配置": "Export wg-quick configuration",
+        "接口": "Interfaces",
+        "生成密钥对": "Generate key pair",
+        "生成新私钥后，所有对端必须更新公钥，现有连接会中断。": "After a new private key is generated every peer must update the public key; existing connections break.",
+        "重载接口": "Reload interface",
+        "高级": "Advanced"
+      },
+      "fields": {
+        "accept": "Accepted prefixes",
+        "acceptDefault": "Accept a default route",
+        "address": "Neighbor address",
+        "bfd": "BFD",
+        "bgp": "BGP (eBGP)",
+        "exportAccessPools": "Advertise Access pools",
+        "exportDefaultRoute": "Advertise a default route",
+        "exportExtra": "Further prefixes to advertise",
+        "exportInternal": "Advertise the internal network",
+        "exportLan": "Advertise this node's LAN",
+        "exportMappings": "Advertise mappings",
+        "hold": "Hold time (s)",
+        "keepalive": "Keepalive (s)",
+        "localPreference": "Local preference",
+        "noForward": "Advertise only our own AS",
+        "noTransit": "No transit through the peer",
+        "passwordRef": "TCP MD5 password",
+        "remoteAsn": "Remote ASN"
+      }
+    },
+    "zh-Hans": {
+      "text": {
+        "Kernel WireGuard interfaces and peers. AllowedIPs select peers; they do not install routes.": "内核 WireGuard 接口和对端。AllowedIPs 用于选择对端，不会安装路由。",
+        "Peer 握手": "Peer 握手",
+        "Peers": "对端",
+        "WireGuard": "WireGuard",
+        "密钥": "密钥",
+        "导出 wg-quick 配置": "导出 wg-quick 配置",
+        "接口": "接口",
+        "生成密钥对": "生成密钥对",
+        "生成新私钥后，所有对端必须更新公钥，现有连接会中断。": "生成新私钥后，所有对端必须更新公钥，现有连接会中断。",
+        "重载接口": "重载接口",
+        "高级": "高级"
+      },
+      "fields": {
+        "accept": "接受的前缀",
+        "acceptDefault": "接受默认路由",
+        "address": "邻居地址",
+        "addresses": "地址",
+        "allowedIps": "允许的 IP（AllowedIPs）",
+        "bfd": "BFD",
+        "bgp": "BGP（eBGP）",
+        "device": "设备",
+        "enabled": "启用",
+        "endpoint": "端点",
+        "exportAccessPools": "通告 Access 地址池",
+        "exportDefaultRoute": "通告默认路由",
+        "exportExtra": "额外通告的前缀",
+        "exportInternal": "通告内部网络",
+        "exportLan": "通告本节点 LAN",
+        "exportMappings": "通告映射",
+        "fwmark": "fwmark 标记",
+        "handshakeTimeoutSeconds": "握手超时（秒）",
+        "hold": "保持时间（秒）",
+        "id": "ID",
+        "keepalive": "保活（秒）",
+        "latestHandshake": "最近握手",
+        "listenPort": "监听端口",
+        "localPreference": "本地优先级",
+        "mtu": "MTU",
+        "name": "名称",
+        "noForward": "只通告本 AS（no forward）",
+        "noTransit": "不经对端转发（no transit）",
+        "passwordRef": "TCP MD5 密码",
+        "persistentKeepalive": "持久保活",
+        "presharedKeyRef": "预共享密钥",
+        "privateKeyRef": "私钥",
+        "publicEndpoint": "公网端点",
+        "publicKey": "公钥",
+        "reasonCode": "原因代码",
+        "remoteAsn": "对端 ASN",
+        "rxBytes": "接收字节",
+        "state": "状态",
+        "txBytes": "发送字节"
+      }
+    },
+    "zh-Hant": {
+      "text": {
+        "Kernel WireGuard interfaces and peers. AllowedIPs select peers; they do not install routes.": "核心 WireGuard 介面與對端。AllowedIPs 用於選擇對端，不會安裝路由。",
+        "Peer 握手": "Peer 交握",
+        "Peers": "對端",
+        "WireGuard": "WireGuard",
+        "密钥": "金鑰",
+        "导出 wg-quick 配置": "匯出 wg-quick 設定",
+        "接口": "介面",
+        "生成密钥对": "產生金鑰對",
+        "生成新私钥后，所有对端必须更新公钥，现有连接会中断。": "產生新私鑰後，所有對端必須更新公鑰，現有連線會中斷。",
+        "重载接口": "重新載入介面",
+        "高级": "進階"
+      },
+      "fields": {
+        "accept": "接受的前綴",
+        "acceptDefault": "接受預設路由",
+        "address": "鄰居位址",
+        "addresses": "位址",
+        "allowedIps": "允許的 IP（AllowedIPs）",
+        "bfd": "BFD",
+        "bgp": "BGP（eBGP）",
+        "device": "裝置",
+        "enabled": "啟用",
+        "endpoint": "端點",
+        "exportAccessPools": "通告 Access 位址池",
+        "exportDefaultRoute": "通告預設路由",
+        "exportExtra": "額外通告的前綴",
+        "exportInternal": "通告內部網路",
+        "exportLan": "通告本節點 LAN",
+        "exportMappings": "通告映射",
+        "fwmark": "fwmark 標記",
+        "handshakeTimeoutSeconds": "交握逾時（秒）",
+        "hold": "保持時間（秒）",
+        "id": "ID",
+        "keepalive": "保活（秒）",
+        "latestHandshake": "最近交握",
+        "listenPort": "監聽連接埠",
+        "localPreference": "本地優先順序",
+        "mtu": "MTU",
+        "name": "名稱",
+        "noForward": "只通告本 AS（no forward）",
+        "noTransit": "不經對端轉送（no transit）",
+        "passwordRef": "TCP MD5 密碼",
+        "persistentKeepalive": "持續保活",
+        "presharedKeyRef": "預先共用金鑰",
+        "privateKeyRef": "私鑰",
+        "publicEndpoint": "公開端點",
+        "publicKey": "公鑰",
+        "reasonCode": "原因代碼",
+        "remoteAsn": "對端 ASN",
+        "rxBytes": "接收位元組",
+        "state": "狀態",
+        "txBytes": "傳送位元組"
+      }
+    }
+  }
+}

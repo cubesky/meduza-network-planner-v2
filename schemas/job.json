@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`GET /api/v1/nodes/self/jobs` item. Jobs are durable on the manager and idempotent by id.",
+  "properties": {
+    "expiresAt": {
+      "description": "RFC 3339; jobs past this are reported as expired instead of executed.",
+      "type": "string"
+    },
+    "instance": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "jobId": {
+      "type": "string"
+    },
+    "kind": {
+      "description": "`generate-keypair`, `restart-instance`, `collect-diagnostics`, `run-action`, ...",
+      "type": "string"
+    },
+    "package": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "params": {
+      "default": null
+    }
+  },
+  "required": [
+    "jobId",
+    "kind",
+    "expiresAt"
+  ],
+  "title": "Job",
+  "type": "object"
+}

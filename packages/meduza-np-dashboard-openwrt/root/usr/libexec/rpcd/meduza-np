@@ -1,0 +1,93 @@
+#!/bin/sh
+# rpcd exec plugin "meduza-np" (§12.3): the LuCI views call these ubus methods; every call is one short-lived
+# `meduza-np --json` CLI invocation against planner.sock / updater.sock. No resident service, no Node, no web
+# framework. Authorization is rpcd's: /usr/share/rpcd/acl.d/luci-app-meduza-np.json (read vs write methods).
+
+CLI=/usr/bin/meduza-np
+
+reply() {
+	# ubus needs an object; arrays and errors are wrapped
+	out=$("$CLI" --json "$@" 2>/tmp/meduza-np-rpcd.err)
+	rc=$?
+	if [ $rc -ne 0 ]; then
+		msg=$(head -c 400 /tmp/meduza-np-rpcd.err | tr '"\\n' "'/ ")
+		printf '{"ok":false,"error":"%s"}\n' "$msg"
+		return 0
+	fi
+	case "$out" in
+	'{'*) printf '{"ok":true,"result":%s}\n' "$out" ;;
+	'') printf '{"ok":true}\n' ;;
+	*) printf '{"ok":true,"result":%s}\n' "$out" ;;
+	esac
+}
+
+arg() { jsonfilter -s "$INPUT" -e "@.$1" 2>/dev/null; }
+
+valid_instance() { echo "$1" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9/_.:-]{0,127}$'; }
+
+case "$1" in
+list)
+	cat <<'JSON'
+{
+  "status": {}, "features": {}, "packages": {}, "instances": {}, "doctor": {},
+  "logs": { "lines": 100 },
+  "config": {},
+  "update_status": {},
+  "sync": {},
+  "instance": { "instance": "str", "action": "str" },
+  "maintenance_start": { "reason": "str", "minutes": 30, "pause_apply": true },
+  "maintenance_stop": {},
+  "update": { "action": "str" }
+}
+JSON
+	;;
+call)
+	INPUT=$(cat)
+	case "$2" in
+	status) reply status ;;
+	features) reply features ;;
+	packages) reply packages ;;
+	instances) reply instances ;;
+	doctor) reply doctor ;;
+	config) reply config ;;
+	logs)
+		n=$(arg lines)
+		case "$n" in '' | *[!0-9]*) n=100 ;; esac
+		[ "$n" -gt 500 ] && n=500
+		reply logs -n "$n"
+		;;
+	update_status)
+		if "$CLI" --json update status >/dev/null 2>&1; then
+			reply update status
+		else
+			# the CLI reports a node without (a running) updater explicitly; show that instead of an error
+			printf '{"ok":true,"result":{"available":false}}\n'
+		fi
+		;;
+	sync) reply sync ;;
+	instance)
+		i=$(arg instance)
+		a=$(arg action)
+		valid_instance "$i" || { printf '{"ok":false,"error":"invalid instance"}\n'; exit 0; }
+		case "$a" in start | stop | restart) reply instance "$a" "$i" ;; *) printf '{"ok":false,"error":"invalid action"}\n' ;; esac
+		;;
+	maintenance_start)
+		r=$(arg reason | tr -cd '[:alnum:] ._,:()/-' | head -c 200)
+		m=$(arg minutes)
+		case "$m" in '' | *[!0-9]*) m=30 ;; esac
+		[ -n "$r" ] || r="LuCI maintenance"
+		if [ "$(arg pause_apply)" = "true" ]; then
+			reply maintenance start --reason "$r (LuCI)" --minutes "$m" --pause-apply
+		else
+			reply maintenance start --reason "$r (LuCI)" --minutes "$m"
+		fi
+		;;
+	maintenance_stop) reply maintenance stop ;;
+	update)
+		a=$(arg action)
+		case "$a" in check | apply | pause | resume) reply update "$a" ;; *) printf '{"ok":false,"error":"invalid action"}\n' ;; esac
+		;;
+	*) printf '{"ok":false,"error":"unknown method"}\n' ;;
+	esac
+	;;
+esac

@@ -1,0 +1,21 @@
+[package]
+name = "meduza-np-avahi"
+version = "0.1.0"
+description = "Meduza NP Avahi plugin: avahi-daemon configuration (managed or system), status via D-Bus, .local DNS bridge"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "meduza-np-avahi"
+path = "src/main.rs"
+
+[dependencies]
+meduza-np-protocol.workspace = true
+meduza-np-plugin-sdk.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

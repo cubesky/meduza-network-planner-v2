@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tinc status",
+  "type": "object",
+  "required": ["id", "kind", "state", "peer", "reasonCode"],
+  "properties": {
+    "kind": { "const": "tinc-peer" },
+    "state": { "enum": ["up", "down", "unknown"] },
+    "peer": { "type": "string" },
+    "remoteAddress": { "type": "string" },
+    "lastChange": { "type": "string", "format": "date-time" },
+    "direct": { "enum": ["yes", "no", "unknown"] },
+    "reasonCode": { "enum": ["reachable", "unreachable", "never-seen"] }
+  }
+}

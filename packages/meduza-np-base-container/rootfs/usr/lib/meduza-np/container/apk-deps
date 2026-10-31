@@ -1,0 +1,10 @@
+# Alpine packages each component needs inside the planner container ("system provider" = Alpine software in this
+# image, never host executables; §14.3). Format: <package> <apk names...>. A `-pkg` provider, when installed, replaces
+# the system binary (e.g. openvpn-pkg ⇒ the openvpn apk is not needed); see `skip-if` lines.
+meduza-np-wireguard   wireguard-tools-wg
+meduza-np-tinc        tinc
+meduza-np-openvpn     openvpn
+meduza-np-frr         frr
+meduza-np-dnsmasq     dnsmasq
+meduza-np-avahi       avahi dbus
+skip-if meduza-np-openvpn-pkg openvpn

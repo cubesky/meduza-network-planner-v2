@@ -1,0 +1,22 @@
+{
+  "name": "@meduza-np/ui-kit",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared Preact controls: forms, status tables, key widgets",
+  "exports": {
+    ".": "./src/index.tsx",
+    "./styles.css": "./src/styles.css"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p .",
+    "build": "tsc --noEmit -p ."
+  },
+  "peerDependencies": {
+    "preact": "10.29.8"
+  },
+  "devDependencies": {
+    "preact": "10.29.8",
+    "typescript": "5.9.3"
+  }
+}

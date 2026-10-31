@@ -1,0 +1,51 @@
+{
+  "$defs": {
+    "AccessDecision": {
+      "enum": [
+        "allow",
+        "deny"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "decision": {
+      "$ref": "#/$defs/AccessDecision"
+    },
+    "groups": {
+      "description": "Authorization attributes (groups that matched, policy id). Never LDAP credentials.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "policyId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "reasonCode": {
+      "description": "Machine readable: `ok`, `ok-reauth`, `bad-credentials`, `not-authorized`, `user-disabled`,\n`ldap-unavailable`, `manager-unavailable`, `timeout`, `rate-limited`, `instance-not-allowed`,\n`invalid-request`, `no-session`, `session-expired`; planner answers a `reauth` it could not get a manager\ndecision for with allow + `kept-unverified` (the session keeps its `session-timeout`).",
+      "type": "string"
+    },
+    "requestId": {
+      "type": "string"
+    },
+    "validForSeconds": {
+      "default": 0,
+      "description": "Remaining session lifetime: OpenVPN disconnects the client after it (`session-timeout`).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "requestId",
+    "decision",
+    "reasonCode"
+  ],
+  "title": "AccessAuthResponse",
+  "type": "object"
+}

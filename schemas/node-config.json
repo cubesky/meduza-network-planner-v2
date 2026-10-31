@@ -1,0 +1,505 @@
+{
+  "$defs": {
+    "DnsSettings": {
+      "properties": {
+        "hosts": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/HostEntry"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "HealthPort": {
+      "description": "Plain TCP health listener; its meaning is declared explicitly and is unrelated to service probes.",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "id": {
+          "$ref": "#/$defs/StableId"
+        },
+        "listenAddress": {
+          "format": "ip",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "port": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "semantics": {
+          "description": "What \"accepting connections\" means, e.g. `planner-alive` or `feature:<id>` healthy.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "port",
+        "semantics"
+      ],
+      "type": "object"
+    },
+    "HostEntry": {
+      "properties": {
+        "hostname": {
+          "type": "string"
+        },
+        "ips": {
+          "items": {
+            "format": "ip",
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "hostname",
+        "ips"
+      ],
+      "type": "object"
+    },
+    "IpNet": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Ipv4Net"
+        },
+        {
+          "$ref": "#/$defs/Ipv6Net"
+        }
+      ],
+      "description": "An IPv4 or IPv6 address with prefix length",
+      "examples": [
+        "192.168.0.0/24",
+        "fd00::/32"
+      ],
+      "title": "IP network"
+    },
+    "Ipv4Net": {
+      "description": "An IPv4 address with prefix length",
+      "examples": [
+        "0.0.0.0/0",
+        "192.168.0.0/24"
+      ],
+      "maxLength": 18,
+      "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\\/(?:3[0-2]|[1-2][0-9]|[0-9])$",
+      "title": "IPv4 network",
+      "type": "string"
+    },
+    "Ipv6Net": {
+      "description": "An IPv6 address with prefix length",
+      "examples": [
+        "::/0",
+        "fd00::/32"
+      ],
+      "maxLength": 43,
+      "pattern": "^[0-9A-Fa-f:\\.]+\\/(?:[0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])$",
+      "title": "IPv6 network",
+      "type": "string"
+    },
+    "NetworkMapping": {
+      "description": "1:1 network mapping: `advertised` is the externally visible prefix, `actual` the real local one (§9.6).",
+      "properties": {
+        "actual": {
+          "$ref": "#/$defs/IpNet"
+        },
+        "advertised": {
+          "$ref": "#/$defs/IpNet"
+        },
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "id": {
+          "$ref": "#/$defs/StableId"
+        }
+      },
+      "required": [
+        "id",
+        "advertised",
+        "actual"
+      ],
+      "type": "object"
+    },
+    "Networks": {
+      "properties": {
+        "healthPorts": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/HealthPort"
+          },
+          "type": "array"
+        },
+        "lan": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IpNet"
+          },
+          "type": "array"
+        },
+        "mappings": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/NetworkMapping"
+          },
+          "type": "array"
+        },
+        "portForwards": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PortForward"
+          },
+          "type": "array"
+        },
+        "privateLan": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IpNet"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "NodeBehavior": {
+      "enum": [
+        "static",
+        "roaming"
+      ],
+      "type": "string"
+    },
+    "NodeSettings": {
+      "properties": {
+        "behavior": {
+          "$ref": "#/$defs/NodeBehavior",
+          "default": "static"
+        },
+        "displayName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/StableId"
+        },
+        "routerId": {
+          "format": "ipv4",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sync": {
+          "$ref": "#/$defs/SyncSettings",
+          "default": {
+            "calibrationSeconds": 600,
+            "heartbeatSeconds": 15,
+            "pushKeepaliveSeconds": 30,
+            "roamingPollSeconds": 60
+          }
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "OriginateSets": {
+      "properties": {
+        "accessPools": {
+          "description": "Access pools by OpenVPN instance id.",
+          "items": {
+            "$ref": "#/$defs/StableId"
+          },
+          "type": "array"
+        },
+        "extra": {
+          "items": {
+            "$ref": "#/$defs/IpNet"
+          },
+          "type": "array"
+        },
+        "lan": {
+          "default": false,
+          "type": "boolean"
+        },
+        "mappings": {
+          "default": false,
+          "type": "boolean"
+        },
+        "privateLan": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "PortForward": {
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "id": {
+          "$ref": "#/$defs/StableId"
+        },
+        "listenAddress": {
+          "format": "ip",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "listenPort": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "proto": {
+          "$ref": "#/$defs/TransportProto"
+        },
+        "snat": {
+          "default": false,
+          "type": "boolean"
+        },
+        "sourceCidrs": {
+          "items": {
+            "$ref": "#/$defs/IpNet"
+          },
+          "type": "array"
+        },
+        "targetAddress": {
+          "format": "ip",
+          "type": "string"
+        },
+        "targetPort": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "proto",
+        "listenPort",
+        "targetAddress",
+        "targetPort"
+      ],
+      "type": "object"
+    },
+    "RevisionId": {
+      "description": "Immutable revision id",
+      "pattern": "^rev-[0-9]{6,18}$",
+      "type": "string"
+    },
+    "RoutingIntent": {
+      "description": "Cross-package routing intents compiled by the manager (§9.5). FRR consumes them together with its own\n`services.frr` entry; Access and mappings refer to the same prefix sets.",
+      "properties": {
+        "internalAsn": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "originate": {
+          "$ref": "#/$defs/OriginateSets",
+          "default": {
+            "lan": false,
+            "mappings": false,
+            "privateLan": false
+          },
+          "description": "Prefix sets this node may originate, by source. Only these are ever advertised."
+        }
+      },
+      "type": "object"
+    },
+    "SecretValue": {
+      "description": "Secret material delivered to exactly the node that needs it. `Debug` never prints the value.",
+      "properties": {
+        "kind": {
+          "description": "e.g. `wireguard-private-key`, `wireguard-psk`, `tinc-ed25519-private`, `pem-private-key`, `pem-certificate`, `openvpn-static-key`, `text`.",
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "value"
+      ],
+      "type": "object"
+    },
+    "StableId": {
+      "description": "Stable object id",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+      "type": "string"
+    },
+    "SyncSettings": {
+      "description": "Sync intervals (§7.3). All values get jitter applied by the planner scheduler.",
+      "properties": {
+        "calibrationSeconds": {
+          "default": 600,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "heartbeatSeconds": {
+          "default": 15,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pushKeepaliveSeconds": {
+          "default": 30,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "roamingPollSeconds": {
+          "default": 60,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "TransportProto": {
+      "enum": [
+        "tcp",
+        "udp",
+        "both"
+      ],
+      "type": "string"
+    },
+    "UpdatePolicy": {
+      "properties": {
+        "automatic": {
+          "default": false,
+          "type": "boolean"
+        },
+        "channel": {
+          "default": "stable",
+          "type": "string"
+        },
+        "maintenanceWindow": {
+          "description": "`HH:MM-HH:MM`, may wrap midnight.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "paused": {
+          "default": false,
+          "type": "boolean"
+        },
+        "pinnedGroupVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "timezone": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "dns": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/DnsSettings"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "networks": {
+      "$ref": "#/$defs/Networks",
+      "default": {
+        "healthPorts": [],
+        "lan": [],
+        "mappings": [],
+        "portForwards": [],
+        "privateLan": []
+      }
+    },
+    "node": {
+      "$ref": "#/$defs/NodeSettings"
+    },
+    "revision": {
+      "$ref": "#/$defs/RevisionId"
+    },
+    "routing": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RoutingIntent"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "schemaVersion": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "secrets": {
+      "additionalProperties": {
+        "$ref": "#/$defs/SecretValue"
+      },
+      "description": "Only the secrets this node needs, by `secretRef` id. Never logged (see [`SecretValue`]'s Debug).",
+      "type": "object"
+    },
+    "services": {
+      "additionalProperties": true,
+      "default": {},
+      "description": "Keyed by package short name (`wireguard`, `tinc`, `frr`, ...). Only installed packages appear.",
+      "type": "object"
+    },
+    "updatePolicy": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/UpdatePolicy"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "revision",
+    "node"
+  ],
+  "title": "NodeConfig",
+  "type": "object"
+}

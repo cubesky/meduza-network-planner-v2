@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Mihomo status",
+  "type": "object",
+  "required": [
+    "id",
+    "kind",
+    "state"
+  ],
+  "properties": {
+    "kind": {
+      "enum": [
+        "mihomo",
+        "mihomo-dns",
+        "mihomo-subscription"
+      ]
+    },
+    "state": {
+      "enum": [
+        "up",
+        "starting",
+        "down",
+        "degraded",
+        "pending"
+      ]
+    },
+    "connections": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "overriddenKeys": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

@@ -1,0 +1,24 @@
+# Static MosDNS provider build. Build context: packages/meduza-np-mosdns-pkg.
+#
+#   podman build --platform linux/arm/v7 -f build/Containerfile --output type=local,dest=out/armv7 .
+#
+# Compilation runs on the build platform (Go cross-compiles); the smoke stage runs the result on the target
+# platform (QEMU binfmt for foreign architectures) before the scratch stage exports the provider tree.
+# The FROM digests must equal upstream.lock.json `builder.image` (checked by crates/protocol/tests/provider_recipes.rs).
+FROM --platform=$BUILDPLATFORM docker.io/library/alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS build
+ARG TARGETARCH
+ARG TARGETVARIANT
+COPY upstream.lock.json build/build.sh /recipe/
+RUN apk add --no-cache jq && \
+    apk add --no-cache $(jq -r '.builder.apk | join(" ")' /recipe/upstream.lock.json) && \
+    sh /recipe/build.sh /recipe/upstream.lock.json /out "$TARGETARCH" "$TARGETVARIANT"
+
+FROM docker.io/library/alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS smoke
+COPY --from=build /out/ /pkg/
+COPY upstream.lock.json /recipe/
+RUN want=$(sed -n 's/.*"tag": *"\([^"]*\)".*/\1/p' /recipe/upstream.lock.json) && \
+    got=$(/pkg/usr/lib/meduza-np/providers/mosdns/mosdns version) && \
+    echo "mosdns version: $got" && [ "$got" = "$want" ]
+
+FROM scratch
+COPY --from=smoke /pkg/ /

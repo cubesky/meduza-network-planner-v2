@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Avahi status",
+  "type": "object",
+  "required": [
+    "id",
+    "kind",
+    "state"
+  ],
+  "properties": {
+    "kind": {
+      "enum": [
+        "avahi",
+        "mdns-bridge"
+      ]
+    },
+    "state": {
+      "enum": [
+        "up",
+        "starting",
+        "down",
+        "degraded",
+        "pending"
+      ]
+    },
+    "activeInterfaces": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "version": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "listen": {
+      "type": "string"
+    }
+  }
+}

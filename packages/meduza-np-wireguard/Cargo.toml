@@ -1,0 +1,21 @@
+[package]
+name = "meduza-np-wireguard"
+version = "0.1.0"
+description = "Meduza NP WireGuard service plugin: interfaces, peers, keys, wg setconf rendering and handshake status"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "meduza-np-wireguard"
+path = "src/main.rs"
+
+[dependencies]
+meduza-np-protocol.workspace = true
+meduza-np-plugin-sdk.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+base64.workspace = true
+ipnet.workspace = true
+x25519-dalek.workspace = true

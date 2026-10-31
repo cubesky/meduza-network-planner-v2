@@ -1,0 +1,19 @@
+[package]
+name = "meduza-np-cli"
+version = "0.1.0"
+description = "Meduza NP node CLI: status, packages, enroll, sync, validate, plan, logs, doctor, maintenance, updates"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "meduza-np"
+path = "src/main.rs"
+
+[dependencies]
+meduza-np-protocol.workspace = true
+meduza-np-runtime.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+getrandom.workspace = true

@@ -1,0 +1,136 @@
+{
+  "$defs": {
+    "Backend": {
+      "properties": {
+        "address": {
+          "default": "127.0.0.1",
+          "format": "ip",
+          "type": "string"
+        },
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "id": {
+          "$ref": "#/$defs/StableId"
+        },
+        "kind": {
+          "$ref": "#/$defs/BackendKind"
+        },
+        "port": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "priority": {
+          "default": 100,
+          "description": "Lower = preferred.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "port"
+      ],
+      "type": "object"
+    },
+    "BackendKind": {
+      "enum": [
+        "mosdns",
+        "mihomo"
+      ],
+      "type": "string"
+    },
+    "StableId": {
+      "description": "Stable object id",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+      "type": "string"
+    },
+    "Strategy": {
+      "oneOf": [
+        {
+          "const": "ordered",
+          "description": "Healthy backends in priority order (`strict-order`); the first answering one wins.",
+          "type": "string"
+        },
+        {
+          "const": "parallel",
+          "description": "Query all healthy backends in parallel and take the fastest answer (`all-servers`).",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "backends": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Backend"
+      },
+      "type": "array"
+    },
+    "cacheSize": {
+      "default": 1000,
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "enabled": {
+      "default": true,
+      "type": "boolean"
+    },
+    "fallbackServers": {
+      "description": "Explicit fallback resolvers (`ip` or `ip#port`), used before backends are ready and when none is healthy.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "listenAddresses": {
+      "description": "Addresses clients query (the front end). Never 0.0.0.0 implicitly.",
+      "items": {
+        "format": "ip",
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "localTtl": {
+      "default": 60,
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "mdnsForward": {
+      "default": false,
+      "description": "Forward `.local` A/AAAA queries to the Avahi bridge when meduza-np-avahi provides it.",
+      "type": "boolean"
+    },
+    "port": {
+      "default": 53,
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "probeName": {
+      "default": "example.com",
+      "type": "string"
+    },
+    "strategy": {
+      "$ref": "#/$defs/Strategy",
+      "default": "ordered"
+    }
+  },
+  "required": [
+    "listenAddresses",
+    "fallbackServers"
+  ],
+  "title": "dnsmasq",
+  "type": "object"
+}

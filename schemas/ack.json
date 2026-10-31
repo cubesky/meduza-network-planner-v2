@@ -1,0 +1,83 @@
+{
+  "$defs": {
+    "AckStage": {
+      "enum": [
+        "received",
+        "validated",
+        "applied",
+        "failed",
+        "rejected"
+      ],
+      "type": "string"
+    },
+    "InstanceOutcome": {
+      "properties": {
+        "instance": {
+          "type": "string"
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ok": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "instance",
+        "ok"
+      ],
+      "type": "object"
+    },
+    "RevisionId": {
+      "description": "Immutable revision id",
+      "pattern": "^rev-[0-9]{6,18}$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`POST /api/v1/nodes/self/acks` — idempotent on (revision, stage, bootId).",
+  "properties": {
+    "bootId": {
+      "type": "string"
+    },
+    "configDigest": {
+      "type": "string"
+    },
+    "errorCode": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "instances": {
+      "description": "Per-instance outcome for the manager's per-node result view.",
+      "items": {
+        "$ref": "#/$defs/InstanceOutcome"
+      },
+      "type": "array"
+    },
+    "message": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "revision": {
+      "$ref": "#/$defs/RevisionId"
+    },
+    "stage": {
+      "$ref": "#/$defs/AckStage"
+    }
+  },
+  "required": [
+    "revision",
+    "configDigest",
+    "stage",
+    "bootId"
+  ],
+  "title": "Ack",
+  "type": "object"
+}

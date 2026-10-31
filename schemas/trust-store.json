@@ -1,0 +1,68 @@
+{
+  "$defs": {
+    "TrustedKey": {
+      "properties": {
+        "algorithm": {
+          "type": "string"
+        },
+        "comment": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "keyId": {
+          "type": "string"
+        },
+        "notAfter": {
+          "description": "RFC 3339; signatures by this key are not accepted after this time.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "publicKey": {
+          "description": "Base64 of the 32-byte Ed25519 public key.",
+          "type": "string"
+        },
+        "revoked": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "keyId",
+        "algorithm",
+        "publicKey"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Release trust roots installed on the node (`/etc/meduza-np/trust/release-keys.json`, shipped by the updater\npackage and the base image). A file is accepted when at least `threshold` distinct trusted keys signed it.",
+  "properties": {
+    "formatVersion": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "keys": {
+      "items": {
+        "$ref": "#/$defs/TrustedKey"
+      },
+      "type": "array"
+    },
+    "threshold": {
+      "default": 1,
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    }
+  },
+  "required": [
+    "formatVersion",
+    "keys"
+  ],
+  "title": "TrustStore",
+  "type": "object"
+}

@@ -1,0 +1,602 @@
+{
+  "$defs": {
+    "CommandSpec": {
+      "description": "A one-shot command (syntax check, reload). argv\\[0] is a provider slot reference or an absolute path.",
+      "properties": {
+        "argv": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "program": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "providerSlot": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "required": {
+          "default": true,
+          "description": "If false, failure is reported but does not abort the apply.",
+          "type": "boolean"
+        },
+        "timeoutSeconds": {
+          "default": 10,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "argv"
+      ],
+      "type": "object"
+    },
+    "IpFamily": {
+      "enum": [
+        "ipv4",
+        "ipv6"
+      ],
+      "type": "string"
+    },
+    "NetworkResource": {
+      "description": "Network resources applied by planner's network backend; owned and journaled per instance (§9.6, §11.3).\nThere is deliberately no \"run this shell command\" resource.",
+      "oneOf": [
+        {
+          "description": "A link planner creates and deletes (dummy/bridge/wireguard). Links created by daemons (tun/tap) are not listed.",
+          "properties": {
+            "device": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "link",
+              "type": "string"
+            },
+            "linkType": {
+              "type": "string"
+            },
+            "mtu": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "up": {
+              "description": "Bring the link up after creation. `false` leaves it down for a guard process to raise (Anycast VIPs).",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "device",
+            "linkType"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Address planner assigns to a device; removed only if planner added it.",
+          "properties": {
+            "cidr": {
+              "type": "string"
+            },
+            "device": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "address",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "device",
+            "cidr"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "MTU / up state of a device created by a daemon.",
+          "properties": {
+            "device": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "link-settings",
+              "type": "string"
+            },
+            "mtu": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "up": {
+              "default": false,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "kind",
+            "device"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "destination": {
+              "type": "string"
+            },
+            "device": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "const": "route",
+              "type": "string"
+            },
+            "metric": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "routeType": {
+              "description": "`local` for TPROXY tables, otherwise unicast.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "table": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "via": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "destination"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "family": {
+              "$ref": "#/$defs/IpFamily"
+            },
+            "fwmark": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "rule",
+              "type": "string"
+            },
+            "mask": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "priority": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "table": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "priority",
+            "fwmark",
+            "table",
+            "family"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A complete nftables table owned exclusively by this instance (`meduza_np_<name>`). Applied atomically\nwith `nft -f`, deleted as a whole. Never touches other tables (§9.6).",
+          "properties": {
+            "content": {
+              "type": "string"
+            },
+            "family": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "nft-table",
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "family",
+            "name",
+            "content"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "key": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "sysctl",
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "key",
+            "value"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "Reservation of a fwmark / routing table number so two features never pick the same one.",
+          "properties": {
+            "kind": {
+              "const": "reservation",
+              "type": "string"
+            },
+            "namespace": {
+              "type": "string"
+            },
+            "value": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "namespace",
+            "value"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "PlannedFile": {
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "mode": {
+          "description": "Octal string, e.g. `0600`.",
+          "type": "string"
+        },
+        "path": {
+          "description": "Relative to the generation directory.",
+          "type": "string"
+        },
+        "sensitive": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "path",
+        "mode",
+        "content"
+      ],
+      "type": "object"
+    },
+    "ProbeSpec": {
+      "description": "How planner decides the instance really works, not only \"process exists\" (§9.4, §9.5).",
+      "oneOf": [
+        {
+          "description": "Ask the plugin's `probe` operation; the plugin reads native status (wg show dump, FRR JSON, ...).",
+          "properties": {
+            "intervalSeconds": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "plugin",
+              "type": "string"
+            },
+            "params": {
+              "default": null
+            }
+          },
+          "required": [
+            "kind",
+            "intervalSeconds"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "host": {
+              "type": "string"
+            },
+            "intervalSeconds": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "tcp",
+              "type": "string"
+            },
+            "port": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "host",
+            "port",
+            "intervalSeconds"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "intervalSeconds": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "dns",
+              "type": "string"
+            },
+            "port": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "query": {
+              "type": "string"
+            },
+            "server": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "server",
+            "port",
+            "query",
+            "intervalSeconds"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "expectStatus": {
+              "default": null,
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "intervalSeconds": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "kind": {
+              "const": "http",
+              "type": "string"
+            },
+            "url": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "url",
+            "intervalSeconds"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ProcessSpec": {
+      "properties": {
+        "argv": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "boundTo": {
+          "description": "Id of an earlier process of the same plan this one depends on at runtime (e.g. FRR daemons on zebra): it is\nrestarted whenever that process starts a new process (crash restart, spec change, not adopted after a\nplanner restart), and is never adopted when that process was started anew.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "id": {
+          "type": "string"
+        },
+        "program": {
+          "description": "Absolute path of a program shipped by this project (e.g. a bridge helper).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "providerSlot": {
+          "description": "Binary comes from the resolved provider of this slot (`${PROVIDER_BIN}`); mutually exclusive with `program`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reloadSignal": {
+          "description": "Signal used for reload instead of restart, if the daemon supports it for the changed files.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "restart": {
+          "$ref": "#/$defs/RestartPolicy",
+          "default": "on-failure"
+        },
+        "restartDigest": {
+          "description": "Digest of the inputs that require a restart when they change; planner restarts only on change (§11.1).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stopTimeoutSeconds": {
+          "default": 10,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "user": {
+          "description": "Run as this user/group if the platform supports it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "argv"
+      ],
+      "type": "object"
+    },
+    "RestartPolicy": {
+      "enum": [
+        "never",
+        "on-failure",
+        "always"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "checks": {
+      "default": [],
+      "description": "Native syntax checks planner runs against staged files before switching generations.",
+      "items": {
+        "$ref": "#/$defs/CommandSpec"
+      },
+      "type": "array"
+    },
+    "dependsOn": {
+      "default": [],
+      "description": "Other instances (`frr/main`, `dnsmasq/main`) that must be applied first.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "files": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/PlannedFile"
+      },
+      "type": "array"
+    },
+    "instance": {
+      "description": "`<package-short>/<instance-id>`; a plugin may return several plans, one per instance.",
+      "type": "string"
+    },
+    "probes": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ProbeSpec"
+      },
+      "type": "array"
+    },
+    "processes": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ProcessSpec"
+      },
+      "type": "array"
+    },
+    "protocolVersion": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "reload": {
+      "default": [],
+      "description": "Commands run after the new generation is active when the process does not need a restart.",
+      "items": {
+        "$ref": "#/$defs/CommandSpec"
+      },
+      "type": "array"
+    },
+    "requestId": {
+      "type": "string"
+    },
+    "resources": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/NetworkResource"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "protocolVersion",
+    "requestId",
+    "instance"
+  ],
+  "title": "GenerationPlan",
+  "type": "object"
+}

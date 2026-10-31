@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MosDNS status",
+  "type": "object",
+  "required": [
+    "id",
+    "kind",
+    "state"
+  ],
+  "properties": {
+    "kind": {
+      "enum": [
+        "mosdns",
+        "mosdns-rules"
+      ]
+    },
+    "state": {
+      "enum": [
+        "up",
+        "degraded",
+        "down",
+        "pending"
+      ]
+    },
+    "ruleStatus": {
+      "enum": [
+        "ok",
+        "pending",
+        "stale",
+        "failed"
+      ]
+    },
+    "updatedAt": {
+      "type": "string"
+    },
+    "lastError": {
+      "type": "string"
+    }
+  }
+}

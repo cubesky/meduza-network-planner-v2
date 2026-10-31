@@ -1,0 +1,19 @@
+[package]
+name = "meduza-np-tinc"
+version = "0.1.0"
+description = "Meduza NP Tinc service plugin: mesh membership, hosts files, keys, up/down scripts and peer reachability"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "meduza-np-tinc"
+path = "src/main.rs"
+
+[dependencies]
+meduza-np-protocol.workspace = true
+meduza-np-plugin-sdk.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+ipnet.workspace = true

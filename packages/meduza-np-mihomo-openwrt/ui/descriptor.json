@@ -1,0 +1,212 @@
+{
+  "uiVersion": 1,
+  "package": "meduza-np-mihomo-openwrt",
+  "requiresCapability": "mihomo-openwrt.openclash",
+  "title": "Mihomo (OpenClash)",
+  "description": "OpenClash runs Mihomo and owns its transparent-proxy rules and utun. This adapter only writes its own managed configuration file, selects it and records the original OpenClash options; disabling restores them. Ports, controller, DNS and TUN come from OpenClash settings and are shown as overridden.",
+  "settings": [
+    {
+      "path": "services.mihomo-openwrt",
+      "title": "OpenClash",
+      "sections": [
+        {
+          "title": "接管",
+          "fields": [
+            "enabled",
+            "configName",
+            "select",
+            "mode",
+            "restartOnChange"
+          ]
+        },
+        {
+          "title": "订阅下载",
+          "fields": [
+            "downloadProxy"
+          ]
+        },
+        {
+          "title": "DNS",
+          "fields": [
+            "dnsIntegration"
+          ]
+        }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "id": "refresh-subscription",
+      "label": "立即刷新订阅",
+      "mutating": true
+    },
+    {
+      "id": "detect",
+      "label": "检测 OpenClash",
+      "mutating": false
+    },
+    {
+      "id": "preview-config",
+      "label": "查看托管配置",
+      "mutating": false
+    },
+    {
+      "id": "reload-openclash",
+      "label": "重启 OpenClash",
+      "mutating": true
+    },
+    {
+      "id": "restore-takeover",
+      "label": "恢复接管前设置",
+      "mutating": true
+    }
+  ],
+  "status": [
+    {
+      "title": "OpenClash",
+      "instanceKind": "openclash",
+      "columns": [
+        "id",
+        "state",
+        "reason",
+        "openclashVersion",
+        "coreVersion",
+        "configPath",
+        "selected",
+        "enMode",
+        "connections",
+        "takenOver",
+        "lastRestart"
+      ]
+    },
+    {
+      "title": "DNS",
+      "instanceKind": "openclash-dns",
+      "columns": [
+        "id",
+        "state",
+        "listen",
+        "reason"
+      ]
+    },
+    {
+      "title": "订阅",
+      "instanceKind": "openclash-subscription",
+      "columns": [
+        "id",
+        "state",
+        "active",
+        "updatedAt",
+        "overriddenKeys",
+        "lastError"
+      ]
+    }
+  ],
+  "i18n": {
+    "en": {
+      "text": {
+        "当前订阅": "Active subscription",
+        "恢复接管前设置": "Restore settings from before the takeover",
+        "接管": "Takeover",
+        "查看托管配置": "Show managed configuration",
+        "检测 OpenClash": "Detect OpenClash",
+        "订阅": "Subscriptions",
+        "重启 OpenClash": "Restart OpenClash",
+        "订阅下载": "Subscription download",
+        "立即刷新订阅": "Refresh subscription now"
+      }
+    },
+    "zh-Hans": {
+      "text": {
+        "DNS": "DNS",
+        "Mihomo (OpenClash)": "Mihomo (OpenClash)",
+        "OpenClash": "OpenClash",
+        "OpenClash runs Mihomo and owns its transparent-proxy rules and utun. This adapter only writes its own managed configuration file, selects it and records the original OpenClash options; disabling restores them. Ports, controller, DNS and TUN come from OpenClash settings and are shown as overridden.": "OpenClash 运行 Mihomo，并负责其透明代理规则和 utun。此适配器只写入自己托管的配置文件、选中它并记录 OpenClash 的原始选项；禁用时会恢复这些选项。端口、控制器、DNS 和 TUN 来自 OpenClash 设置，并显示为已覆盖。",
+        "当前订阅": "当前订阅",
+        "恢复接管前设置": "恢复接管前设置",
+        "接管": "接管",
+        "查看托管配置": "查看托管配置",
+        "检测 OpenClash": "检测 OpenClash",
+        "订阅": "订阅",
+        "重启 OpenClash": "重启 OpenClash",
+        "订阅下载": "订阅下载",
+        "立即刷新订阅": "立即刷新订阅"
+      },
+      "fields": {
+        "active": "生效",
+        "activeSubscription": "当前订阅",
+        "configName": "配置名称",
+        "configPath": "配置路径",
+        "connections": "连接",
+        "coreVersion": "内核版本",
+        "dnsIntegration": "DNS 集成",
+        "downloadProxy": "下载代理",
+        "enMode": "增强模式",
+        "enabled": "启用",
+        "id": "ID",
+        "lastError": "最近错误",
+        "lastRestart": "最后重启",
+        "listen": "监听",
+        "mode": "模式",
+        "name": "名称",
+        "openclashVersion": "OpenClash 版本",
+        "overriddenKeys": "被覆盖的键",
+        "reason": "原因",
+        "refreshHours": "刷新间隔（小时）",
+        "restartOnChange": "变更时重启",
+        "select": "选择",
+        "selected": "已选择",
+        "state": "状态",
+        "takenOver": "已接管",
+        "updatedAt": "更新时间",
+        "urlRef": "URL 密钥"
+      }
+    },
+    "zh-Hant": {
+      "text": {
+        "DNS": "DNS",
+        "Mihomo (OpenClash)": "Mihomo (OpenClash)",
+        "OpenClash": "OpenClash",
+        "OpenClash runs Mihomo and owns its transparent-proxy rules and utun. This adapter only writes its own managed configuration file, selects it and records the original OpenClash options; disabling restores them. Ports, controller, DNS and TUN come from OpenClash settings and are shown as overridden.": "OpenClash 執行 Mihomo，並負責其透明代理規則與 utun。此轉接器只寫入自己託管的設定檔、選用它並記錄 OpenClash 的原始選項；停用時會還原這些選項。連接埠、控制器、DNS 與 TUN 來自 OpenClash 設定，並顯示為已覆寫。",
+        "当前订阅": "目前訂閱",
+        "恢复接管前设置": "還原接管前設定",
+        "接管": "接管",
+        "查看托管配置": "檢視託管設定",
+        "检测 OpenClash": "偵測 OpenClash",
+        "订阅": "訂閱",
+        "重启 OpenClash": "重新啟動 OpenClash",
+        "订阅下载": "訂閱下載",
+        "立即刷新订阅": "立即重新整理訂閱"
+      },
+      "fields": {
+        "active": "生效",
+        "activeSubscription": "目前訂閱",
+        "configName": "設定名稱",
+        "configPath": "設定路徑",
+        "connections": "連線",
+        "coreVersion": "核心版本",
+        "dnsIntegration": "DNS 整合",
+        "downloadProxy": "下載代理",
+        "enMode": "增強模式",
+        "enabled": "啟用",
+        "id": "ID",
+        "lastError": "最近錯誤",
+        "lastRestart": "最後重新啟動",
+        "listen": "監聽",
+        "mode": "模式",
+        "name": "名稱",
+        "openclashVersion": "OpenClash 版本",
+        "overriddenKeys": "被覆寫的鍵",
+        "reason": "原因",
+        "refreshHours": "更新間隔（小時）",
+        "restartOnChange": "變更時重新啟動",
+        "select": "選擇",
+        "selected": "已選擇",
+        "state": "狀態",
+        "takenOver": "已接管",
+        "updatedAt": "更新時間",
+        "urlRef": "URL 金鑰"
+      }
+    }
+  }
+}

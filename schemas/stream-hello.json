@@ -1,0 +1,39 @@
+{
+  "$defs": {
+    "RevisionId": {
+      "description": "Immutable revision id",
+      "pattern": "^rev-[0-9]{6,18}$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "First frame the planner sends after the WebSocket upgrade.",
+  "properties": {
+    "helloVersion": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "lastEventId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "lastSuccessfulRevision": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RevisionId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "helloVersion"
+  ],
+  "title": "StreamHello",
+  "type": "object"
+}

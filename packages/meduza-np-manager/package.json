@@ -1,0 +1,42 @@
+{
+  "name": "@meduza-np/manager",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Meduza NP manager: WebUI, API, Passkey login, node sync, Access LDAP adapter",
+  "scripts": {
+    "build": "tsc -p server && vite build web",
+    "typecheck": "tsc --noEmit -p server && tsc --noEmit -p web",
+    "test": "tsc -p server && node --test --test-concurrency=1 \"dist/server/test/*.test.js\"",
+    "start": "node dist/server/src/main.js",
+    "dev:web": "vite web"
+  },
+  "dependencies": {
+    "@fastify/cookie": "11.1.3",
+    "@fastify/static": "8.3.0",
+    "@fastify/websocket": "11.3.4",
+    "@peculiar/x509": "1.14.3",
+    "@simplewebauthn/server": "13.3.3",
+    "ajv": "8.20.0",
+    "fastify": "5.12.7",
+    "ldapts": "8.2.0"
+  },
+  "devDependencies": {
+    "@meduza-np/descriptor-renderer": "workspace:*",
+    "@meduza-np/ui-kit": "workspace:*",
+    "@preact/preset-vite": "2.10.6",
+    "@simplewebauthn/browser": "13.3.0",
+    "@types/node": "24.19.2",
+    "@types/ws": "8.18.2",
+    "preact": "10.29.8",
+    "typescript": "5.9.3",
+    "vite": "7.3.7",
+    "ws": "8.22.0"
+  },
+  "meduzaNp": {
+    "bundled": [
+      "preact",
+      "@simplewebauthn/browser"
+    ]
+  }
+}

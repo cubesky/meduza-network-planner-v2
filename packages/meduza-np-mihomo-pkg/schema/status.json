@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Mihomo provider status",
+  "type": "object",
+  "required": [
+    "id",
+    "kind",
+    "state"
+  ],
+  "properties": {
+    "kind": {
+      "const": "mihomo-provider"
+    },
+    "source": {
+      "enum": [
+        "github-release",
+        "user-provided",
+        null
+      ]
+    },
+    "providerState": {
+      "enum": [
+        "registered",
+        "invalid",
+        "waiting-binary",
+        "download-failed"
+      ]
+    },
+    "verified": {
+      "type": "boolean"
+    },
+    "version": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

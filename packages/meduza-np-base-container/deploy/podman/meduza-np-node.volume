@@ -1,0 +1,4 @@
+# Node identity, manager settings, last good config, secrets, ownership journal, provider data (mihomo-pkg),
+# Alpine dependency cache. Written only by planner.
+[Volume]
+VolumeName=meduza-np-node

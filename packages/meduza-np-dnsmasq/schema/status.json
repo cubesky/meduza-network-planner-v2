@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "dnsmasq status",
+  "type": "object",
+  "required": [
+    "id",
+    "kind",
+    "state"
+  ],
+  "properties": {
+    "kind": {
+      "enum": [
+        "dns-frontend",
+        "dns-backend"
+      ]
+    },
+    "state": {
+      "enum": [
+        "up",
+        "degraded",
+        "down",
+        "unknown"
+      ]
+    },
+    "fallbackActive": {
+      "type": "boolean"
+    },
+    "fallbackVerified": {
+      "type": "boolean"
+    },
+    "upstreams": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "backend": {
+      "enum": [
+        "mosdns",
+        "mihomo"
+      ]
+    }
+  }
+}

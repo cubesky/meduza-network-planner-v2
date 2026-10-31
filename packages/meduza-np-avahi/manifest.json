@@ -1,0 +1,57 @@
+{
+  "manifestVersion": 1,
+  "package": "meduza-np-avahi",
+  "version": "0.1.0",
+  "role": "service-adapter",
+  "plannerApi": {
+    "min": 1,
+    "max": 1
+  },
+  "requires": [
+    "meduza-np-planner"
+  ],
+  "conflicts": [],
+  "provides": [
+    "mdns.avahi",
+    "mdns.bridge"
+  ],
+  "hostNetworkCapabilities": [
+    "mdns.avahi"
+  ],
+  "capabilitySwitches": [
+    {
+      "capability": "mdns.bridge",
+      "pointer": "/bridge/enabled"
+    }
+  ],
+  "providerSlot": "avahi.daemon",
+  "schemas": {
+    "config": "schema/config.json",
+    "status": "schema/status.json"
+  },
+  "ui": {
+    "descriptor": "ui/descriptor.json",
+    "version": 1
+  },
+  "entrypoint": "/usr/libexec/meduza-np/plugins/avahi",
+  "operations": [
+    "validate",
+    "plan",
+    "probe",
+    "action"
+  ],
+  "systemDependencies": [
+    {
+      "kind": "binary",
+      "name": "avahi-daemon",
+      "providerSlot": "avahi.daemon"
+    },
+    {
+      "kind": "service",
+      "name": "dbus"
+    }
+  ],
+  "consumes": [
+    "services.avahi"
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Parameters of `maintenance.start` (CLI/dashboard) and `maintenance.lock` (updater).",
+  "properties": {
+    "durationSeconds": {
+      "description": "Seconds until automatic expiry (max 24 h).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "pauseApply": {
+      "default": false,
+      "type": "boolean"
+    },
+    "reason": {
+      "type": "string"
+    },
+    "stopInstances": {
+      "default": [],
+      "description": "Instances to stop for the duration (empty = none).",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "reason",
+    "durationSeconds"
+  ],
+  "title": "MaintenanceRequest",
+  "type": "object"
+}

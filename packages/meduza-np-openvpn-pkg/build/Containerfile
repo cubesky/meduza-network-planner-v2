@@ -1,0 +1,16 @@
+# Static OpenVPN provider build. Build context: packages/meduza-np-openvpn-pkg.
+#
+#   podman build --platform linux/arm64 -f build/Containerfile --output type=local,dest=out/arm64 .
+#
+# The builder runs on the target platform (QEMU binfmt for foreign architectures) and the result is a scratch
+# image holding only the provider tree, so `--output type=local` yields the files to package.
+# The FROM digest must equal upstream.lock.json `builder.image` (checked by crates/protocol/tests/provider_recipes.rs).
+FROM docker.io/library/alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS build
+ARG TARGETPLATFORM
+COPY upstream.lock.json build/build.sh /recipe/
+RUN apk add --no-cache jq && \
+    apk add --no-cache $(jq -r '.builder.apk | join(" ")' /recipe/upstream.lock.json) && \
+    sh /recipe/build.sh /recipe/upstream.lock.json /out
+
+FROM scratch
+COPY --from=build /out/ /

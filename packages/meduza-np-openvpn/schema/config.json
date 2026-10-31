@@ -1,0 +1,721 @@
+{
+  "$defs": {
+    "AccessSettings": {
+      "properties": {
+        "authToken": {
+          "default": true,
+          "description": "Issue an `auth-gen-token` so renegotiation does not replay the password (OpenVPN ≥ 2.4).",
+          "type": "boolean"
+        },
+        "clientCert": {
+          "$ref": "#/$defs/ClientCertPolicy",
+          "default": "none"
+        },
+        "clientToClient": {
+          "default": false,
+          "type": "boolean"
+        },
+        "maxClients": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pool": {
+          "$ref": "#/$defs/Ipv4Net",
+          "description": "Client IPv4 pool, e.g. `10.88.0.0/24`."
+        },
+        "pushDns": {
+          "default": [],
+          "items": {
+            "format": "ip",
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pushDomain": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pushRoutes": {
+          "$ref": "#/$defs/PushRoutes",
+          "default": {
+            "extra": [],
+            "lan": false,
+            "mappings": false,
+            "privateLan": false
+          }
+        },
+        "renegSeconds": {
+          "default": 3600,
+          "description": "Data channel renegotiation; OpenVPN re-runs the auth hook unless an auth token is used.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "pool"
+      ],
+      "type": "object"
+    },
+    "BgpSession": {
+      "properties": {
+        "accept": {
+          "default": [],
+          "description": "Prefixes accepted from the peer, `10.64.0.0/16` or `10.64.0.0/16 le 24`. Empty: everything the peer\noriginates (see `noTransit`).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "acceptDefault": {
+          "default": false,
+          "description": "Also accept a default route from the peer.",
+          "type": "boolean"
+        },
+        "address": {
+          "description": "The neighbor's tunnel address. Defaults to the peer's host route in `allowedIps` (WireGuard) or the remote\n`ifconfig` address (OpenVPN).",
+          "format": "ip",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bfd": {
+          "default": false,
+          "description": "BFD with the cluster's BFD timers. Never used with roaming nodes (it costs bandwidth).",
+          "type": "boolean"
+        },
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "exportAccessPools": {
+          "default": false,
+          "type": "boolean"
+        },
+        "exportDefaultRoute": {
+          "default": false,
+          "type": "boolean"
+        },
+        "exportExtra": {
+          "default": [],
+          "description": "Further prefixes to advertise.",
+          "items": {
+            "$ref": "#/$defs/Ipv4Net"
+          },
+          "type": "array"
+        },
+        "exportInternal": {
+          "default": false,
+          "description": "Advertise the public prefixes of the whole internal network (the other mesh members' LANs).",
+          "type": "boolean"
+        },
+        "exportLan": {
+          "default": true,
+          "description": "Advertise this node's LAN prefixes.",
+          "type": "boolean"
+        },
+        "exportMappings": {
+          "default": false,
+          "type": "boolean"
+        },
+        "hold": {
+          "description": "BGP hold seconds (FRR default 180), at least three keepalives.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 3,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "keepalive": {
+          "description": "BGP keepalive seconds (FRR default 60). Sessions without BFD notice a vanished peer only by the hold timer.",
+          "format": "uint16",
+          "maximum": 3600,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "localPreference": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "noForward": {
+          "default": true,
+          "description": "Advertise only routes of our own AS to the peer, never routes learned from other external peers.",
+          "type": "boolean"
+        },
+        "noTransit": {
+          "default": true,
+          "description": "Do not use the peer as a transit path: accept only routes it originated itself.",
+          "type": "boolean"
+        },
+        "passwordRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "remoteAsn": {
+          "description": "AS number of the external side.",
+          "format": "uint32",
+          "maximum": 4294967294,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "remoteAsn"
+      ],
+      "type": "object"
+    },
+    "ClientCertPolicy": {
+      "oneOf": [
+        {
+          "enum": [
+            "optional",
+            "require"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "none",
+          "description": "Username/password only (`verify-client-cert none`).",
+          "type": "string"
+        }
+      ]
+    },
+    "Compression": {
+      "oneOf": [
+        {
+          "enum": [
+            "migrate"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "off",
+          "description": "No compression (default; avoids VORACLE-class issues). Only `migrate` keeps old peers connecting.",
+          "type": "string"
+        },
+        {
+          "const": "lzo-no",
+          "description": "`comp-lzo no`: no compression, but the framing byte peers configured with `comp-lzo no` expect.",
+          "type": "string"
+        },
+        {
+          "const": "lzo-asym",
+          "description": "`comp-lzo yes` + `allow-compression asym`: compressed packets from the peer are accepted, nothing is sent\ncompressed (peers still configured with `comp-lzo yes`).",
+          "type": "string"
+        }
+      ]
+    },
+    "DevType": {
+      "enum": [
+        "tun",
+        "tap"
+      ],
+      "type": "string"
+    },
+    "Ifconfig": {
+      "properties": {
+        "local": {
+          "description": "Local tunnel address (tun p2p) or address/prefix for tap (e.g. `10.8.0.1/30`).",
+          "type": "string"
+        },
+        "remote": {
+          "description": "Remote tunnel address (tun p2p).",
+          "format": "ipv4",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "local"
+      ],
+      "type": "object"
+    },
+    "Instance": {
+      "properties": {
+        "acceptRoutes": {
+          "default": false,
+          "description": "Client: accept pushed routes. Default false → `route-nopull` (§9.2).",
+          "type": "boolean"
+        },
+        "access": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AccessSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "auth": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bgp": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BgpSession"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Site2Site: eBGP with the external side over this tunnel; compiled into FRR by the manager, never used by\nthis plugin."
+        },
+        "cipher": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "compression": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Compression"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dataCiphers": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "devType": {
+          "$ref": "#/$defs/DevType",
+          "default": "tun"
+        },
+        "device": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "id": {
+          "$ref": "#/$defs/StableId"
+        },
+        "ifconfig": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ifconfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "keepalive": {
+          "$ref": "#/$defs/Keepalive",
+          "default": {
+            "interval": 10,
+            "timeout": 60
+          }
+        },
+        "kind": {
+          "$ref": "#/$defs/Kind",
+          "default": "site2site"
+        },
+        "local": {
+          "description": "Bind address (servers).",
+          "format": "ip",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mssfix": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "p2pPull": {
+          "default": false,
+          "description": "p2p client of a multi-client (`mode server`) peer: also request its pushed options (`pull`, as OpenVPN's\n`client` does). Off for p2p peers, which push nothing.",
+          "type": "boolean"
+        },
+        "persistKey": {
+          "default": true,
+          "type": "boolean"
+        },
+        "persistTun": {
+          "default": true,
+          "type": "boolean"
+        },
+        "port": {
+          "default": 1194,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "proto": {
+          "$ref": "#/$defs/Proto",
+          "default": "udp"
+        },
+        "publicEndpoint": {
+          "description": "Public `host[:port]` external clients/sites use to reach this server (exports, Access profiles).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pull": {
+          "default": true,
+          "description": "Client: accept server-pushed options (still never routes unless `acceptRoutes`).",
+          "type": "boolean"
+        },
+        "remotes": {
+          "default": [],
+          "description": "Client remotes, tried in order.",
+          "items": {
+            "$ref": "#/$defs/Remote"
+          },
+          "type": "array"
+        },
+        "role": {
+          "$ref": "#/$defs/Role",
+          "default": "client",
+          "description": "Site2Site only; Access instances are always servers."
+        },
+        "routes": {
+          "default": [],
+          "description": "Prefixes reachable through this tunnel, installed by planner routing (FRR) — informational here.",
+          "items": {
+            "$ref": "#/$defs/IpNet"
+          },
+          "type": "array"
+        },
+        "serverNetwork": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ipv4Net"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Server-mode Site2Site address pool."
+        },
+        "staticKeyRef": {
+          "description": "Pre-shared static key mode (p2p without TLS). Mutually exclusive with certificates.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tls": {
+          "$ref": "#/$defs/Tls",
+          "default": {}
+        },
+        "topology": {
+          "$ref": "#/$defs/Topology",
+          "default": "p2p"
+        },
+        "tunMtu": {
+          "format": "uint32",
+          "maximum": 9000,
+          "minimum": 576,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "verb": {
+          "default": 3,
+          "format": "uint8",
+          "maximum": 6,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "IpNet": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Ipv4Net"
+        },
+        {
+          "$ref": "#/$defs/Ipv6Net"
+        }
+      ],
+      "description": "An IPv4 or IPv6 address with prefix length",
+      "examples": [
+        "192.168.0.0/24",
+        "fd00::/32"
+      ],
+      "title": "IP network"
+    },
+    "Ipv4Net": {
+      "description": "An IPv4 address with prefix length",
+      "examples": [
+        "0.0.0.0/0",
+        "192.168.0.0/24"
+      ],
+      "maxLength": 18,
+      "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\\/(?:3[0-2]|[1-2][0-9]|[0-9])$",
+      "title": "IPv4 network",
+      "type": "string"
+    },
+    "Ipv6Net": {
+      "description": "An IPv6 address with prefix length",
+      "examples": [
+        "::/0",
+        "fd00::/32"
+      ],
+      "maxLength": 43,
+      "pattern": "^[0-9A-Fa-f:\\.]+\\/(?:[0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])$",
+      "title": "IPv6 network",
+      "type": "string"
+    },
+    "Keepalive": {
+      "properties": {
+        "interval": {
+          "default": 10,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "timeout": {
+          "default": 60,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "Kind": {
+      "enum": [
+        "site2site",
+        "access"
+      ],
+      "type": "string"
+    },
+    "Proto": {
+      "enum": [
+        "udp",
+        "tcp",
+        "udp6",
+        "tcp6"
+      ],
+      "type": "string"
+    },
+    "PushRoutes": {
+      "properties": {
+        "extra": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IpNet"
+          },
+          "type": "array"
+        },
+        "lan": {
+          "default": false,
+          "type": "boolean"
+        },
+        "mappings": {
+          "default": false,
+          "description": "Advertised (external) prefixes of 1:1 mappings.",
+          "type": "boolean"
+        },
+        "privateLan": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "Remote": {
+      "properties": {
+        "host": {
+          "type": "string"
+        },
+        "port": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "proto": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Proto"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "host"
+      ],
+      "type": "object"
+    },
+    "Role": {
+      "enum": [
+        "client",
+        "server"
+      ],
+      "type": "string"
+    },
+    "StableId": {
+      "description": "Stable object id",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+      "type": "string"
+    },
+    "Tls": {
+      "properties": {
+        "caRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "certRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "crlRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dhRef": {
+          "description": "Classic DH parameters; omitted = ECDH only (`dh none`) on servers.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "keyDirection": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "keyRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "remoteCertTls": {
+          "description": "Require the peer certificate's extended key usage (`remote-cert-tls`). Defaults to the opposite role.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tlsAuthRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tlsCryptRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tlsVersionMin": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "verifyX509Name": {
+          "description": "`verify-x509-name <name> name` for clients.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "Topology": {
+      "oneOf": [
+        {
+          "const": "p2p",
+          "description": "Point-to-point with explicit `ifconfig` addresses (one peer).",
+          "type": "string"
+        },
+        {
+          "const": "subnet",
+          "description": "Server mode with an address pool (`server` directive); clients pull their address.",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "enabled": {
+      "default": true,
+      "type": "boolean"
+    },
+    "instances": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Instance"
+      },
+      "type": "array"
+    }
+  },
+  "title": "OpenVPN",
+  "type": "object"
+}

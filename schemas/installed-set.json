@@ -1,0 +1,101 @@
+{
+  "$defs": {
+    "InstalledPackage": {
+      "properties": {
+        "object": {
+          "description": "Store object directory name (store backend only).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sha256": {
+          "default": "",
+          "description": "SHA-256 of the verified artifact; empty for `image`-provided packages.",
+          "type": "string"
+        },
+        "source": {
+          "description": "`group:<version>`, `image` (built into the base image) or `system` (found installed, not by us).",
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "version",
+        "source"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The runnable package set recorded by the updater (`<store>/installed.json`). planner, CLI and dashboards read\nit to show installed versions; only the updater writes it.",
+  "properties": {
+    "activatedAt": {
+      "type": "string"
+    },
+    "backend": {
+      "description": "`store` (container / generic Linux), `opkg` or `apk` (OpenWrt).",
+      "type": "string"
+    },
+    "channel": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "formatVersion": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "generation": {
+      "description": "Local activation counter; increases with every switch (including rollbacks).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "groupSequence": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "groupVersion": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "packages": {
+      "additionalProperties": {
+        "$ref": "#/$defs/InstalledPackage"
+      },
+      "type": "object"
+    },
+    "platform": {
+      "type": "string"
+    },
+    "selected": {
+      "default": [],
+      "description": "Packages the operator selected explicitly (container `MEDUZA_NP_COMPONENTS` or `install`); the rest are\nfixed components or dependencies.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "formatVersion",
+    "generation",
+    "backend",
+    "platform",
+    "packages",
+    "activatedAt"
+  ],
+  "title": "InstalledSet",
+  "type": "object"
+}

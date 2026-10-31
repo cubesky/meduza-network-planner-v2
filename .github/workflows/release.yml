@@ -1,0 +1,413 @@
+# One-button release (AGENT.md §15). Tag push `v*` publishes; workflow_dispatch re-runs a given tag (idempotent:
+# immutable files that already exist are never overwritten, the channel pointer is written last).
+#
+# Required once: secret MEDUZA_NP_RELEASE_KEY (base64 Ed25519 seed from `meduza-np-updater keygen`; its public entry is
+# packages/meduza-np-base-container/trust/release-keys.json), GitHub Pages source = "GitHub Actions". OCI images go to
+# ghcr.io/<owner>/<package> with the workflow token (D30); after the first release make the GHCR packages public once
+# (Package settings -> visibility), otherwise nodes and the manager host need registry credentials to pull.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)publish, e.g. v0.2.0"
+        required: true
+      channel:
+        description: "Channel to point at the group"
+        default: stable
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  RUST_TOOLCHAIN: "1.99.1"
+  ZIG_VERSION: "0.13.0"
+  CARGO_ZIGBUILD_VERSION: "0.19.8"
+  TAG: ${{ inputs.tag || github.ref_name }}
+  CHANNEL: ${{ inputs.channel || 'stable' }}
+  PAGES_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
+  TARGETS: x86_64-unknown-linux-musl,aarch64-unknown-linux-musl,armv7-unknown-linux-musleabihf
+
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      rust_changed: ${{ steps.m.outputs.rust_changed }}
+      providers_changed: ${{ steps.m.outputs.providers_changed }}
+      noarch_changed: ${{ steps.m.outputs.noarch_changed }}
+      images_changed: ${{ steps.m.outputs.images_changed }}
+      sequence: ${{ steps.m.outputs.sequence }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0
+      - name: Toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target x86_64-unknown-linux-musl
+          rustup default "$RUST_TOOLCHAIN"
+      - name: Tests (protocol/schemas, Rust, web)
+        run: |
+          cargo test --locked --workspace
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24, cache: pnpm }
+      - run: pnpm install --frozen-lockfile && pnpm -r run typecheck && pnpm -r run build && MEDUZA_NP_SKIP_E2E=1 pnpm -r run test
+      # The dashboard UI is architecture-independent: built once here, packaged with every target's binary (§15.1 step 4)
+      - uses: actions/upload-artifact@v4
+        with: { name: dashboard-www, path: packages/meduza-np-dashboard/dist/www/, if-no-files-found: error }
+      - name: Baseline = last published group of the channel
+        run: |
+          mkdir -p plan
+          if curl -fsSL "$PAGES_URL/channels/$CHANNEL.json" -o plan/pointer.json; then
+            curl -fsSL "$PAGES_URL/$(jq -r .manifest plan/pointer.json)" -o plan/baseline.json
+            echo "baseline $(jq -r .groupVersion plan/baseline.json) seq $(jq -r .sequence plan/baseline.json)"
+          else
+            echo "first release: everything is built"
+          fi
+      - name: Fingerprints and change/reuse matrix
+        id: m
+        run: |
+          cargo build --locked --release -p meduza-np-release
+          R=target/release/meduza-np-release
+          $R fingerprint --targets "$TARGETS" > plan/fingerprints.json
+          base=""; [ -f plan/baseline.json ] && base="--baseline plan/baseline.json"
+          $R matrix --fingerprints plan/fingerprints.json --group-version "$TAG" $base > plan/matrix.json
+          cat plan/matrix.json
+          seq=1; [ -f plan/baseline.json ] && seq=$(( $(jq -r .sequence plan/baseline.json) + 1 ))
+          echo "sequence=$seq" >> "$GITHUB_OUTPUT"
+          # changed packages per build job: rust (cargo), providers (recipes), linux (tar.gz), openwrt (ipk/apk per
+          # arch), noarch (the LuCI app), images (runtime images: manager, base-container)
+          $R classify --matrix plan/matrix.json > plan/jobs.json
+          cat plan/jobs.json
+          echo "rust_changed=$(jq -c .rust plan/jobs.json)" >> "$GITHUB_OUTPUT"
+          echo "providers_changed=$(jq -c .providers plan/jobs.json)" >> "$GITHUB_OUTPUT"
+          echo "noarch_changed=$(jq -c .noarch plan/jobs.json)" >> "$GITHUB_OUTPUT"
+          echo "images_changed=$(jq -c .images plan/jobs.json)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with: { name: plan, path: plan/ }
+
+  build-rust:
+    needs: plan
+    if: needs.plan.outputs.rust_changed != '[]'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl, platform: linux/amd64, machine: "Advanced Micro Devices X86-64", qemu: "" }
+          - { target: aarch64-unknown-linux-musl, platform: linux/arm64, machine: "AArch64", qemu: qemu-aarch64-static }
+          - { target: armv7-unknown-linux-musleabihf, platform: linux/arm/v7, machine: "ARM", qemu: qemu-arm-static }
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ env.TAG }}" }
+      - uses: actions/download-artifact@v4
+        with: { name: plan, path: plan }
+      - uses: actions/download-artifact@v4
+        with: { name: dashboard-www, path: packages/meduza-np-dashboard/dist/www }
+      - name: Toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target ${{ matrix.target }}
+          rustup default "$RUST_TOOLCHAIN"
+          python3 -m pip install --user "ziglang==${ZIG_VERSION}" "cargo-zigbuild==${CARGO_ZIGBUILD_VERSION}"
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-user-static binutils jq
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target/${{ matrix.target }}
+          key: release-${{ matrix.target }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: release-${{ matrix.target }}-${{ env.RUST_TOOLCHAIN }}-
+      - name: Build changed Rust packages (one cargo invocation per target)
+        run: |
+          pkgs=$(jq -r '.[]' <<< '${{ needs.plan.outputs.rust_changed }}' | sed 's/^/-p /' | tr '\n' ' ')
+          cargo zigbuild --locked --release --target ${{ matrix.target }} $pkgs
+          tools/check-elf.sh target/${{ matrix.target }}/release "${{ matrix.machine }}"
+          tools/smoke-bins.sh target/${{ matrix.target }}/release "${{ matrix.qemu }}"
+      - name: Package (generic archive + OpenWrt ipk/apk for every OpenWrt arch of this target, D29)
+        run: |
+          cargo build --locked --release -p meduza-np-release
+          R=target/release/meduza-np-release
+          for p in $(jq -r '.[]' <<< '${{ needs.plan.outputs.rust_changed }}'); do
+            v=$(jq -r --arg p "$p" '.[$p].version' plan/matrix.json)
+            if jq -e --arg p "$p" '.linux | index($p)' plan/jobs.json >/dev/null; then
+              $R package --package "$p" --version "$v" --platform ${{ matrix.platform }} --bin-dir target/${{ matrix.target }}/release --out dist
+            fi
+            if jq -e --arg p "$p" '.openwrt | index($p)' plan/jobs.json >/dev/null; then
+              $R openwrt --package "$p" --version "$v" --target ${{ matrix.target }} --bin-dir target/${{ matrix.target }}/release \
+                --trust packages/meduza-np-base-container/trust/release-keys.json --out dist
+            fi
+          done
+          tools/openwrt-apk.sh dist "$R"
+      - uses: actions/upload-artifact@v4
+        with: { name: "dist-rust-${{ matrix.target }}", path: dist/ }
+
+  build-providers:
+    needs: plan
+    if: needs.plan.outputs.providers_changed != '[]'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: true
+      matrix:
+        package: [meduza-np-openvpn-pkg, meduza-np-mosdns-pkg]
+        platform: [linux/amd64, linux/arm64, linux/arm/v7]
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ env.TAG }}" }
+        if: contains(needs.plan.outputs.providers_changed, matrix.package)
+      - uses: actions/download-artifact@v4
+        if: contains(needs.plan.outputs.providers_changed, matrix.package)
+        with: { name: plan, path: plan }
+      - name: Build with the pinned recipe and package
+        if: contains(needs.plan.outputs.providers_changed, matrix.package)
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-user-static podman jq
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal && rustup default "$RUST_TOOLCHAIN"
+          slug=$(echo ${{ matrix.platform }} | tr / -)
+          (cd packages/${{ matrix.package }} && podman build --platform ${{ matrix.platform }} -f build/Containerfile --output type=local,dest=out/$slug .)
+          cargo build --locked --release -p meduza-np-release
+          v=$(jq -r --arg p ${{ matrix.package }} '.[$p].version' plan/matrix.json)
+          target/release/meduza-np-release package --package ${{ matrix.package }} --version "$v" --platform ${{ matrix.platform }} \
+            --tree packages/${{ matrix.package }}/out/$slug --out dist
+          target/release/meduza-np-release openwrt --package ${{ matrix.package }} --version "$v" --platform ${{ matrix.platform }} \
+            --tree packages/${{ matrix.package }}/out/$slug --out dist
+          tools/openwrt-apk.sh dist target/release/meduza-np-release
+      - uses: actions/upload-artifact@v4
+        if: contains(needs.plan.outputs.providers_changed, matrix.package)
+        with: { name: "dist-${{ matrix.package }}-${{ strategy.job-index }}", path: dist/ }
+
+  build-noarch:
+    needs: plan
+    if: needs.plan.outputs.noarch_changed != '[]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ env.TAG }}" }
+      - uses: actions/download-artifact@v4
+        with: { name: plan, path: plan }
+      - name: Architecture-independent OpenWrt packages (LuCI app)
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal && rustup default "$RUST_TOOLCHAIN"
+          cargo build --locked --release -p meduza-np-release
+          for p in $(jq -r '.[]' <<< '${{ needs.plan.outputs.noarch_changed }}'); do
+            v=$(jq -r --arg p "$p" '.[$p].version' plan/matrix.json)
+            target/release/meduza-np-release openwrt --package "$p" --version "$v" --noarch 1 --out dist
+          done
+          tools/openwrt-apk.sh dist target/release/meduza-np-release
+      - uses: actions/upload-artifact@v4
+        with: { name: dist-noarch, path: dist/ }
+
+  # Runtime images (D30): built for every platform, smoke-tested, pushed by digest. The base image embeds the group's
+  # updater: this run's build when the updater changed, otherwise the published archive of the reused version.
+  build-images:
+    needs: [plan, build-rust]
+    if: >-
+      always() && needs.plan.result == 'success' && needs.build-rust.result != 'failure' &&
+      needs.plan.outputs.images_changed != '[]'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        package: ${{ fromJSON(needs.plan.outputs.images_changed) }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ env.TAG }}" }
+      - uses: actions/download-artifact@v4
+        with: { path: in }
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - name: Tools and registry login
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends podman skopeo qemu-user-static jq
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal && rustup default "$RUST_TOOLCHAIN"
+          cargo build --locked --release -p meduza-np-release
+          echo "REGISTRY=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+          echo "REGISTRY_AUTH_FILE=$RUNNER_TEMP/auth.json" >> "$GITHUB_ENV"
+          printf '%s' "$GH_TOKEN" | REGISTRY_AUTH_FILE=$RUNNER_TEMP/auth.json skopeo login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Updater archives the base image embeds (verified by digest)
+        if: matrix.package == 'meduza-np-base-container'
+        run: |
+          v=$(jq -r '.["meduza-np-updater"].version' in/plan/matrix.json)
+          echo "UPDATER_VERSION=$v" >> "$GITHUB_ENV"
+          mkdir -p updater
+          for slug in linux-amd64 linux-arm64 linux-arm-v7; do
+            f="meduza-np-updater_${v}_$slug.tar.gz"
+            built=$(find in -path 'in/dist-rust-*' -name "$f" | head -1)
+            if [ -n "$built" ]; then
+              sha=$(jq -r .artifact.sha256 "$built.json")
+              cp "$built" updater/
+            else
+              a=$(jq -c --arg f "$f" '.packages[] | select(.name == "meduza-np-updater") | .artifacts[] | select(.url | endswith("/" + $f))' in/plan/baseline.json)
+              [ -n "$a" ] || { echo "no updater $f in this run or the baseline"; exit 1; }
+              sha=$(jq -r .sha256 <<< "$a")
+              curl -fsSL "$(jq -r .url <<< "$a")" -o "updater/$f"
+            fi
+            echo "$sha  updater/$f" | sha256sum -c -
+          done
+      - name: Build, smoke, push ${{ matrix.package }}
+        run: |
+          v=$(jq -r --arg p ${{ matrix.package }} '.[$p].version' in/plan/matrix.json)
+          REL=target/release/meduza-np-release GROUP_TAG="$TAG" UPDATER_DIR="$PWD/updater" UPDATE_BASE_URL="$PAGES_URL" \
+            SOURCE_URL="https://github.com/${{ github.repository }}" tools/release-image.sh ${{ matrix.package }} "$v" oci
+      - uses: actions/upload-artifact@v4
+        with: { name: "oci-${{ matrix.package }}", path: oci/ }
+
+  publish:
+    needs: [plan, build-rust, build-providers, build-noarch, build-images]
+    if: >-
+      always() && needs.plan.result == 'success' && needs.build-rust.result != 'failure' &&
+      needs.build-providers.result != 'failure' && needs.build-noarch.result != 'failure' &&
+      needs.build-images.result != 'failure'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ env.TAG }}" }
+      - uses: actions/download-artifact@v4
+        with: { path: in }
+      - name: Collect changed artifacts
+        run: |
+          mkdir -p dist && find in -path 'in/dist-*' -type f -exec cp {} dist/ \;
+          ls -la dist
+      - name: Verify reused artifacts still exist with their digests (§15.1 step 5)
+        run: |
+          [ -f in/plan/baseline.json ] || exit 0
+          for p in $(jq -r 'to_entries[] | select(.value.changed | not) | .key' in/plan/matrix.json); do
+            # registry images of reused packages are verified when they get the group tag (next step)
+            jq -c --arg p "$p" '.packages[] | select(.name == $p) | .artifacts[] | select(.format != "oci")' in/plan/baseline.json | while read -r a; do
+              url=$(jq -r .url <<< "$a"); sha=$(jq -r .sha256 <<< "$a")
+              curl -fsSL "$url" -o /tmp/reuse && echo "$sha  /tmp/reuse" | sha256sum -c - >/dev/null || { echo "reused $p artifact $url failed verification"; exit 1; }
+            done
+          done
+      - name: OCI distribution images of changed packages, group tag on every image (§15.1 step 6, D30)
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
+          cargo build --locked --release -p meduza-np-release
+          R=target/release/meduza-np-release
+          REGISTRY="ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          export REGISTRY_AUTH_FILE=$RUNNER_TEMP/auth.json
+          printf '%s' "$GH_TOKEN" | skopeo login ghcr.io -u "${{ github.actor }}" --password-stdin
+          mkdir -p oci && find in -path 'in/oci-*' -name '*.oci.json' -exec cp {} oci/ \;
+          for p in $(jq -r '.linux[]' in/plan/jobs.json); do
+            v=$(jq -r --arg p "$p" '.[$p].version' in/plan/matrix.json)
+            $R oci-layout --package "$p" --artifacts dist --image "$REGISTRY/$p" --out "layout/$p" \
+              --source "https://github.com/${{ github.repository }}" --describe "oci/$p.oci.json" >/dev/null
+            want=$(jq -r .index "oci/$p.oci.json")
+            if skopeo inspect --raw "docker://$REGISTRY/$p:$v" > /tmp/existing.json 2>/dev/null; then
+              # immutable: an earlier run of this tag pushed the same bytes (deterministic layout); never move the tag
+              have="sha256:$(sha256sum < /tmp/existing.json | cut -d' ' -f1)"
+              [ "$have" = "$want" ] || { echo "$REGISTRY/$p:$v exists as $have, expected $want"; exit 1; }
+            else
+              skopeo copy --all --preserve-digests "oci:layout/$p:$v" "docker://$REGISTRY/$p:$v"
+            fi
+            skopeo copy --all --preserve-digests "docker://$REGISTRY/$p@$want" "docker://$REGISTRY/$p:$TAG"
+          done
+          # unchanged packages keep their image digest; the group tag associates it with this group
+          if [ -f in/plan/baseline.json ]; then
+            for p in $(jq -r 'to_entries[] | select(.value.changed | not) | .key' in/plan/matrix.json); do
+              for ref in $(jq -r --arg p "$p" '[.packages[] | select(.name == $p) | .artifacts[].oci // empty] | unique | .[]' in/plan/baseline.json); do
+                skopeo copy --all --preserve-digests "docker://$ref" "docker://${ref%@*}:$TAG"
+              done
+            done
+          fi
+          ls -la oci
+      - name: SBOMs of the changed packages (CycloneDX 1.5, §15.1 step 7)
+        run: |
+          cargo build --locked --release -p meduza-np-release
+          mkdir -p sbom
+          export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          for p in $(jq -r 'to_entries[] | select(.value.changed) | .key' in/plan/matrix.json); do
+            v=$(jq -r --arg p "$p" '.[$p].version' in/plan/matrix.json)
+            # runtime images: OS packages of the pushed image (build-images extracted them per platform)
+            os=""; jq -e --arg p "$p" '.images | index($p)' in/plan/jobs.json >/dev/null && os="--image-os in/oci-$p/$p.image-os"
+            target/release/meduza-np-release sbom --package "$p" --version "$v" --targets "$TARGETS" $os --out "sbom/${p}_${v}.cdx.json"
+          done
+          ls -la sbom
+      - name: Create or update the GitHub Release (draft until the group is complete)
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --draft --title "$TAG" --notes "Meduza NP package group $TAG"
+          existing=$(gh release view "$TAG" --json assets -q '.assets[].name')
+          # unchanged packages keep the SBOM published with their (unchanged) version in the earlier release
+          for f in dist/*.tar.gz dist/*.ipk dist/*.apk sbom/*.cdx.json; do
+            [ -f "$f" ] || continue
+            # immutable: an asset already uploaded by an earlier run of this tag is never replaced
+            echo "$existing" | grep -qx "$(basename "$f")" && continue
+            gh release upload "$TAG" "$f"
+          done
+      - name: Group manifest + channel pointer (signed)
+        env:
+          KEY: ${{ secrets.MEDUZA_NP_RELEASE_KEY }}
+        run: |
+          umask 077 && printf '%s' "$KEY" > /tmp/release.key
+          cargo build --locked --release -p meduza-np-release
+          mkdir -p site && base=""; [ -f in/plan/baseline.json ] && base="--baseline in/plan/baseline.json"
+          target/release/meduza-np-release group --group-version "$TAG" --sequence ${{ needs.plan.outputs.sequence }} \
+            --commit "$GITHUB_SHA" --matrix in/plan/matrix.json --artifacts dist --oci oci --require-oci 1 $base \
+            --url-base "https://github.com/${{ github.repository }}/releases/download/$TAG" \
+            --site site --channel "$CHANNEL" --key /tmp/release.key
+          rm -f /tmp/release.key
+      - name: Every URL and every OCI image platform of the group exists (§15.1 step 8)
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          export REGISTRY_AUTH_FILE=$RUNNER_TEMP/auth.json
+          M="site/releases/$TAG/manifest.json"
+          for ref in $(jq -r '[.packages[].artifacts[].oci // empty] | unique | .[]' "$M"); do
+            skopeo inspect --raw "docker://$ref" > /tmp/index.json
+            target/release/meduza-np-release oci-check --manifest "$M" --ref "$ref" --raw /tmp/index.json
+          done
+          gh release edit "$TAG" --draft=false
+          jq -r '.packages[].artifacts[] | select(.format != "oci") | .url' "$M" | while read -r u; do curl -fsIL "$u" >/dev/null || { echo "missing $u"; exit 1; }; done
+      - uses: actions/upload-artifact@v4
+        with: { name: site-new, path: site/ }
+
+  pages:
+    needs: publish
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { name: site-new, path: new }
+      - name: Merge with the published site (immutable releases kept, pointer replaced last)
+        run: |
+          mkdir -p site
+          if curl -fsSL "$PAGES_URL/index.json" -o site/index.json; then
+            for v in $(jq -r '.groups[]' site/index.json); do
+              mkdir -p "site/releases/$v"
+              curl -fsSL "$PAGES_URL/releases/$v/manifest.json" -o "site/releases/$v/manifest.json"
+              curl -fsSL "$PAGES_URL/releases/$v/manifest.json.sig" -o "site/releases/$v/manifest.json.sig"
+            done
+            mkdir -p site/channels && for c in $(jq -r '.channels[]' site/index.json); do
+              curl -fsSL "$PAGES_URL/channels/$c.json" -o "site/channels/$c.json" && curl -fsSL "$PAGES_URL/channels/$c.json.sig" -o "site/channels/$c.json.sig"
+            done
+          else
+            echo '{"groups":[],"channels":[]}' > site/index.json
+          fi
+          cp -rn new/releases site/ 2>/dev/null || cp -r new/releases site/
+          mkdir -p site/channels && cp new/channels/* site/channels/
+          jq --arg v "$TAG" --arg c "$CHANNEL" '.groups = (.groups + [$v] | unique) | .channels = (.channels + [$c] | unique)' site/index.json > site/index.tmp && mv site/index.tmp site/index.json
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: site }
+      - id: deploy
+        uses: actions/deploy-pages@v4

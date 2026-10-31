@@ -1,0 +1,157 @@
+{
+  "uiVersion": 1,
+  "package": "meduza-np-tinc",
+  "requiresCapability": "tinc.mesh",
+  "title": "Tinc",
+  "description": "The internal mesh: every node with Tinc enabled is a member of the one mesh. The manager distributes the members' public keys and addresses; private keys stay on their nodes.",
+  "settings": [
+    {
+      "path": "services.tinc",
+      "title": "网格成员",
+      "sections": [
+        {
+          "title": "基本",
+          "fields": [
+            "enabled",
+            "address",
+            "publicAddresses",
+            "port"
+          ]
+        },
+        {
+          "title": "密钥",
+          "fields": [
+            "keyFormat",
+            "privateKeyRef",
+            "publicKey"
+          ],
+          "widget": "keypair"
+        },
+        {
+          "title": "连接策略",
+          "fields": [
+            "connectTo",
+            "tcpOnly"
+          ],
+          "advanced": true
+        },
+        {
+          "title": "高级",
+          "fields": [
+            "name",
+            "mode",
+            "addressFamily",
+            "device",
+            "subnets",
+            "cipher",
+            "digest"
+          ],
+          "advanced": true
+        }
+      ]
+    }
+  ],
+  "status": [
+    {
+      "title": "Peer 可达性",
+      "instanceKind": "tinc-peer",
+      "columns": [
+        "id",
+        "state",
+        "peer",
+        "remoteAddress",
+        "lastChange",
+        "direct",
+        "reasonCode"
+      ]
+    }
+  ],
+  "i18n": {
+    "en": {
+      "text": {
+        "Peer 可达性": "Peer reachability",
+        "密钥": "Keys",
+        "连接策略": "Connection policy",
+        "网格成员": "Mesh member",
+        "基本": "Basics",
+        "高级": "Advanced"
+      }
+    },
+    "zh-Hans": {
+      "text": {
+        "Peer 可达性": "Peer 可达性",
+        "Tinc": "Tinc",
+        "密钥": "密钥",
+        "连接策略": "连接策略",
+        "The internal mesh: every node with Tinc enabled is a member of the one mesh. The manager distributes the members' public keys and addresses; private keys stay on their nodes.": "内部网格：所有启用 Tinc 的节点都是同一个网格的成员。管理端分发成员的公钥和地址；私钥保留在各自节点上。",
+        "网格成员": "网格成员",
+        "基本": "基本",
+        "高级": "高级"
+      },
+      "fields": {
+        "address": "地址",
+        "addressFamily": "地址族",
+        "cipher": "加密算法",
+        "connectTo": "主动连接",
+        "device": "设备",
+        "digest": "摘要算法",
+        "direct": "直连",
+        "enabled": "启用",
+        "id": "ID",
+        "keyFormat": "密钥格式",
+        "lastChange": "最后变更",
+        "mode": "模式",
+        "name": "名称",
+        "netname": "网络名",
+        "peer": "对端",
+        "port": "端口",
+        "privateKeyRef": "私钥",
+        "publicAddresses": "公网地址",
+        "publicKey": "公钥",
+        "reasonCode": "原因代码",
+        "remoteAddress": "远端地址",
+        "state": "状态",
+        "subnets": "子网",
+        "tcpOnly": "仅 TCP"
+      }
+    },
+    "zh-Hant": {
+      "text": {
+        "Peer 可达性": "Peer 可達性",
+        "Tinc": "Tinc",
+        "密钥": "金鑰",
+        "连接策略": "連線原則",
+        "The internal mesh: every node with Tinc enabled is a member of the one mesh. The manager distributes the members' public keys and addresses; private keys stay on their nodes.": "內部網狀網路：所有啟用 Tinc 的節點都是同一個網狀網路的成員。管理端分發成員的公鑰與位址；私鑰保留在各自節點上。",
+        "网格成员": "網狀網路成員",
+        "基本": "基本",
+        "高级": "進階"
+      },
+      "fields": {
+        "address": "位址",
+        "addressFamily": "位址族",
+        "cipher": "加密演算法",
+        "connectTo": "主動連線",
+        "device": "裝置",
+        "digest": "摘要演算法",
+        "direct": "直連",
+        "enabled": "啟用",
+        "id": "ID",
+        "keyFormat": "金鑰格式",
+        "lastChange": "最後變更",
+        "mode": "模式",
+        "name": "名稱",
+        "netname": "網路名稱",
+        "peer": "對端",
+        "port": "連接埠",
+        "privateKeyRef": "私鑰",
+        "publicAddresses": "公開位址",
+        "publicKey": "公鑰",
+        "reasonCode": "原因代碼",
+        "remoteAddress": "遠端位址",
+        "state": "狀態",
+        "subnets": "子網路",
+        "tcpOnly": "僅 TCP"
+      }
+    }
+  }
+}

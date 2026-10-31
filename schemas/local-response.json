@@ -1,0 +1,48 @@
+{
+  "$defs": {
+    "LocalError": {
+      "properties": {
+        "code": {
+          "description": "`forbidden`, `not-found`, `invalid-params`, `unavailable`, `busy`, `maintenance`, `internal`.",
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "error": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LocalError"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "id": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "result": true
+  },
+  "required": [
+    "id",
+    "ok"
+  ],
+  "title": "LocalResponse",
+  "type": "object"
+}

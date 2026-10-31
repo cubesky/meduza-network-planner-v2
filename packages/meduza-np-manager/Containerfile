@@ -1,0 +1,71 @@
+# Meduza NP manager — production OCI image (AGENT.md §14.4.1).
+# Build from the repository root:
+#   podman build -f packages/meduza-np-manager/Containerfile -t meduza-np-manager .
+# The runtime stage contains only Node.js, production dependencies, the compiled server, the built WebUI and
+# package metadata. It runs as an unprivileged user and supports a read-only root filesystem.
+
+ARG NODE_IMAGE=docker.io/library/node:24.22.1-alpine3.24@sha256:06d7adf3e0ef61a13f1d28682726366f97a15aa1888c934d3ecec86c33918b53
+
+FROM ${NODE_IMAGE} AS build
+WORKDIR /src
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY web/ui-kit/package.json web/ui-kit/
+COPY web/descriptor-renderer/package.json web/descriptor-renderer/
+COPY packages/meduza-np-manager/package.json packages/meduza-np-manager/
+RUN pnpm install --frozen-lockfile --filter "@meduza-np/manager..."
+COPY web/ web/
+COPY schemas/ schemas/
+COPY packages/meduza-np-manager/ packages/meduza-np-manager/
+RUN pnpm --filter @meduza-np/manager run build
+
+# Production-only dependency tree for the server.
+FROM ${NODE_IMAGE} AS deps
+WORKDIR /src
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY web/ui-kit/package.json web/ui-kit/
+COPY web/descriptor-renderer/package.json web/descriptor-renderer/
+COPY packages/meduza-np-manager/package.json packages/meduza-np-manager/
+RUN pnpm install --frozen-lockfile --prod --filter @meduza-np/manager
+
+FROM ${NODE_IMAGE} AS metadata
+# Verified package metadata the manager renders UIs from (manifests, UI descriptors, config/status schemas).
+COPY packages/ /src/packages/
+RUN mkdir -p /out && cd /src/packages && for d in */; do \
+      d=${d%/}; [ -f "$d/manifest.json" ] || continue; mkdir -p "/out/$d"; cp "$d/manifest.json" "/out/$d/"; \
+      for sub in ui schema; do [ -d "$d/$sub" ] && cp -r "$d/$sub" "/out/$d/"; done; true; \
+    done
+
+FROM ${NODE_IMAGE}
+LABEL org.opencontainers.image.title="meduza-np-manager" \
+      org.opencontainers.image.description="Meduza NP manager: WebUI, API, Passkey login, node sync, Access LDAP adapter" \
+      org.opencontainers.image.licenses="Apache-2.0"
+RUN addgroup -S -g 10001 mnp && adduser -S -D -H -u 10001 -G mnp mnp \
+    && mkdir -p /var/lib/meduza-np-manager /etc/meduza-np-manager \
+    && chown 10001:10001 /var/lib/meduza-np-manager
+WORKDIR /app
+COPY --from=deps /src/node_modules /app/node_modules
+COPY --from=deps /src/packages/meduza-np-manager/node_modules /app/packages/meduza-np-manager/node_modules
+COPY --from=build /src/packages/meduza-np-manager/package.json /app/packages/meduza-np-manager/package.json
+COPY --from=build /src/packages/meduza-np-manager/dist/server /app/packages/meduza-np-manager/dist/server
+COPY --from=build /src/packages/meduza-np-manager/dist/web /usr/share/meduza-np-manager/web
+COPY --from=build /src/schemas /usr/share/meduza-np-manager/schemas
+COPY --from=metadata /out /usr/share/meduza-np-manager/packages
+ENV NODE_ENV=production \
+    LISTEN_HOST=0.0.0.0 \
+    PORT=8787 \
+    DATA_DIR=/var/lib/meduza-np-manager \
+    WEB_DIR=/usr/share/meduza-np-manager/web \
+    PACKAGES_DIR=/usr/share/meduza-np-manager/packages \
+    SCHEMAS_DIR=/usr/share/meduza-np-manager/schemas \
+    SESSION_SECRET_FILE=/run/secrets/session.key \
+    SECRET_ENCRYPTION_KEY_FILE=/run/secrets/secret.key
+USER 10001:10001
+EXPOSE 8787
+VOLUME ["/var/lib/meduza-np-manager"]
+STOPSIGNAL SIGTERM
+# Kept for docker-format builds only: Podman builds OCI images by default and drops HEALTHCHECK, so the Quadlet unit
+# (and tools/manager-podman-smoke.sh) define the same probe with HealthCmd / --health-cmd.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 CMD ["node", "/app/packages/meduza-np-manager/dist/server/src/healthcheck.js"]
+CMD ["node", "/app/packages/meduza-np-manager/dist/server/src/main.js"]

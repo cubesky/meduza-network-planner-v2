@@ -1,0 +1,24 @@
+[package]
+name = "meduza-np-mihomo-openwrt"
+version = "0.1.0"
+description = "Meduza NP OpenClash adapter: managed configuration, recorded takeover/restore, controlled reload and status of the OpenClash-owned Mihomo"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "meduza-np-mihomo-openwrt"
+path = "src/main.rs"
+
+[dependencies]
+meduza-np-protocol.workspace = true
+meduza-np-plugin-sdk.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+sha2.workspace = true
+hex.workspace = true
+serde_norway = "0.9"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

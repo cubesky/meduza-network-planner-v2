@@ -1,0 +1,31 @@
+# Updater role: installs/updates the selected components into the store volume. Independent of planner: it keeps
+# running (and can repair packages) when planner is stopped or crashing. No extra capabilities, bridge network.
+[Unit]
+Description=Meduza NP updater
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+ContainerName=meduza-np-updater
+# Pin by digest in production: ghcr.io/meduza-np/meduza-np-base-container@sha256:<digest>
+Image=ghcr.io/meduza-np/meduza-np-base-container:stable
+Exec=updater
+EnvironmentFile=/etc/meduza-np/node.env
+Network=meduza-np.network
+Volume=meduza-np-store.volume:/var/lib/meduza-np/store
+Volume=meduza-np-ipc.volume:/run/meduza-np
+#Volume=/srv/meduza-np-import:/var/lib/meduza-np/import:ro
+HealthCmd=/usr/lib/meduza-np/container/entrypoint.sh health-updater
+HealthInterval=60s
+HealthStartPeriod=30s
+LogDriver=journald
+NoNewPrivileges=true
+DropCapability=ALL
+AddCapability=CHOWN DAC_OVERRIDE FOWNER SETUID SETGID
+
+[Service]
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target default.target

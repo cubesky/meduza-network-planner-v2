@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OpenVPN status",
+  "description": "Instance kinds: openvpn-site2site, openvpn-access (process/device/session layers) and openvpn-client (one per connected Access client).",
+  "type": "object",
+  "required": ["id", "kind", "state"],
+  "properties": {
+    "kind": { "enum": ["openvpn-site2site", "openvpn-access", "openvpn-client"] },
+    "state": { "enum": ["up", "down", "degraded", "starting", "unknown"] },
+    "processRunning": { "type": "boolean" },
+    "devicePresent": { "type": "boolean" },
+    "session": { "type": "string" },
+    "clients": { "type": "integer" },
+    "username": { "type": "string" },
+    "rxBytes": { "type": "integer" },
+    "txBytes": { "type": "integer" }
+  }
+}

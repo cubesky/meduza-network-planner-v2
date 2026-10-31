@@ -1,0 +1,3 @@
+# Shared local IPC directory (/run/meduza-np): planner.sock, updater.sock. No network control ports are published.
+[Volume]
+VolumeName=meduza-np-ipc

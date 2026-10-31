@@ -1,0 +1,348 @@
+{
+  "$defs": {
+    "BgpSession": {
+      "properties": {
+        "accept": {
+          "default": [],
+          "description": "Prefixes accepted from the peer, `10.64.0.0/16` or `10.64.0.0/16 le 24`. Empty: everything the peer\noriginates (see `noTransit`).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "acceptDefault": {
+          "default": false,
+          "description": "Also accept a default route from the peer.",
+          "type": "boolean"
+        },
+        "address": {
+          "description": "The neighbor's tunnel address. Defaults to the peer's host route in `allowedIps` (WireGuard) or the remote\n`ifconfig` address (OpenVPN).",
+          "format": "ip",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "bfd": {
+          "default": false,
+          "description": "BFD with the cluster's BFD timers. Never used with roaming nodes (it costs bandwidth).",
+          "type": "boolean"
+        },
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "exportAccessPools": {
+          "default": false,
+          "type": "boolean"
+        },
+        "exportDefaultRoute": {
+          "default": false,
+          "type": "boolean"
+        },
+        "exportExtra": {
+          "default": [],
+          "description": "Further prefixes to advertise.",
+          "items": {
+            "$ref": "#/$defs/Ipv4Net"
+          },
+          "type": "array"
+        },
+        "exportInternal": {
+          "default": false,
+          "description": "Advertise the public prefixes of the whole internal network (the other mesh members' LANs).",
+          "type": "boolean"
+        },
+        "exportLan": {
+          "default": true,
+          "description": "Advertise this node's LAN prefixes.",
+          "type": "boolean"
+        },
+        "exportMappings": {
+          "default": false,
+          "type": "boolean"
+        },
+        "hold": {
+          "description": "BGP hold seconds (FRR default 180), at least three keepalives.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 3,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "keepalive": {
+          "description": "BGP keepalive seconds (FRR default 60). Sessions without BFD notice a vanished peer only by the hold timer.",
+          "format": "uint16",
+          "maximum": 3600,
+          "minimum": 1,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "localPreference": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "noForward": {
+          "default": true,
+          "description": "Advertise only routes of our own AS to the peer, never routes learned from other external peers.",
+          "type": "boolean"
+        },
+        "noTransit": {
+          "default": true,
+          "description": "Do not use the peer as a transit path: accept only routes it originated itself.",
+          "type": "boolean"
+        },
+        "passwordRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "remoteAsn": {
+          "description": "AS number of the external side.",
+          "format": "uint32",
+          "maximum": 4294967294,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "remoteAsn"
+      ],
+      "type": "object"
+    },
+    "Interface": {
+      "properties": {
+        "addresses": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/IpNet"
+          },
+          "type": "array"
+        },
+        "device": {
+          "description": "Linux interface name (max 15 bytes). Derived from the id when omitted; never from the display name.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "fwmark": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "handshakeTimeoutSeconds": {
+          "default": 180,
+          "description": "A handshake older than this marks the peer as not connected (WireGuard rekeys every 120 s).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "$ref": "#/$defs/StableId"
+        },
+        "listenPort": {
+          "description": "UDP port. When omitted, a stable port derived from the interface id (49152-65535) is used, never a random\none: a reload or restart must not move the source port (NAT mappings and peers' learned endpoints break).",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "mtu": {
+          "format": "uint32",
+          "maximum": 9000,
+          "minimum": 1280,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "peers": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Peer"
+          },
+          "type": "array"
+        },
+        "privateKeyRef": {
+          "description": "Secret id of the X25519 private key (manager- or node-held).",
+          "type": "string"
+        },
+        "publicEndpoint": {
+          "description": "Public `host:port` external peers use to reach this interface (shown for and exported to them).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "publicKey": {
+          "description": "Shown in the UI; filled by the manager from the key's public value.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "privateKeyRef"
+      ],
+      "type": "object"
+    },
+    "IpNet": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Ipv4Net"
+        },
+        {
+          "$ref": "#/$defs/Ipv6Net"
+        }
+      ],
+      "description": "An IPv4 or IPv6 address with prefix length",
+      "examples": [
+        "192.168.0.0/24",
+        "fd00::/32"
+      ],
+      "title": "IP network"
+    },
+    "Ipv4Net": {
+      "description": "An IPv4 address with prefix length",
+      "examples": [
+        "0.0.0.0/0",
+        "192.168.0.0/24"
+      ],
+      "maxLength": 18,
+      "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\\/(?:3[0-2]|[1-2][0-9]|[0-9])$",
+      "title": "IPv4 network",
+      "type": "string"
+    },
+    "Ipv6Net": {
+      "description": "An IPv6 address with prefix length",
+      "examples": [
+        "::/0",
+        "fd00::/32"
+      ],
+      "maxLength": 43,
+      "pattern": "^[0-9A-Fa-f:\\.]+\\/(?:[0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8])$",
+      "title": "IPv6 network",
+      "type": "string"
+    },
+    "Peer": {
+      "properties": {
+        "allowedIps": {
+          "default": [],
+          "description": "Cryptokey routing range. Does not install system routes.",
+          "items": {
+            "$ref": "#/$defs/IpNet"
+          },
+          "type": "array"
+        },
+        "bgp": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BgpSession"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "eBGP with the external side over this peer; compiled into FRR by the manager, never used by this plugin."
+        },
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "endpoint": {
+          "description": "`host:port`; omitted for peers that connect to us.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/StableId"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "persistentKeepalive": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "presharedKeyRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "publicKey": {
+          "description": "Base64 public key. The manager fills it when `node`/`instance` reference another managed node.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "StableId": {
+      "description": "Stable object id",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`services.wireguard`",
+  "properties": {
+    "enabled": {
+      "default": true,
+      "description": "Master switch for the package on this node.",
+      "type": "boolean"
+    },
+    "instances": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Interface"
+      },
+      "type": "array"
+    }
+  },
+  "title": "WireGuard",
+  "type": "object"
+}

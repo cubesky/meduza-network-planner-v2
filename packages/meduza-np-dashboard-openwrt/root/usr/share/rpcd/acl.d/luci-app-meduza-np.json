@@ -1,0 +1,15 @@
+{
+	"luci-app-meduza-np": {
+		"description": "Meduza NP node status and maintenance",
+		"read": {
+			"ubus": {
+				"meduza-np": ["status", "features", "packages", "instances", "doctor", "logs", "config", "update_status"]
+			}
+		},
+		"write": {
+			"ubus": {
+				"meduza-np": ["sync", "instance", "maintenance_start", "maintenance_stop", "update"]
+			}
+		}
+	}
+}

@@ -1,0 +1,155 @@
+{
+  "$defs": {
+    "Bridge": {
+      "properties": {
+        "cacheSeconds": {
+          "default": 30,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "maxInflight": {
+          "default": 16,
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "port": {
+          "default": 5354,
+          "description": "Loopback UDP port dnsmasq forwards `.local` to.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "timeoutMs": {
+          "default": 3000,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "Mode": {
+      "oneOf": [
+        {
+          "const": "managed",
+          "description": "planner runs avahi-daemon with the generated configuration.",
+          "type": "string"
+        },
+        {
+          "const": "system",
+          "description": "Use the already running system avahi-daemon (bridge and status only).",
+          "type": "string"
+        }
+      ]
+    },
+    "Publish": {
+      "properties": {
+        "addresses": {
+          "default": true,
+          "description": "Announce this node's addresses (`<host>.local`).",
+          "type": "boolean"
+        },
+        "services": {
+          "default": false,
+          "description": "Allow local programs to publish services through Avahi (controlled service discovery).",
+          "type": "boolean"
+        },
+        "workstation": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "Reflector": {
+      "properties": {
+        "enabled": {
+          "default": false,
+          "description": "Reflect mDNS between the allowed interfaces. Off by default: it exposes every service across networks.",
+          "type": "boolean"
+        },
+        "reflectIpv": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "allowInterfaces": {
+      "default": [],
+      "description": "Interfaces mDNS runs on (empty = all except denied).",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "bridge": {
+      "$ref": "#/$defs/Bridge",
+      "default": {
+        "cacheSeconds": 30,
+        "enabled": false,
+        "maxInflight": 16,
+        "port": 5354,
+        "timeoutMs": 3000
+      }
+    },
+    "denyInterfaces": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "enabled": {
+      "default": true,
+      "type": "boolean"
+    },
+    "hostName": {
+      "description": "mDNS host name; unset uses the system host name.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "mode": {
+      "$ref": "#/$defs/Mode",
+      "default": "managed"
+    },
+    "publish": {
+      "$ref": "#/$defs/Publish",
+      "default": {
+        "addresses": true,
+        "services": false,
+        "workstation": false
+      }
+    },
+    "reflector": {
+      "$ref": "#/$defs/Reflector",
+      "default": {
+        "enabled": false,
+        "reflectIpv": false
+      }
+    },
+    "useIpv4": {
+      "default": true,
+      "type": "boolean"
+    },
+    "useIpv6": {
+      "default": false,
+      "type": "boolean"
+    }
+  },
+  "title": "Avahi / mDNS",
+  "type": "object"
+}

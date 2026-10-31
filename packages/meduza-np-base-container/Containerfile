@@ -1,0 +1,51 @@
+# Meduza NP base container (§14.3): Alpine runtime + the verified updater + release trust roots + role entrypoint.
+# planner, plugins and providers are NOT baked in: the updater installs the selected components into the store
+# volume at first start (or from an offline import directory).
+#
+# Build context: packages/meduza-np-base-container, prepared by release tooling with
+#   bin/<TARGETARCH><TARGETVARIANT>/meduza-np-updater   static musl updater for that platform (amd64, arm64, armv7)
+#   trust/release-keys.json                            release trust store (no image without trust roots)
+#
+#   podman build --platform linux/arm64 --build-arg UPDATER_VERSION=0.2.0 -t meduza-np-base-container .
+FROM docker.io/library/alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
+
+ARG TARGETARCH
+ARG TARGETVARIANT
+ARG UPDATER_VERSION
+ARG UPDATE_BASE_URL=https://meduza-np.github.io/meduza-network-planner
+
+# Minimal runtime: TLS roots + curl for verified downloads, tini as PID 1, iproute2/nftables for planner-owned
+# network resources. Service software (wireguard-tools, dnsmasq, frr, ...) is added per selected component at
+# planner start from apk-deps (cached on the node volume for offline restarts).
+RUN apk add --no-cache ca-certificates curl tini iproute2 nftables
+
+COPY bin/${TARGETARCH}${TARGETVARIANT}/meduza-np-updater /usr/lib/meduza-np/image/meduza-np-updater
+COPY trust/release-keys.json /usr/share/meduza-np/trust/release-keys.json
+COPY rootfs/ /
+
+# Paths planner/plugins use are links into the store's current view (store volume, read-only for planner).
+RUN chmod 0755 /usr/lib/meduza-np/image/meduza-np-updater /usr/lib/meduza-np/container/entrypoint.sh && \
+    test -n "$UPDATER_VERSION" && \
+    /usr/lib/meduza-np/image/meduza-np-updater trust-check /usr/share/meduza-np/trust/release-keys.json && \
+    mkdir -p /usr/libexec /usr/share/meduza-np /usr/lib/meduza-np /etc/meduza-np && \
+    ln -sfn /var/lib/meduza-np/store/current/usr/libexec/meduza-np /usr/libexec/meduza-np && \
+    ln -sfn /var/lib/meduza-np/store/current/usr/share/meduza-np/packages /usr/share/meduza-np/packages && \
+    ln -sfn /var/lib/meduza-np/store/current/usr/lib/meduza-np/providers /usr/lib/meduza-np/providers && \
+    for b in meduza-np-planner meduza-np meduza-np-dashboard; do ln -sfn /var/lib/meduza-np/store/current/usr/bin/$b /usr/bin/$b; done
+
+ENV MEDUZA_NP_IMAGE_UPDATER_VERSION=${UPDATER_VERSION} \
+    MEDUZA_NP_UPDATE_BASE_URL=${UPDATE_BASE_URL} \
+    MEDUZA_NP_UPDATE_CHANNEL=stable \
+    MEDUZA_NP_DATA_DIR=/var/lib/meduza-np \
+    MEDUZA_NP_STATE_DIR=/var/lib/meduza-np \
+    MEDUZA_NP_ETC_DIR=/var/lib/meduza-np/etc \
+    MEDUZA_NP_RUN_DIR=/run/meduza-np \
+    MEDUZA_NP_UPDATE_BACKEND=store
+
+LABEL org.opencontainers.image.title="meduza-np-base-container" \
+      org.opencontainers.image.description="Meduza NP node runtime: updater + planner roles" \
+      org.opencontainers.image.source="https://github.com/meduza-np/meduza-network-planner" \
+      io.meduza-np.updater.version="${UPDATER_VERSION}"
+
+ENTRYPOINT ["/sbin/tini", "--", "/usr/lib/meduza-np/container/entrypoint.sh"]
+CMD ["updater"]

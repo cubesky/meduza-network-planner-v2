@@ -1,0 +1,7 @@
+packages:
+  - web/*
+  - packages/meduza-np-manager
+  - packages/meduza-np-dashboard/web
+
+allowBuilds:
+  esbuild: true

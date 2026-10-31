@@ -1,0 +1,48 @@
+{
+  "$defs": {
+    "Signature": {
+      "properties": {
+        "algorithm": {
+          "description": "Only `ed25519` is defined.",
+          "type": "string"
+        },
+        "keyId": {
+          "description": "[`key_id`] of the signing public key.",
+          "type": "string"
+        },
+        "signature": {
+          "description": "Base64 (standard, padded) signature over the raw file bytes.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "keyId",
+        "algorithm",
+        "signature"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`<file>.sig` next to every signed metadata file (§13.4). Each signature covers the exact raw bytes of the\nfile as served (no re-serialization), so verification never depends on JSON canonicalization.",
+  "properties": {
+    "formatVersion": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "signatures": {
+      "description": "Several signatures allow key rotation: during a rotation the release is signed by the old and new key.",
+      "items": {
+        "$ref": "#/$defs/Signature"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "formatVersion",
+    "signatures"
+  ],
+  "title": "SignatureFile",
+  "type": "object"
+}

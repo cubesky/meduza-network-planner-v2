@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`POST /api/v1/nodes/self/session/challenge`",
+  "properties": {
+    "nodeId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "nodeId"
+  ],
+  "title": "ChallengeRequest",
+  "type": "object"
+}

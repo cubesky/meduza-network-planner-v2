@@ -1,0 +1,136 @@
+{
+  "uiVersion": 1,
+  "package": "meduza-np-mihomo-pkg",
+  "requiresCapability": "mihomo-pkg.provider",
+  "title": "Mihomo 本体来源",
+  "description": "This package does not contain Mihomo. auto-download fetches a pinned, digest-verified release asset; manual never uses the network — copy the extracted mihomo binary into the data directory and run check/activate.",
+  "settings": [
+    {
+      "path": "services.mihomo-pkg",
+      "title": "来源",
+      "sections": [
+        {
+          "title": "模式",
+          "fields": [
+            "mode",
+            "targetVersion",
+            "dataDir",
+            "downloadProxy"
+          ]
+        }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "id": "check-local",
+      "label": "检查本地文件",
+      "mutating": true
+    },
+    {
+      "id": "activate",
+      "label": "注册/激活",
+      "mutating": true,
+      "confirm": "激活后 Mihomo 实例会切换到该文件。"
+    },
+    {
+      "id": "download",
+      "label": "立即下载",
+      "mutating": true
+    }
+  ],
+  "status": [
+    {
+      "title": "本体",
+      "instanceKind": "mihomo-provider",
+      "columns": [
+        "id",
+        "state",
+        "providerState",
+        "source",
+        "mode",
+        "version",
+        "platform",
+        "verified",
+        "path",
+        "sha256",
+        "downloadStage",
+        "reason"
+      ]
+    }
+  ],
+  "i18n": {
+    "en": {
+      "text": {
+        "Mihomo 本体来源": "Mihomo binary source",
+        "本体": "Binary",
+        "来源": "Source",
+        "检查本地文件": "Check local file",
+        "模式": "Mode",
+        "注册/激活": "Register / activate",
+        "激活后 Mihomo 实例会切换到该文件。": "After activation the Mihomo instances switch to this file.",
+        "立即下载": "Download now"
+      }
+    },
+    "zh-Hans": {
+      "text": {
+        "Mihomo 本体来源": "Mihomo 本体来源",
+        "This package does not contain Mihomo. auto-download fetches a pinned, digest-verified release asset; manual never uses the network — copy the extracted mihomo binary into the data directory and run check/activate.": "此安装包不包含 Mihomo。auto-download 会下载固定版本、经摘要校验的发布文件；manual 永不联网——把解压后的 mihomo 可执行文件复制到数据目录，然后运行检查/激活。",
+        "本体": "本体",
+        "来源": "来源",
+        "检查本地文件": "检查本地文件",
+        "模式": "模式",
+        "注册/激活": "注册/激活",
+        "激活后 Mihomo 实例会切换到该文件。": "激活后 Mihomo 实例会切换到该文件。",
+        "立即下载": "立即下载"
+      },
+      "fields": {
+        "dataDir": "数据目录",
+        "downloadProxy": "下载代理",
+        "downloadStage": "下载阶段",
+        "id": "ID",
+        "mode": "模式",
+        "path": "路径",
+        "platform": "平台",
+        "providerState": "Provider 状态",
+        "reason": "原因",
+        "sha256": "SHA-256",
+        "source": "来源",
+        "state": "状态",
+        "targetVersion": "目标版本",
+        "verified": "已验证",
+        "version": "版本"
+      }
+    },
+    "zh-Hant": {
+      "text": {
+        "Mihomo 本体来源": "Mihomo 主程式來源",
+        "This package does not contain Mihomo. auto-download fetches a pinned, digest-verified release asset; manual never uses the network — copy the extracted mihomo binary into the data directory and run check/activate.": "此套件不包含 Mihomo。auto-download 會下載固定版本、經摘要驗證的發佈檔；manual 永不連網——把解壓後的 mihomo 執行檔複製到資料目錄，然後執行檢查/啟用。",
+        "本体": "主程式",
+        "来源": "來源",
+        "检查本地文件": "檢查本機檔案",
+        "模式": "模式",
+        "注册/激活": "註冊/啟用",
+        "激活后 Mihomo 实例会切换到该文件。": "啟用後 Mihomo 執行個體會切換到該檔案。",
+        "立即下载": "立即下載"
+      },
+      "fields": {
+        "dataDir": "資料目錄",
+        "downloadProxy": "下載代理",
+        "downloadStage": "下載階段",
+        "id": "ID",
+        "mode": "模式",
+        "path": "路徑",
+        "platform": "平台",
+        "providerState": "Provider 狀態",
+        "reason": "原因",
+        "sha256": "SHA-256",
+        "source": "來源",
+        "state": "狀態",
+        "targetVersion": "目標版本",
+        "verified": "已驗證",
+        "version": "版本"
+      }
+    }
+  }
+}

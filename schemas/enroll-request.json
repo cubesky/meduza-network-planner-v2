@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`POST /api/v1/nodes/enroll`",
+  "properties": {
+    "arch": {
+      "type": "string"
+    },
+    "enrollmentToken": {
+      "description": "One-time, expiring token created in the manager UI.",
+      "type": "string"
+    },
+    "hostname": {
+      "type": "string"
+    },
+    "plannerApi": {
+      "default": 0,
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "plannerVersion": {
+      "default": "",
+      "type": "string"
+    },
+    "publicKey": {
+      "description": "Base64 (standard, padded) raw 32-byte Ed25519 public key.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "enrollmentToken",
+    "publicKey",
+    "hostname",
+    "arch"
+  ],
+  "title": "EnrollRequest",
+  "type": "object"
+}

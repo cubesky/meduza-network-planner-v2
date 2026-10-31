@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "FRR status",
+  "type": "object",
+  "required": [
+    "id",
+    "kind",
+    "state"
+  ],
+  "properties": {
+    "kind": {
+      "enum": [
+        "bgp-neighbor",
+        "bfd-peer",
+        "ospf-neighbor",
+        "anycast"
+      ]
+    },
+    "state": {
+      "enum": [
+        "up",
+        "down",
+        "starting",
+        "unknown",
+        "disabled"
+      ]
+    },
+    "bgpState": {
+      "type": "string"
+    },
+    "prefixesReceived": {
+      "type": "integer"
+    },
+    "prefixesSent": {
+      "type": "integer"
+    },
+    "diagnostic": {
+      "type": "string"
+    },
+    "ospfState": {
+      "type": "string"
+    },
+    "announced": {
+      "type": "boolean"
+    }
+  }
+}

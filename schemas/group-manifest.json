@@ -1,0 +1,193 @@
+{
+  "$defs": {
+    "ApiRange": {
+      "properties": {
+        "max": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "min",
+        "max"
+      ],
+      "type": "object"
+    },
+    "Artifact": {
+      "properties": {
+        "format": {
+          "description": "`tar.zst`, `tar.gz`, `ipk`, `apk`, `oci`.",
+          "type": "string"
+        },
+        "oci": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "platform": {
+          "description": "`linux/amd64`, `linux/arm/v7`, `linux/arm64`, `any` for architecture-independent assets, or an\nOpenWrt package arch like `openwrt/aarch64_cortex-a53`.",
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "size": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "platform",
+        "format",
+        "url",
+        "size",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "Compatibility": {
+      "properties": {
+        "configSchema": {
+          "$ref": "#/$defs/ApiRange"
+        },
+        "managerApi": {
+          "$ref": "#/$defs/ApiRange"
+        },
+        "plannerApi": {
+          "$ref": "#/$defs/ApiRange"
+        }
+      },
+      "required": [
+        "plannerApi",
+        "managerApi",
+        "configSchema"
+      ],
+      "type": "object"
+    },
+    "GroupPackage": {
+      "properties": {
+        "artifacts": {
+          "items": {
+            "$ref": "#/$defs/Artifact"
+          },
+          "type": "array"
+        },
+        "conflicts": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "fingerprint": {
+          "type": "string"
+        },
+        "migration": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "requires": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reusedFromGroup": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "upstream": {
+          "description": "Upstream binary metadata for download providers (mihomo-pkg): tested versions and assets. Not part of\nthis package's own artifacts."
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "fingerprint",
+        "artifacts"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "compatibility": {
+      "$ref": "#/$defs/Compatibility"
+    },
+    "expiresAt": {
+      "type": "string"
+    },
+    "formatVersion": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "groupVersion": {
+      "type": "string"
+    },
+    "notes": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "packages": {
+      "items": {
+        "$ref": "#/$defs/GroupPackage"
+      },
+      "type": "array"
+    },
+    "platforms": {
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "publishedAt": {
+      "type": "string"
+    },
+    "sequence": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "sourceCommit": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "formatVersion",
+    "groupVersion",
+    "sequence",
+    "sourceCommit",
+    "publishedAt",
+    "expiresAt",
+    "platforms",
+    "compatibility",
+    "packages"
+  ],
+  "title": "GroupManifest",
+  "type": "object"
+}

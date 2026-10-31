@@ -1,0 +1,38 @@
+# Planner role, host network mode: planner-managed interfaces, routes and nft tables live in the HOST namespace.
+# Only resources planner owns are changed (ownership journal); existing listeners/routes are pre-checked.
+# Requires rootful Podman: a rootless container with NET_ADMIN does not get to manage the host's network.
+[Unit]
+Description=Meduza NP planner (host network)
+Wants=network-online.target meduza-np-updater.service
+After=network-online.target meduza-np-updater.service
+
+[Container]
+ContainerName=meduza-np-planner
+Image=ghcr.io/meduza-np/meduza-np-base-container:stable
+Exec=planner
+EnvironmentFile=/etc/meduza-np/node.env
+Environment=MEDUZA_NP_NETWORK_MODE=host
+Network=host
+Volume=meduza-np-node.volume:/var/lib/meduza-np
+Volume=meduza-np-store.volume:/var/lib/meduza-np/store:ro
+Volume=meduza-np-ipc.volume:/run/meduza-np
+# Only what the services need, not --privileged and not Podman's default set (§14.3.4, D44).
+DropCapability=ALL
+AddCapability=CHOWN DAC_OVERRIDE FOWNER KILL SETUID SETGID NET_ADMIN NET_RAW NET_BIND_SERVICE
+# With the frr component: FRR daemons keep CAP_SYS_ADMIN (netns/VRF support) and refuse to start without it.
+#AddCapability=SYS_ADMIN
+# With the avahi component: avahi-daemon chroots itself (without it planner turns the chroot off).
+#AddCapability=SYS_CHROOT
+AddDevice=/dev/net/tun
+# Host sysctls (ip_forward, rp_filter) are part of the host preflight, not set from the container.
+HealthCmd=/usr/lib/meduza-np/container/entrypoint.sh health-planner
+HealthInterval=60s
+HealthStartPeriod=10m
+LogDriver=journald
+
+[Service]
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

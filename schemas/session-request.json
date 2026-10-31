@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`POST /api/v1/nodes/self/session`. The signature covers [`session_signing_input`].",
+  "properties": {
+    "nodeId": {
+      "type": "string"
+    },
+    "nonce": {
+      "type": "string"
+    },
+    "signature": {
+      "description": "Base64 Ed25519 signature.",
+      "type": "string"
+    }
+  },
+  "required": [
+    "nodeId",
+    "nonce",
+    "signature"
+  ],
+  "title": "SessionRequest",
+  "type": "object"
+}

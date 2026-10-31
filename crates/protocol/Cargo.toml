@@ -1,0 +1,16 @@
+[package]
+name = "meduza-np-protocol"
+version = "0.1.0"
+description = "Versioned DTOs shared by Meduza NP components: config, revisions, reports, sync events, manifests"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+sha2.workspace = true
+hex.workspace = true
+ipnet.workspace = true
+schemars.workspace = true

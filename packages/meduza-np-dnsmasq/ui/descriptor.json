@@ -1,0 +1,170 @@
+{
+  "uiVersion": 1,
+  "package": "meduza-np-dnsmasq",
+  "requiresCapability": "dns.frontend",
+  "title": "前置 DNS (dnsmasq)",
+  "description": "Client-facing DNS. Starts on the fallback servers; MosDNS / Mihomo DNS are added only after real queries succeed and removed when they fail. No DHCP; /etc/resolv.conf is not changed.",
+  "settings": [
+    {
+      "path": "services.dnsmasq",
+      "title": "前端",
+      "sections": [
+        {
+          "title": "监听",
+          "fields": [
+            "enabled",
+            "listenAddresses",
+            "port"
+          ]
+        },
+        {
+          "title": "Fallback 与后端",
+          "fields": [
+            "fallbackServers",
+            "strategy",
+            "probeName"
+          ]
+        },
+        {
+          "title": "后端",
+          "path": "backends",
+          "widget": "editable-table",
+          "fields": [
+            "id",
+            "kind",
+            "enabled",
+            "address",
+            "port",
+            "priority"
+          ]
+        },
+        {
+          "title": "本地",
+          "fields": [
+            "localTtl",
+            "cacheSize",
+            "mdnsForward"
+          ]
+        }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "id": "restart-instance",
+      "label": "重启前端",
+      "mutating": true,
+      "confirm": "重启期间客户端解析会短暂中断。"
+    }
+  ],
+  "status": [
+    {
+      "title": "前端",
+      "instanceKind": "dns-frontend",
+      "columns": [
+        "id",
+        "state",
+        "fallbackActive",
+        "fallbackVerified",
+        "upstreams"
+      ]
+    },
+    {
+      "title": "后端就绪",
+      "instanceKind": "dns-backend",
+      "columns": [
+        "id",
+        "state",
+        "backend",
+        "address",
+        "priority",
+        "reason"
+      ]
+    }
+  ],
+  "i18n": {
+    "en": {
+      "text": {
+        "Fallback 与后端": "Fallback and backends",
+        "前端": "Front end",
+        "前置 DNS (dnsmasq)": "Front-end DNS (dnsmasq)",
+        "后端": "Backends",
+        "后端就绪": "Backend readiness",
+        "本地": "Local",
+        "监听": "Listening",
+        "重启前端": "Restart front end",
+        "重启期间客户端解析会短暂中断。": "Client name resolution is briefly interrupted during the restart."
+      }
+    },
+    "zh-Hans": {
+      "text": {
+        "Client-facing DNS. Starts on the fallback servers; MosDNS / Mihomo DNS are added only after real queries succeed and removed when they fail. No DHCP; /etc/resolv.conf is not changed.": "面向客户端的 DNS。启动时使用 fallback 服务器；MosDNS / Mihomo DNS 只在真实查询成功后加入，失败时移除。不提供 DHCP；不修改 /etc/resolv.conf。",
+        "Fallback 与后端": "Fallback 与后端",
+        "前端": "前端",
+        "前置 DNS (dnsmasq)": "前置 DNS (dnsmasq)",
+        "后端": "后端",
+        "后端就绪": "后端就绪",
+        "本地": "本地",
+        "监听": "监听",
+        "重启前端": "重启前端",
+        "重启期间客户端解析会短暂中断。": "重启期间客户端解析会短暂中断。"
+      },
+      "fields": {
+        "address": "地址",
+        "backend": "后端",
+        "cacheSize": "缓存大小",
+        "enabled": "启用",
+        "fallbackActive": "fallback 生效",
+        "fallbackServers": "fallback 服务器",
+        "fallbackVerified": "fallback 已验证",
+        "id": "ID",
+        "kind": "类型",
+        "listenAddresses": "监听地址",
+        "localTtl": "本地 TTL",
+        "mdnsForward": "mDNS 转发",
+        "port": "端口",
+        "priority": "优先级",
+        "probeName": "探测名称",
+        "reason": "原因",
+        "state": "状态",
+        "strategy": "策略",
+        "upstreams": "上游"
+      }
+    },
+    "zh-Hant": {
+      "text": {
+        "Client-facing DNS. Starts on the fallback servers; MosDNS / Mihomo DNS are added only after real queries succeed and removed when they fail. No DHCP; /etc/resolv.conf is not changed.": "面向用戶端的 DNS。啟動時使用 fallback 伺服器；MosDNS / Mihomo DNS 只在實際查詢成功後加入，失敗時移除。不提供 DHCP；不修改 /etc/resolv.conf。",
+        "Fallback 与后端": "Fallback 與後端",
+        "前端": "前端",
+        "前置 DNS (dnsmasq)": "前置 DNS (dnsmasq)",
+        "后端": "後端",
+        "后端就绪": "後端就緒",
+        "本地": "本機",
+        "监听": "監聽",
+        "重启前端": "重新啟動前端",
+        "重启期间客户端解析会短暂中断。": "重新啟動期間用戶端解析會短暫中斷。"
+      },
+      "fields": {
+        "address": "位址",
+        "backend": "後端",
+        "cacheSize": "快取大小",
+        "enabled": "啟用",
+        "fallbackActive": "fallback 生效",
+        "fallbackServers": "fallback 伺服器",
+        "fallbackVerified": "fallback 已驗證",
+        "id": "ID",
+        "kind": "類型",
+        "listenAddresses": "監聽位址",
+        "localTtl": "本機 TTL",
+        "mdnsForward": "mDNS 轉送",
+        "port": "連接埠",
+        "priority": "優先順序",
+        "probeName": "探測名稱",
+        "reason": "原因",
+        "state": "狀態",
+        "strategy": "策略",
+        "upstreams": "上游"
+      }
+    }
+  }
+}

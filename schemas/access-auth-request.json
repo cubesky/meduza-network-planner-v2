@@ -1,0 +1,77 @@
+{
+  "$defs": {
+    "AccessSessionMeta": {
+      "description": "Non-secret session metadata OpenVPN exposes to the hook (env vars).",
+      "properties": {
+        "clientVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "commonName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "untrustedIp": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "untrustedPort": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Sent by the `openvpn-auth` helper to planner, and by planner to manager (nodeId added from identity).",
+  "properties": {
+    "instanceId": {
+      "type": "string"
+    },
+    "nodeId": {
+      "description": "Filled by planner from its machine identity; helpers' values are ignored.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "password": {
+      "default": "",
+      "description": "Empty for `reauth`.",
+      "type": "string"
+    },
+    "reauth": {
+      "description": "Renegotiation of a session OpenVPN already verified with its HMAC auth token (`auth-gen-token\nexternal-auth`): no password; the manager re-checks the account, groups, policy and session lifetime.",
+      "type": "boolean"
+    },
+    "requestId": {
+      "type": "string"
+    },
+    "session": {
+      "$ref": "#/$defs/AccessSessionMeta",
+      "default": {}
+    },
+    "username": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "requestId",
+    "instanceId",
+    "username"
+  ],
+  "title": "AccessAuthRequest",
+  "type": "object"
+}

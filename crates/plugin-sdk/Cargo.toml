@@ -1,0 +1,13 @@
+[package]
+name = "meduza-np-plugin-sdk"
+version = "0.1.0"
+description = "Plugin side of the planner ↔ plugin JSON protocol: request/response envelopes and the run loop"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+meduza-np-protocol.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

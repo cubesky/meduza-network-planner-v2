@@ -1,0 +1,44 @@
+# Quadlet unit for the Meduza NP manager (rootless Podman >= 4.8 with systemd).
+# Install to ~/.config/containers/systemd/ (rootless) or /etc/containers/systemd/ (rootful), then
+#   systemctl --user daemon-reload && systemctl --user start meduza-np-manager
+# Replace IMAGE_DIGEST with the digest from the release manifest; never deploy a floating tag.
+
+[Unit]
+Description=Meduza NP manager
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+ContainerName=meduza-np-manager
+Image=ghcr.io/OWNER/meduza-np-manager@sha256:IMAGE_DIGEST
+EnvironmentFile=%h/.config/meduza-np-manager/manager.env
+Volume=meduza-np-manager-data.volume:/var/lib/meduza-np-manager:Z
+Volume=%h/.config/meduza-np-manager/config.json:/etc/meduza-np-manager/config.json:ro,Z
+Secret=meduza-np-session-key,type=mount,target=/run/secrets/session.key,mode=0400,uid=10001,gid=10001
+Secret=meduza-np-secret-key,type=mount,target=/run/secrets/secret.key,mode=0400,uid=10001,gid=10001
+# First start only (create the secret, start, register the first admin, then remove this line and the secret):
+#Secret=meduza-np-bootstrap,type=mount,target=/run/secrets/bootstrap,mode=0400,uid=10001,gid=10001
+# The reverse proxy on the host terminates HTTPS; the manager is only reachable on loopback.
+PublishPort=127.0.0.1:8787:8787
+Network=meduza-np-manager.network
+ReadOnly=true
+Tmpfs=/tmp:rw,size=64m,mode=1777
+NoNewPrivileges=true
+DropCapability=ALL
+HealthCmd=node /app/packages/meduza-np-manager/dist/server/src/healthcheck.js
+HealthInterval=30s
+HealthTimeout=5s
+HealthRetries=3
+HealthStartPeriod=40s
+HealthOnFailure=kill
+StopTimeout=30
+LogDriver=journald
+
+[Service]
+Restart=on-failure
+RestartSec=10
+# Migrations run before the server accepts requests; allow time on large databases.
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,50 @@
+{
+  "$defs": {
+    "ApiRange": {
+      "properties": {
+        "max": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "min",
+        "max"
+      ],
+      "type": "object"
+    },
+    "NodeBehavior": {
+      "enum": [
+        "static",
+        "roaming"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "behavior": {
+      "$ref": "#/$defs/NodeBehavior"
+    },
+    "managerApi": {
+      "$ref": "#/$defs/ApiRange",
+      "description": "Manager's protocol range, to negotiate features."
+    },
+    "nodeId": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "nodeId",
+    "behavior",
+    "managerApi"
+  ],
+  "title": "EnrollResponse",
+  "type": "object"
+}

@@ -1,0 +1,95 @@
+{
+  "$defs": {
+    "EventKind": {
+      "oneOf": [
+        {
+          "const": "config.available",
+          "description": "A new desired revision exists; fetch the full snapshot with GET /nodes/self/config.",
+          "type": "string"
+        },
+        {
+          "const": "job.available",
+          "description": "One or more jobs are waiting at GET /nodes/self/jobs.",
+          "type": "string"
+        },
+        {
+          "const": "cursor.reset",
+          "description": "The resume cursor is unknown or a gap was detected: fetch the current config over HTTPS.",
+          "type": "string"
+        },
+        {
+          "const": "server.cooldown",
+          "description": "Manager is shedding load.",
+          "type": "string"
+        },
+        {
+          "const": "node.behavior",
+          "description": "The node's `behavior` changed; renegotiate the channel.",
+          "type": "string"
+        }
+      ]
+    },
+    "RevisionId": {
+      "description": "Immutable revision id",
+      "pattern": "^rev-[0-9]{6,18}$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "configDigest": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "eventId": {
+      "description": "Monotonic per node; doubles as the resume cursor. A cursor only says how far notifications were\ndelivered — never that a configuration was applied.",
+      "type": "string"
+    },
+    "eventVersion": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "jobId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "nodeId": {
+      "type": "string"
+    },
+    "retryAfterMs": {
+      "description": "For `server.cooldown`: milliseconds clients should stay quiet (plus their own jitter).",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "revision": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RevisionId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "type": {
+      "$ref": "#/$defs/EventKind"
+    }
+  },
+  "required": [
+    "eventVersion",
+    "eventId",
+    "type",
+    "nodeId"
+  ],
+  "title": "SyncEvent",
+  "type": "object"
+}

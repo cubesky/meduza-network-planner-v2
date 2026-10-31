@@ -1,0 +1,294 @@
+{
+  "uiVersion": 1,
+  "package": "meduza-np-mihomo",
+  "requiresCapability": "mihomo.proxy",
+  "title": "Mihomo",
+  "description": "Proxy with subscriptions. Fields this project controls (listeners, API, DNS, TUN) are always overridden and shown in the subscription status. TPROXY only affects forwarded traffic from the selected sources.",
+  "settings": [
+    {
+      "path": "services.mihomo",
+      "title": "Mihomo",
+      "sections": [
+        {
+          "title": "运行模式",
+          "fields": [
+            "enabled",
+            "mode",
+            "mixedPort",
+            "allowLan",
+            "bindAddress"
+          ]
+        },
+        {
+          "title": "控制 API",
+          "fields": [
+            "api.address",
+            "api.port",
+            "api.secretRef"
+          ],
+          "widget": "secret"
+        },
+        {
+          "title": "订阅下载",
+          "fields": [
+            "downloadProxy"
+          ]
+        },
+        {
+          "title": "DNS",
+          "fields": [
+            "dns.enabled",
+            "dns.listen",
+            "dns.fakeIp",
+            "dns.nameservers",
+            "dns.defaultNameservers"
+          ]
+        },
+        {
+          "title": "TPROXY",
+          "fields": [
+            "tproxy.port",
+            "tproxy.sources",
+            "tproxy.inboundInterfaces",
+            "tproxy.excludeSources",
+            "tproxy.excludePrivateDestinations",
+            "tproxy.excludeDestinations",
+            "tproxy.protocols",
+            "tproxy.excludePorts",
+            "tproxy.useConntrack",
+            "tproxy.bypassRouted"
+          ],
+          "when": "mode == \"tproxy\""
+        },
+        {
+          "title": "旁路由",
+          "fields": [
+            "tproxy.sideRouter"
+          ],
+          "when": "mode == \"tproxy\""
+        },
+        {
+          "title": "标记与路由表",
+          "fields": [
+            "tproxy.fwmark",
+            "tproxy.routeTable",
+            "tproxy.rulePriority"
+          ],
+          "advanced": true
+        }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "id": "refresh-subscription",
+      "label": "立即刷新订阅",
+      "mutating": true
+    },
+    {
+      "id": "preview-config",
+      "label": "查看最终配置",
+      "mutating": false
+    },
+    {
+      "id": "restart-instance",
+      "label": "重启",
+      "mutating": true
+    }
+  ],
+  "status": [
+    {
+      "title": "Mihomo",
+      "instanceKind": "mihomo",
+      "columns": [
+        "id",
+        "state",
+        "mode",
+        "provider",
+        "version",
+        "connections",
+        "proxyServerSet"
+      ]
+    },
+    {
+      "title": "DNS",
+      "instanceKind": "mihomo-dns",
+      "columns": [
+        "id",
+        "state",
+        "listen",
+        "reason"
+      ]
+    },
+    {
+      "title": "订阅",
+      "instanceKind": "mihomo-subscription",
+      "columns": [
+        "id",
+        "state",
+        "active",
+        "updatedAt",
+        "overriddenKeys",
+        "lastError"
+      ]
+    }
+  ],
+  "i18n": {
+    "en": {
+      "text": {
+        "当前订阅": "Active subscription",
+        "控制 API": "Controller API",
+        "查看最终配置": "Show final configuration",
+        "标记与路由表": "Marks and routing table",
+        "订阅": "Subscriptions",
+        "运行模式": "Mode",
+        "重启": "Restart",
+        "订阅下载": "Subscription download",
+        "立即刷新订阅": "Refresh subscription now",
+        "旁路由": "Side router"
+      },
+      "fields": {
+        "useConntrack": "Use conntrack",
+        "bypassRouted": "Keep routed destinations off the proxy",
+        "sideRouter": "Side router",
+        "gateway": "Main router",
+        "replyPorts": "Ports the main router forwards",
+        "lan": "This node's LAN",
+        "privateLan": "Private LAN ranges",
+        "extra": "Extra source networks"
+      }
+    },
+    "zh-Hans": {
+      "text": {
+        "DNS": "DNS",
+        "Mihomo": "Mihomo",
+        "Proxy with subscriptions. Fields this project controls (listeners, API, DNS, TUN) are always overridden and shown in the subscription status. TPROXY only affects forwarded traffic from the selected sources.": "带订阅的代理。本项目控制的字段（监听、API、DNS、TUN）总是会被覆盖，并显示在订阅状态中。TPROXY 只影响来自所选来源的转发流量。",
+        "TPROXY": "TPROXY",
+        "当前订阅": "当前订阅",
+        "控制 API": "控制 API",
+        "查看最终配置": "查看最终配置",
+        "标记与路由表": "标记与路由表",
+        "订阅": "订阅",
+        "运行模式": "运行模式",
+        "重启": "重启",
+        "订阅下载": "订阅下载",
+        "立即刷新订阅": "立即刷新订阅",
+        "旁路由": "旁路由"
+      },
+      "fields": {
+        "active": "生效",
+        "activeSubscription": "当前订阅",
+        "allowLan": "允许局域网访问",
+        "address": "地址",
+        "port": "端口",
+        "secretRef": "密钥",
+        "bindAddress": "绑定地址",
+        "connections": "连接",
+        "defaultNameservers": "默认域名服务器",
+        "enabled": "启用",
+        "fakeIp": "Fake IP",
+        "listen": "监听",
+        "nameservers": "域名服务器",
+        "downloadProxy": "下载代理",
+        "id": "ID",
+        "lastError": "最近错误",
+        "mixedPort": "混合端口",
+        "mode": "模式",
+        "name": "名称",
+        "overriddenKeys": "被覆盖的键",
+        "provider": "Provider",
+        "proxyServerSet": "代理服务器集合",
+        "reason": "原因",
+        "refreshHours": "刷新间隔（小时）",
+        "state": "状态",
+        "excludeDestinations": "排除目标",
+        "excludePorts": "排除端口",
+        "excludePrivateDestinations": "排除私有目标",
+        "excludeSources": "排除来源",
+        "fwmark": "fwmark 标记",
+        "inboundInterfaces": "入站接口",
+        "protocols": "协议",
+        "routeTable": "路由表",
+        "rulePriority": "规则优先级",
+        "sources": "来源",
+        "updatedAt": "更新时间",
+        "urlRef": "URL 密钥",
+        "version": "版本",
+        "useConntrack": "使用连接跟踪（conntrack）",
+        "bypassRouted": "不代理路由系统的目标",
+        "sideRouter": "旁路由",
+        "gateway": "主路由地址",
+        "replyPorts": "主路由转发的服务端口",
+        "lan": "本节点 LAN",
+        "privateLan": "私有地址段",
+        "extra": "额外源网段"
+      }
+    },
+    "zh-Hant": {
+      "text": {
+        "DNS": "DNS",
+        "Mihomo": "Mihomo",
+        "Proxy with subscriptions. Fields this project controls (listeners, API, DNS, TUN) are always overridden and shown in the subscription status. TPROXY only affects forwarded traffic from the selected sources.": "含訂閱的代理。本專案控制的欄位（監聽、API、DNS、TUN）一律會被覆寫，並顯示在訂閱狀態中。TPROXY 只影響來自所選來源的轉送流量。",
+        "TPROXY": "TPROXY",
+        "当前订阅": "目前訂閱",
+        "控制 API": "控制 API",
+        "查看最终配置": "檢視最終設定",
+        "标记与路由表": "標記與路由表",
+        "订阅": "訂閱",
+        "运行模式": "執行模式",
+        "重启": "重新啟動",
+        "订阅下载": "訂閱下載",
+        "立即刷新订阅": "立即重新整理訂閱",
+        "旁路由": "旁路由"
+      },
+      "fields": {
+        "active": "生效",
+        "activeSubscription": "目前訂閱",
+        "allowLan": "允許區域網路存取",
+        "address": "位址",
+        "port": "連接埠",
+        "secretRef": "金鑰",
+        "bindAddress": "繫結位址",
+        "connections": "連線",
+        "defaultNameservers": "預設網域名稱伺服器",
+        "enabled": "啟用",
+        "fakeIp": "Fake IP",
+        "listen": "監聽",
+        "nameservers": "網域名稱伺服器",
+        "downloadProxy": "下載代理",
+        "id": "ID",
+        "lastError": "最近錯誤",
+        "mixedPort": "混合連接埠",
+        "mode": "模式",
+        "name": "名稱",
+        "overriddenKeys": "被覆寫的鍵",
+        "provider": "Provider",
+        "proxyServerSet": "代理伺服器集合",
+        "reason": "原因",
+        "refreshHours": "更新間隔（小時）",
+        "state": "狀態",
+        "excludeDestinations": "排除目標",
+        "excludePorts": "排除連接埠",
+        "excludePrivateDestinations": "排除私有目標",
+        "excludeSources": "排除來源",
+        "fwmark": "fwmark 標記",
+        "inboundInterfaces": "入站介面",
+        "protocols": "協定",
+        "routeTable": "路由表",
+        "rulePriority": "規則優先順序",
+        "sources": "來源",
+        "updatedAt": "更新時間",
+        "urlRef": "URL 金鑰",
+        "version": "版本",
+        "useConntrack": "使用連線追蹤（conntrack）",
+        "bypassRouted": "不代理路由系統的目標",
+        "sideRouter": "旁路由",
+        "gateway": "主路由位址",
+        "replyPorts": "主路由轉送的服務連接埠",
+        "lan": "本節點 LAN",
+        "privateLan": "私有位址段",
+        "extra": "額外來源網段"
+      }
+    }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "$defs": {
+    "Mode": {
+      "enum": [
+        "auto-download",
+        "manual"
+      ],
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "dataDir": {
+      "description": "Persistent directory holding `mihomo`, `.staging/` and `previous/`. Never /run, /tmp or a container layer.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "downloadProxy": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "mode": {
+      "$ref": "#/$defs/Mode",
+      "default": "manual"
+    },
+    "targetVersion": {
+      "description": "Release tag to install in auto mode; must be listed in the package's tested asset manifest.",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "Mihomo binary source",
+  "type": "object"
+}

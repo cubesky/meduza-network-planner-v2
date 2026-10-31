@@ -1,0 +1,195 @@
+{
+  "uiVersion": 1,
+  "package": "meduza-np-mosdns",
+  "requiresCapability": "mosdns.dns",
+  "title": "MosDNS",
+  "description": "DNS backend with domain sets and remote rule files. Rule downloads are atomic and keep the previous set on failure. Put the dnsmasq front end in front of it for fallback.",
+  "settings": [
+    {
+      "path": "services.mosdns",
+      "title": "MosDNS",
+      "sections": [
+        {
+          "title": "监听与上游",
+          "fields": [
+            "enabled",
+            "listen",
+            "port",
+            "localUpstreams",
+            "remoteUpstreams",
+            "remoteSocks5",
+            "bootstrap",
+            "cacheSize",
+            "probeName"
+          ]
+        },
+        {
+          "title": "域名集合",
+          "fields": [
+            "domains.local",
+            "domains.block",
+            "domains.ddns",
+            "domains.global"
+          ]
+        },
+        {
+          "title": "远程规则文件",
+          "path": "ruleFiles",
+          "widget": "editable-table",
+          "fields": [
+            "id",
+            "enabled",
+            "category",
+            "url",
+            "refreshHours"
+          ]
+        },
+        {
+          "title": "下载",
+          "fields": [
+            "download.proxy",
+            "download.directFallback",
+            "download.timeoutSeconds",
+            "download.maxBytes"
+          ]
+        },
+        {
+          "title": "高级 YAML",
+          "fields": [
+            "advancedYaml"
+          ],
+          "widget": "yaml",
+          "advanced": true
+        }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "id": "restart-instance",
+      "label": "重启并刷新规则",
+      "mutating": true
+    }
+  ],
+  "status": [
+    {
+      "title": "MosDNS",
+      "instanceKind": "mosdns",
+      "columns": [
+        "id",
+        "state",
+        "listen",
+        "reason"
+      ]
+    },
+    {
+      "title": "规则文件",
+      "instanceKind": "mosdns-rules",
+      "columns": [
+        "id",
+        "state",
+        "category",
+        "ruleStatus",
+        "updatedAt",
+        "lastError"
+      ]
+    }
+  ],
+  "i18n": {
+    "en": {
+      "text": {
+        "下载": "Download",
+        "域名集合": "Domain sets",
+        "监听与上游": "Listening and upstreams",
+        "规则文件": "Rule files",
+        "远程规则文件": "Remote rule files",
+        "重启并刷新规则": "Restart and refresh rules",
+        "高级 YAML": "Advanced YAML"
+      }
+    },
+    "zh-Hans": {
+      "text": {
+        "DNS backend with domain sets and remote rule files. Rule downloads are atomic and keep the previous set on failure. Put the dnsmasq front end in front of it for fallback.": "带域名集合和远程规则文件的 DNS 后端。规则下载是原子的，失败时保留之前的集合。前面放 dnsmasq 前端以提供 fallback。",
+        "MosDNS": "MosDNS",
+        "下载": "下载",
+        "域名集合": "域名集合",
+        "监听与上游": "监听与上游",
+        "规则文件": "规则文件",
+        "远程规则文件": "远程规则文件",
+        "重启并刷新规则": "重启并刷新规则",
+        "高级 YAML": "高级 YAML"
+      },
+      "fields": {
+        "advancedYaml": "高级 YAML",
+        "bootstrap": "引导",
+        "cacheSize": "缓存大小",
+        "category": "类别",
+        "block": "阻止",
+        "ddns": "动态 DNS",
+        "global": "全局",
+        "local": "本地",
+        "directFallback": "直连 fallback",
+        "maxBytes": "最大字节数",
+        "proxy": "代理",
+        "timeoutSeconds": "超时（秒）",
+        "enabled": "启用",
+        "id": "ID",
+        "lastError": "最近错误",
+        "listen": "监听",
+        "localUpstreams": "本地上游",
+        "port": "端口",
+        "probeName": "探测名称",
+        "reason": "原因",
+        "refreshHours": "刷新间隔（小时）",
+        "remoteSocks5": "远端 SOCKS5",
+        "remoteUpstreams": "远程上游",
+        "ruleStatus": "规则状态",
+        "state": "状态",
+        "updatedAt": "更新时间",
+        "url": "URL"
+      }
+    },
+    "zh-Hant": {
+      "text": {
+        "DNS backend with domain sets and remote rule files. Rule downloads are atomic and keep the previous set on failure. Put the dnsmasq front end in front of it for fallback.": "含網域集合與遠端規則檔的 DNS 後端。規則下載是原子操作，失敗時保留先前的集合。前面放 dnsmasq 前端以提供 fallback。",
+        "MosDNS": "MosDNS",
+        "下载": "下載",
+        "域名集合": "網域集合",
+        "监听与上游": "監聽與上游",
+        "规则文件": "規則檔",
+        "远程规则文件": "遠端規則檔",
+        "重启并刷新规则": "重新啟動並更新規則",
+        "高级 YAML": "進階 YAML"
+      },
+      "fields": {
+        "advancedYaml": "進階 YAML",
+        "bootstrap": "引導",
+        "cacheSize": "快取大小",
+        "category": "類別",
+        "block": "封鎖",
+        "ddns": "動態 DNS",
+        "global": "全域",
+        "local": "本機",
+        "directFallback": "直連 fallback",
+        "maxBytes": "最大位元組數",
+        "proxy": "代理",
+        "timeoutSeconds": "逾時（秒）",
+        "enabled": "啟用",
+        "id": "ID",
+        "lastError": "最近錯誤",
+        "listen": "監聽",
+        "localUpstreams": "本機上游",
+        "port": "連接埠",
+        "probeName": "探測名稱",
+        "reason": "原因",
+        "refreshHours": "更新間隔（小時）",
+        "remoteSocks5": "遠端 SOCKS5",
+        "remoteUpstreams": "遠端上游",
+        "ruleStatus": "規則狀態",
+        "state": "狀態",
+        "updatedAt": "更新時間",
+        "url": "URL"
+      }
+    }
+  }
+}

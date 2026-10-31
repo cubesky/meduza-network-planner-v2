@@ -1,0 +1,19 @@
+{
+  "manifestVersion": 1,
+  "package": "meduza-np-dashboard",
+  "version": "0.1.0",
+  "role": "ui-client",
+  "plannerApi": {
+    "min": 1,
+    "max": 1
+  },
+  "requires": [
+    "meduza-np-planner"
+  ],
+  "conflicts": [
+    "meduza-np-dashboard-openwrt"
+  ],
+  "provides": [
+    "ui.dashboard"
+  ]
+}

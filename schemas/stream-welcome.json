@@ -1,0 +1,38 @@
+{
+  "$defs": {
+    "RevisionId": {
+      "description": "Immutable revision id",
+      "pattern": "^rev-[0-9]{6,18}$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "Manager's reply to the hello frame, sent before any events.",
+  "properties": {
+    "configDigest": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "cursorValid": {
+      "description": "False when the cursor could not be resumed; the client must GET the full config.",
+      "type": "boolean"
+    },
+    "desiredRevision": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RevisionId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "cursorValid"
+  ],
+  "title": "StreamWelcome",
+  "type": "object"
+}

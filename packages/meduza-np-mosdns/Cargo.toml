@@ -1,0 +1,23 @@
+[package]
+name = "meduza-np-mosdns"
+version = "0.1.0"
+description = "Meduza NP MosDNS plugin: structured plugins/sequence generation, domain sets, remote rule refresh, DNS readiness"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "meduza-np-mosdns"
+path = "src/main.rs"
+
+[dependencies]
+meduza-np-protocol.workspace = true
+meduza-np-plugin-sdk.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+sha2.workspace = true
+hex.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

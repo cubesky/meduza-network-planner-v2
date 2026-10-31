@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WireGuard status",
+  "description": "Instance kinds reported by the WireGuard plugin probe.",
+  "oneOf": [
+    {
+      "title": "wireguard-interface",
+      "type": "object",
+      "required": ["id", "kind", "state"],
+      "properties": {
+        "kind": { "const": "wireguard-interface" },
+        "state": { "enum": ["up", "down"] },
+        "device": { "type": "string" },
+        "publicKey": { "type": "string" }
+      }
+    },
+    {
+      "title": "wireguard-peer",
+      "type": "object",
+      "required": ["id", "kind", "state", "reasonCode"],
+      "properties": {
+        "kind": { "const": "wireguard-peer" },
+        "state": { "enum": ["up", "down", "unknown", "disabled"] },
+        "latestHandshake": { "type": "string", "format": "date-time" },
+        "endpoint": { "type": "string" },
+        "rxBytes": { "type": "integer", "minimum": 0 },
+        "txBytes": { "type": "integer", "minimum": 0 },
+        "reasonCode": { "enum": ["connected", "no-handshake", "handshake-expired", "waiting-for-peer", "idle", "peer-not-loaded", "disabled"] }
+      }
+    }
+  ]
+}

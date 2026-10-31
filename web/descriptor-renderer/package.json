@@ -1,0 +1,27 @@
+{
+  "name": "@meduza-np/descriptor-renderer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Renders package UI descriptors (AGENT.md §5.3) with ui-kit controls",
+  "exports": {
+    ".": "./src/index.tsx",
+    "./schema": "./src/schema.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p .",
+    "build": "tsc --noEmit -p .",
+    "test": "node --test \"test/*.test.ts\""
+  },
+  "dependencies": {
+    "@meduza-np/ui-kit": "workspace:*"
+  },
+  "peerDependencies": {
+    "preact": "10.29.8"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "preact": "10.29.8",
+    "typescript": "5.9.3"
+  }
+}

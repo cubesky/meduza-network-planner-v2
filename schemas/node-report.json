@@ -1,0 +1,654 @@
+{
+  "$defs": {
+    "BackoffStatus": {
+      "description": "Visible state of the reconnect scheduler (§7.5.3).",
+      "properties": {
+        "failureLevel": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "lastFailure": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "nextAttemptInMs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "probing": {
+          "default": false,
+          "type": "boolean"
+        },
+        "serverCooldownMs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "windowSeconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "failureLevel",
+        "windowSeconds"
+      ],
+      "type": "object"
+    },
+    "FeatureStatus": {
+      "description": "One capability of an installed package as it stands on this node (§12.1: installed → registered →\nenabled → available → running → healthy are distinct).",
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "healthy": {
+          "default": false,
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "installed": {
+          "type": "boolean"
+        },
+        "limitation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limitationCode": {
+          "description": "Why an enabled, running capability does not have its full effect here, e.g. `bridge-network`: routing or\nTPROXY that only acts inside a bridge-network container's namespace (§14.3.3). Not a failure.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "package": {
+          "type": "string"
+        },
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reasonCode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "registered": {
+          "type": "boolean"
+        },
+        "running": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "package",
+        "installed",
+        "registered",
+        "enabled",
+        "available"
+      ],
+      "type": "object"
+    },
+    "InstanceStatus": {
+      "additionalProperties": true,
+      "properties": {
+        "id": {
+          "description": "`<package-short>/<instance>[/<sub>]`, e.g. `wireguard/uplink/peer-b`.",
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "observedAt": {
+          "description": "RFC 3339; when this was last measured.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/ServiceState"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "state"
+      ],
+      "type": "object"
+    },
+    "MaintenanceStatus": {
+      "properties": {
+        "active": {
+          "type": "boolean"
+        },
+        "applyPaused": {
+          "default": false,
+          "type": "boolean"
+        },
+        "by": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "until": {
+          "description": "RFC 3339 expiry; auto-reconcile resumes afterwards.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "active",
+        "reason",
+        "by",
+        "until"
+      ],
+      "type": "object"
+    },
+    "NodeBehavior": {
+      "enum": [
+        "static",
+        "roaming"
+      ],
+      "type": "string"
+    },
+    "PackageRole": {
+      "oneOf": [
+        {
+          "enum": [
+            "service-adapter",
+            "binary-provider",
+            "ui-client",
+            "cli",
+            "updater",
+            "container-base"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "manager",
+          "description": "The central manager; never registered on a node.",
+          "type": "string"
+        },
+        {
+          "const": "controller",
+          "description": "The node controller itself.",
+          "type": "string"
+        }
+      ]
+    },
+    "PackageStatus": {
+      "properties": {
+        "manifestDigest": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "provides": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reasonCode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "registration": {
+          "$ref": "#/$defs/RegistrationState"
+        },
+        "role": {
+          "$ref": "#/$defs/PackageRole"
+        },
+        "uiDigest": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "role",
+        "manifestDigest",
+        "registration"
+      ],
+      "type": "object"
+    },
+    "RegistrationState": {
+      "enum": [
+        "registered",
+        "incompatible",
+        "conflict",
+        "missing-dependency",
+        "invalid"
+      ],
+      "type": "string"
+    },
+    "ResourceSummary": {
+      "properties": {
+        "load1Milli": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "memAvailableKib": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "memTotalKib": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "plannerRssKib": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "stateDiskFreeKib": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "supervisedProcesses": {
+          "default": 0,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "RevisionId": {
+      "description": "Immutable revision id",
+      "pattern": "^rev-[0-9]{6,18}$",
+      "type": "string"
+    },
+    "ServiceState": {
+      "description": "Generic service state. Services add protocol sub-states in [`InstanceStatus::detail`].",
+      "enum": [
+        "disabled",
+        "pending",
+        "starting",
+        "up",
+        "degraded",
+        "down",
+        "unknown",
+        "unsupported"
+      ],
+      "type": "string"
+    },
+    "SyncMode": {
+      "enum": [
+        "push",
+        "poll"
+      ],
+      "type": "string"
+    },
+    "SyncState": {
+      "oneOf": [
+        {
+          "enum": [
+            "in-sync",
+            "applying"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "unsynced",
+          "description": "Never synced since enrollment.",
+          "type": "string"
+        },
+        {
+          "const": "behind",
+          "description": "A newer desired revision is known but not yet applied.",
+          "type": "string"
+        },
+        {
+          "const": "apply-failed",
+          "description": "Last apply failed; running the last successful revision.",
+          "type": "string"
+        },
+        {
+          "const": "offline",
+          "description": "Cannot reach manager; running the last successful revision.",
+          "type": "string"
+        },
+        {
+          "const": "credential-error",
+          "description": "401/403 or TLS trust failure; waiting for credential repair.",
+          "type": "string"
+        }
+      ]
+    },
+    "SyncStatus": {
+      "description": "The six revision pointers a node tracks (§7.2). Each advances independently.",
+      "properties": {
+        "appliedRevision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RevisionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "applyStage": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "backoff": {
+          "$ref": "#/$defs/BackoffStatus",
+          "default": {
+            "failureLevel": 0,
+            "probing": false,
+            "windowSeconds": 0
+          }
+        },
+        "behavior": {
+          "$ref": "#/$defs/NodeBehavior"
+        },
+        "degradedReason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "desiredRevision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RevisionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "eventCursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lastError": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lastSuccessfulRevision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RevisionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "mode": {
+          "$ref": "#/$defs/SyncMode"
+        },
+        "observedRevision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RevisionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "receivedRevision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RevisionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/SyncState"
+        },
+        "transport": {
+          "$ref": "#/$defs/SyncTransport"
+        },
+        "validatedRevision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RevisionId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "mode",
+        "transport",
+        "behavior",
+        "state"
+      ],
+      "type": "object"
+    },
+    "SyncTransport": {
+      "enum": [
+        "websocket",
+        "http2-events",
+        "https"
+      ],
+      "type": "string"
+    },
+    "SystemInfo": {
+      "properties": {
+        "arch": {
+          "type": "string"
+        },
+        "capabilities": {
+          "description": "Effective Linux capabilities of the planner process without the `CAP_` prefix (`NET_ADMIN`, `SYS_ADMIN`, …).\nReported inside containers only, where the deployment chooses them (§14.3.4); the manager warns before\npublishing a feature the container cannot run.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "container": {
+          "default": false,
+          "type": "boolean"
+        },
+        "kernel": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "networkMode": {
+          "description": "Container network mode the deployment declared (`bridge` or `host`, `MEDUZA_NP_NETWORK_MODE`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "openwrt": {
+          "default": false,
+          "type": "boolean"
+        },
+        "os": {
+          "type": "string"
+        },
+        "osRelease": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "arch",
+        "os"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "bootId": {
+      "description": "Changes on every planner process start; together with `sequence` orders reports (§12.1).",
+      "type": "string"
+    },
+    "features": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/FeatureStatus"
+      },
+      "type": "array"
+    },
+    "instances": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/InstanceStatus"
+      },
+      "type": "array"
+    },
+    "maintenance": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MaintenanceStatus"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "nodeId": {
+      "type": "string"
+    },
+    "observedAt": {
+      "description": "RFC 3339 UTC. Informational only: ordering uses (bootId, sequence) plus manager receive time.",
+      "type": "string"
+    },
+    "packages": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/PackageStatus"
+      },
+      "type": "array"
+    },
+    "reportVersion": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "resources": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ResourceSummary"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sequence": {
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "sync": {
+      "$ref": "#/$defs/SyncStatus"
+    },
+    "system": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SystemInfo"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "update": true
+  },
+  "required": [
+    "reportVersion",
+    "nodeId",
+    "bootId",
+    "sequence",
+    "observedAt",
+    "sync"
+  ],
+  "title": "NodeReport",
+  "type": "object"
+}

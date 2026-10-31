@@ -1,0 +1,31 @@
+[Unit]
+Description=Meduza NP planner (node controller)
+Documentation=https://github.com/meduza-np/meduza-network-planner
+Wants=network-online.target
+# Ordering only (nothing is pulled in, a missing unit is ignored): avahi `system` mode validates against the
+# running system avahi-daemon, which is no longer bus-activated by planner's calls (D51).
+After=network-online.target avahi-daemon.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/meduza-np-planner run
+Restart=on-failure
+RestartSec=5
+# planner stops its supervised daemons on SIGTERM. A planned restart (updater, exit 75) leaves them running for the
+# next planner to adopt (D32), so systemd signals only the main process; after any other exit stop-orphans stops
+# what a planner recorded and did not stop itself.
+KillMode=process
+ExecStopPost=-/usr/bin/meduza-np-planner stop-orphans
+TimeoutStopSec=30
+RuntimeDirectory=meduza-np
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+StateDirectory=meduza-np
+StateDirectoryMode=0700
+ConfigurationDirectory=meduza-np
+ConfigurationDirectoryMode=0700
+Environment=MEDUZA_NP_RUN_DIR=/run/meduza-np
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

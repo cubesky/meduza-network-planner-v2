@@ -1,0 +1,732 @@
+{
+  "$defs": {
+    "AnycastInstance": {
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "exportToBgp": {
+          "default": false,
+          "description": "Explicitly allow advertising the VIPs into iBGP too (tagged, never general redistribution).",
+          "type": "boolean"
+        },
+        "health": {
+          "$ref": "#/$defs/HealthCheck",
+          "description": "Probe of the local service, independent of the VIPs (they are absent while it is unhealthy), e.g. 127.0.0.1."
+        },
+        "id": {
+          "$ref": "#/$defs/StableId"
+        },
+        "metric": {
+          "description": "OSPF cost of the announced prefixes from this node (lower attracts more traffic).",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "prefixes": {
+          "description": "Service prefixes inside the pool (a /30 per service from the manager). Their host addresses live on a\ndedicated dummy device only while the service is healthy; the service listens on them via a wildcard bind.",
+          "items": {
+            "$ref": "#/$defs/Ipv4Net"
+          },
+          "type": "array"
+        },
+        "service": {
+          "description": "Service the VIP fronts (display) — the health check decides announcement.",
+          "type": "string"
+        },
+        "vipDevice": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "prefixes",
+        "service",
+        "health"
+      ],
+      "type": "object"
+    },
+    "AnycastSettings": {
+      "description": "OSPF for Anycast only. A node in the Anycast domain runs OSPF on its carrier interfaces (the Tinc mesh devices)\neven without local services, so traffic for the pool entering anywhere is routed to the nearest healthy service.",
+      "properties": {
+        "area": {
+          "default": "0.0.0.0",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "instances": {
+          "default": [],
+          "description": "Services this node runs; each announces its prefixes while healthy.",
+          "items": {
+            "$ref": "#/$defs/AnycastInstance"
+          },
+          "type": "array"
+        },
+        "interfaces": {
+          "default": [],
+          "description": "Interfaces carrying the OSPF adjacencies (never a VIP device).",
+          "items": {
+            "$ref": "#/$defs/CarrierInterface"
+          },
+          "type": "array"
+        },
+        "pool": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ipv4Net"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The cluster's Anycast range (same on every node); every service prefix must lie inside it."
+        }
+      },
+      "type": "object"
+    },
+    "BfdPeer": {
+      "properties": {
+        "address": {
+          "format": "ip",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/StableId"
+        },
+        "interface": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "localAddress": {
+          "format": "ip",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "multihop": {
+          "default": false,
+          "type": "boolean"
+        },
+        "profile": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "address",
+        "profile"
+      ],
+      "type": "object"
+    },
+    "BfdProfile": {
+      "properties": {
+        "detectMultiplier": {
+          "default": 3,
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 2,
+          "type": "integer"
+        },
+        "id": {
+          "$ref": "#/$defs/StableId"
+        },
+        "passive": {
+          "default": false,
+          "type": "boolean"
+        },
+        "receiveInterval": {
+          "default": 1000,
+          "format": "uint32",
+          "maximum": 60000,
+          "minimum": 50,
+          "type": "integer"
+        },
+        "transmitInterval": {
+          "default": 1000,
+          "description": "Milliseconds. Conservative defaults suit low-power devices (§9.5).",
+          "format": "uint32",
+          "maximum": 60000,
+          "minimum": 50,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "type": "object"
+    },
+    "BfdSettings": {
+      "properties": {
+        "peers": {
+          "default": [],
+          "description": "Extra static BFD sessions (BGP/OSPF bindings create their sessions automatically).",
+          "items": {
+            "$ref": "#/$defs/BfdPeer"
+          },
+          "type": "array"
+        },
+        "profiles": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/BfdProfile"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "BgpTimers": {
+      "properties": {
+        "hold": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "keepalive": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "keepalive",
+        "hold"
+      ],
+      "type": "object"
+    },
+    "CarrierInterface": {
+      "properties": {
+        "bfdProfile": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cost": {
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "ExportPolicy": {
+      "properties": {
+        "accessPools": {
+          "default": false,
+          "type": "boolean"
+        },
+        "defaultRoute": {
+          "default": false,
+          "type": "boolean"
+        },
+        "extra": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/Ipv4Net"
+          },
+          "type": "array"
+        },
+        "internal": {
+          "default": false,
+          "description": "Public prefixes originated anywhere in the internal AS (the other mesh members' LANs, learned over iBGP).",
+          "type": "boolean"
+        },
+        "lan": {
+          "default": false,
+          "type": "boolean"
+        },
+        "mappings": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "ExternalNeighbor": {
+      "properties": {
+        "address": {
+          "format": "ip",
+          "type": "string"
+        },
+        "bfdProfile": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ebgpMultihop": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "exportPolicy": {
+          "$ref": "#/$defs/ExportPolicy",
+          "default": {
+            "accessPools": false,
+            "defaultRoute": false,
+            "extra": [],
+            "internal": false,
+            "lan": false,
+            "mappings": false
+          }
+        },
+        "filterIn": {
+          "description": "Ordered prefix filter for received routes, on top of the policies above: `permit|deny <prefix> [ge N] [le N]`,\nfirst match wins, no match denies. Empty: no extra filter (the manager fills it from the cluster's filter).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "filterOut": {
+          "description": "Same for advertised routes.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/StableId"
+        },
+        "importPolicy": {
+          "$ref": "#/$defs/ImportPolicy",
+          "default": {
+            "allowDefault": false,
+            "prefixes": []
+          }
+        },
+        "localPreference": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "noForward": {
+          "default": true,
+          "description": "Do not forward other sources' routes to this peer: advertise only routes of our own AS (this node's export\nset and `exportPolicy.internal`), never routes learned from other external peers.",
+          "type": "boolean"
+        },
+        "noTransit": {
+          "default": true,
+          "description": "Do not use this peer as a transit path: accept only routes it originated itself (AS path = its own AS,\nprepends allowed); routes it forwards from elsewhere are ignored.",
+          "type": "boolean"
+        },
+        "passwordRef": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "remoteAsn": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "roaming": {
+          "default": false,
+          "description": "The peer is a roaming node (mobile, metered or often moving): no BFD on this session, and routes it only\ntransits get a low local preference so traffic crosses it only when no other path exists. The manager sets\nit for peers that are roaming nodes of the cluster.",
+          "type": "boolean"
+        },
+        "timers": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BgpTimers"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "BGP keepalive/hold seconds (FRR defaults 60/180). Sessions without BFD — those with roaming nodes — notice a\nvanished peer only by the hold timer; short timers cost a keepalive every few seconds, far less than BFD."
+        },
+        "transport": {
+          "description": "VPN transport the session runs over (`openvpn/<id>`, `wireguard/<id>`), informational binding.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updateSource": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "weight": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "address",
+        "remoteAsn"
+      ],
+      "type": "object"
+    },
+    "HealthCheck": {
+      "oneOf": [
+        {
+          "properties": {
+            "host": {
+              "format": "ip",
+              "type": "string"
+            },
+            "kind": {
+              "const": "tcp",
+              "type": "string"
+            },
+            "port": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "host",
+            "port"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "dns",
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "port": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "server": {
+              "format": "ip",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "server",
+            "port",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "host": {
+              "format": "ip",
+              "type": "string"
+            },
+            "kind": {
+              "const": "http",
+              "type": "string"
+            },
+            "path": {
+              "type": "string"
+            },
+            "port": {
+              "format": "uint16",
+              "maximum": 65535,
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "kind",
+            "host",
+            "port",
+            "path"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "ImportPolicy": {
+      "properties": {
+        "allowDefault": {
+          "default": false,
+          "type": "boolean"
+        },
+        "prefixes": {
+          "default": [],
+          "description": "When non-empty, only these prefixes (with optional `le`) are accepted.",
+          "items": {
+            "$ref": "#/$defs/PrefixRule"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "InternalNeighbor": {
+      "properties": {
+        "acceptTransit": {
+          "default": true,
+          "description": "Accept routes this neighbor learned from external peers.",
+          "type": "boolean"
+        },
+        "address": {
+          "format": "ip",
+          "type": "string"
+        },
+        "allowDefault": {
+          "default": false,
+          "type": "boolean"
+        },
+        "bfdProfile": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "exportExternal": {
+          "default": true,
+          "description": "Send routes we learned from external peers to this neighbor.",
+          "type": "boolean"
+        },
+        "id": {
+          "$ref": "#/$defs/StableId"
+        },
+        "localPreference": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "nextHopSelf": {
+          "default": true,
+          "type": "boolean"
+        },
+        "node": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "roaming": {
+          "default": false,
+          "description": "The neighbor is a roaming mesh member (mobile, metered): no BFD on this session, and routes it only transits\n(learned from its external peers) get a low local preference. The manager sets it.",
+          "type": "boolean"
+        },
+        "timers": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BgpTimers"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "BGP keepalive/hold seconds; sessions with a roaming member use short ones instead of BFD."
+        },
+        "updateSource": {
+          "description": "Local address or interface used as source (`update-source`).",
+          "type": "string"
+        },
+        "weight": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "address",
+        "updateSource"
+      ],
+      "type": "object"
+    },
+    "Ipv4Net": {
+      "description": "An IPv4 address with prefix length",
+      "examples": [
+        "0.0.0.0/0",
+        "192.168.0.0/24"
+      ],
+      "maxLength": 18,
+      "pattern": "^(?:(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\\/(?:3[0-2]|[1-2][0-9]|[0-9])$",
+      "title": "IPv4 network",
+      "type": "string"
+    },
+    "MeshDefaults": {
+      "description": "Applied by the manager to every internal neighbor generated by `meshInternal` (explicit neighbors keep theirs).",
+      "properties": {
+        "bfdProfile": {
+          "description": "BFD profile for the iBGP sessions over the Tinc mesh (fast failure detection; profile from `bfd.profiles`);\nthe manager also binds it to the OSPF adjacencies Anycast forms on the same Tinc devices.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "PrefixRule": {
+      "properties": {
+        "le": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "prefix": {
+          "$ref": "#/$defs/Ipv4Net"
+        }
+      },
+      "required": [
+        "prefix"
+      ],
+      "type": "object"
+    },
+    "StableId": {
+      "description": "Stable object id",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+      "type": "string"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "anycast": {
+      "$ref": "#/$defs/AnycastSettings",
+      "default": {
+        "area": "",
+        "enabled": false,
+        "instances": [],
+        "interfaces": []
+      }
+    },
+    "anycastServices": {
+      "description": "Manager option: ids of the cluster's Anycast services (`routing.anycast.services`) this node runs; the manager\ncompiles them into `anycast`.",
+      "items": {
+        "$ref": "#/$defs/StableId"
+      },
+      "type": "array"
+    },
+    "bfd": {
+      "$ref": "#/$defs/BfdSettings",
+      "default": {
+        "peers": [],
+        "profiles": []
+      }
+    },
+    "enabled": {
+      "default": true,
+      "type": "boolean"
+    },
+    "externalNeighbors": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ExternalNeighbor"
+      },
+      "type": "array"
+    },
+    "internalNeighbors": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/InternalNeighbor"
+      },
+      "type": "array"
+    },
+    "localAsn": {
+      "description": "Only for a node outside the internal network (a branch with its own AS). Mesh members leave it empty and use\nthe internal ASN from the global settings.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "maximumPaths": {
+      "default": 4,
+      "format": "uint8",
+      "maximum": 255,
+      "minimum": 0,
+      "type": "integer"
+    },
+    "meshDefaults": {
+      "$ref": "#/$defs/MeshDefaults",
+      "default": {},
+      "description": "Manager option: settings for the internal neighbors `meshInternal` generates."
+    },
+    "meshInternal": {
+      "default": false,
+      "description": "Manager option: create internal sessions to every other node with FRR and the same internal ASN.",
+      "type": "boolean"
+    },
+    "peeringAddress": {
+      "description": "Address iBGP sessions use; defaults to this node's Tinc mesh address (set by the manager).",
+      "format": "ip",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "routerId": {
+      "description": "BGP/OSPF router id; defaults to the node's router id.",
+      "format": "ipv4",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "title": "FRR",
+  "type": "object"
+}

@@ -1,0 +1,122 @@
+{
+  "$defs": {
+    "OpenClashMode": {
+      "enum": [
+        "redir-host",
+        "fake-ip",
+        "redir-host-tun",
+        "fake-ip-tun",
+        "redir-host-mix",
+        "fake-ip-mix"
+      ],
+      "type": "string"
+    },
+    "StableId": {
+      "description": "Stable object id",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
+      "type": "string"
+    },
+    "Subscription": {
+      "properties": {
+        "enabled": {
+          "default": true,
+          "type": "boolean"
+        },
+        "id": {
+          "$ref": "#/$defs/StableId"
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "refreshHours": {
+          "default": 12,
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "refreshSeconds": {
+          "description": "Refresh interval in seconds; replaces `refreshHours` (the manager sets it from the global Mihomo settings).",
+          "format": "uint32",
+          "minimum": 60,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "urlRef": {
+          "description": "Subscription URL secret (URLs usually embed a token).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "urlRef"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "activeSubscription": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "configName": {
+      "default": "meduza-np",
+      "description": "File name (without `.yaml`) of the managed configuration under /etc/openclash/config/.",
+      "type": "string"
+    },
+    "dnsIntegration": {
+      "default": false,
+      "description": "Probe the DNS listener OpenClash provides (`dns_port`) so a dnsmasq front end can use it as backend.",
+      "type": "boolean"
+    },
+    "downloadProxy": {
+      "description": "Proxy used to fetch subscriptions (must not depend on OpenClash itself being up).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "enabled": {
+      "default": true,
+      "description": "Disabling hands OpenClash back: recorded options are restored and managed files removed.",
+      "type": "boolean"
+    },
+    "mode": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/OpenClashMode"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "OpenClash running mode (`en_mode`); unset keeps the user's current choice."
+    },
+    "restartOnChange": {
+      "default": true,
+      "description": "Restart OpenClash automatically when the managed config or options change (otherwise use the action).",
+      "type": "boolean"
+    },
+    "select": {
+      "default": true,
+      "description": "Make the managed configuration OpenClash's active `config_path`.",
+      "type": "boolean"
+    },
+    "subscriptions": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/Subscription"
+      },
+      "type": "array"
+    }
+  },
+  "title": "Mihomo via OpenClash",
+  "type": "object"
+}

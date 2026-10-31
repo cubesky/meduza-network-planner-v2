@@ -1,0 +1,24 @@
+[package]
+name = "meduza-np-release"
+version = "0.1.0"
+description = "Release tooling (CI only, never shipped to nodes): build-input fingerprints, change/reuse matrix, deterministic package archives, signed group and channel metadata"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "meduza-np-release"
+path = "src/main.rs"
+
+[dependencies]
+meduza-np-protocol.workspace = true
+meduza-np-plugin-sdk.workspace = true
+meduza-np-updater = { path = "../../packages/meduza-np-updater" }
+meduza-np-mihomo-pkg = { path = "../../packages/meduza-np-mihomo-pkg" }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+tar = { version = "0.4", default-features = false }

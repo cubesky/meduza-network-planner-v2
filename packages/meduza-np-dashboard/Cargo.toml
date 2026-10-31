@@ -1,0 +1,30 @@
+[package]
+name = "meduza-np-dashboard"
+version = "0.1.0"
+description = "Meduza NP local node dashboard: small Rust HTTP server for the prebuilt Vite + Preact UI and a controlled local API over planner/updater sockets"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "meduza-np-dashboard"
+path = "src/main.rs"
+
+[dependencies]
+meduza-np-protocol.workspace = true
+meduza-np-runtime.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+getrandom.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "time", "net", "io-util", "sync", "fs", "signal"] }
+hyper = { version = "1", default-features = false, features = ["server", "http1"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+
+[target.'cfg(unix)'.dependencies]
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls-pemfile = "2"

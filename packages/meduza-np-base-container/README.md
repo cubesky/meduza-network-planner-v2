@@ -1,0 +1,186 @@
+# meduza-np-base-container
+
+Alpine-based node runtime for non-OpenWrt hosts (AGENT.md §14.3). One image, two roles, two containers:
+
+| Role | Container | Network | Volumes | Capabilities |
+| --- | --- | --- | --- | --- |
+| `updater` (default) | `meduza-np-updater` | bridge (`meduza-np`) | `meduza-np-store` rw, `meduza-np-ipc` | none beyond file ownership |
+| `planner` | `meduza-np-planner` | bridge (default) or host | `meduza-np-node` rw, `meduza-np-store` **ro**, `meduza-np-ipc` | only `CHOWN DAC_OVERRIDE FOWNER KILL SETUID SETGID NET_ADMIN NET_RAW NET_BIND_SERVICE` (+ per component), `/dev/net/tun` |
+
+* The image contains Alpine, the verified updater (`/usr/lib/meduza-np/image/meduza-np-updater`, version in label
+  `io.meduza-np.updater.version`), the release trust store (`/usr/share/meduza-np/trust/release-keys.json`) and the role
+  entrypoint. planner, plugins and providers are **not** baked in.
+* The updater installs planner + `MEDUZA_NP_COMPONENTS` (+ required dependencies) into the store volume, verifying
+  signatures and digests, and keeps them updated. The planner role waits until planner is installed, installs the
+  Alpine packages the installed components need (`rootfs/usr/lib/meduza-np/container/apk-deps`, cached in the node
+  volume for offline restarts) and runs planner.
+* Single writer per volume: only the updater writes the store, only planner writes the node volume. They talk over
+  `planner.sock`/`updater.sock` in the shared IPC volume; no control port is published.
+
+Supported: Podman ≥ 4.4 (Quadlet), tested with Podman 5.4 on Debian 13; Alpine 3.24 base. Rootful is required for
+host network mode; bridge mode works rootful and rootless (rootless: the VPN/routing resources live in the
+container's own namespace only; see [Rootless](#rootless)).
+
+## Files
+
+| File | Purpose |
+| --- | --- |
+| `Containerfile` | image build (context prepared by release tooling: `bin/<arch>/meduza-np-updater`, `trust/release-keys.json`) |
+| `deploy/podman/*.container, *.volume, *.network` | Quadlet units, bridge mode (copy to `/etc/containers/systemd/`) |
+| `deploy/podman/host/meduza-np-planner.container` | planner in host network mode (replaces the bridge planner unit) |
+| `deploy/podman/run.sh` | the same deployment with plain `podman run` (hosts without systemd) |
+| `deploy/podman/base-image.sh` | host helper: replace / roll back the base image (verified digest, store check, health, restore) |
+| `deploy/podman/meduza-np.env.example` | deployment parameters → `/etc/meduza-np/node.env` |
+
+## Install (Quadlet)
+
+```sh
+install -d /etc/meduza-np /etc/containers/systemd
+install -m 0600 deploy/podman/meduza-np.env.example /etc/meduza-np/node.env   # edit: components, enrollment
+cp deploy/podman/meduza-np*.container deploy/podman/meduza-np*.volume deploy/podman/meduza-np.network /etc/containers/systemd/
+systemctl daemon-reload
+systemctl start meduza-np-updater meduza-np-planner
+```
+
+Pin the image by digest in both `.container` files (`Image=ghcr.io/meduza-np/meduza-np-base-container@sha256:…`):
+the `oci` field of the `meduza-np-base-container` artifacts in `releases/<group>/manifest.json` is that multi-platform
+reference (D30); the image's `io.meduza-np.updater.version` label names the embedded updater.
+For host network mode copy `host/meduza-np-planner.container` instead of the bridge one.
+Without systemd: `deploy/podman/run.sh --env-file /etc/meduza-np/node.env [--network host] [--publish 51820/udp]`.
+`--publish PORT/PROTO` publishes the same host port (`HOST:PORT/PROTO` to choose another one). After replacing the
+planner container run.sh deletes the conntrack entries of its published UDP ports (needs `conntrack-tools` on the
+host): a tunnel peer that kept sending meanwhile otherwise stays on a stale entry without the new port mapping and
+never reconnects (D42). With Quadlet, add the `ExecStartPost=` line the planner unit shows per published UDP port.
+
+Stopping is graceful: the entrypoint forwards SIGTERM to planner (which stops its daemons) or the updater and exits
+0 once it is gone, so `systemctl stop` / `podman stop` / a re-run of run.sh no longer kill planner with the
+container (D57; images built before that do).
+
+### Rootless
+
+Bridge mode only (host network mode needs rootful Podman: a rootless container's NET_ADMIN does not reach the host's
+network, D57). Prerequisites on the host: a user with subordinate ids (`/etc/subuid`, `/etc/subgid`), `passt`
+(pasta, Podman 5's rootless network), lingering (`loginctl enable-linger USER`) so the containers start at boot
+without a login, and readable `/dev/net/tun`. Then, as that user:
+
+* run.sh: `run.sh --env-file ~/.config/meduza-np/node.env --publish 51820/udp …`; it enables the *user*
+  `podman-restart.service` for the boot start and warns when lingering is off.
+* Quadlet: copy the units to `~/.config/containers/systemd/`, set `EnvironmentFile=%h/.config/meduza-np/node.env`,
+  `systemctl --user daemon-reload && systemctl --user start meduza-np-updater meduza-np-planner`. The units
+  wait up to 90 s for the **system** `network-online.target` (Podman's `podman-user-wait-network-online.service`),
+  which a user unit cannot pull in: on hosts where no system unit wants it, run once as root
+  `systemctl add-wants multi-user.target network-online.target`, otherwise every start and restart waits 90 s.
+* Published ports are forwarded in user space (rootlessport): the planner sees connections from its own container
+  address, not from the client. Port forwards work (planner also forwards node-local connections, D57), but their
+  `sourceCidrs` cannot match real clients, and WireGuard/OpenVPN endpoints of peers show the container address. No
+  conntrack cleanup is needed after re-creating the planner container.
+* `ip_unprivileged_port_start` limits published ports below 1024 (default 1024: DNS on :53 needs it lowered).
+
+Verified in the lab with `tools/lab/rootless.sh` (WireGuard + port forward, re-creation, reboot, Quadlet user units).
+
+First start on blank volumes: the updater fetches the signed channel, installs planner + the selected components and
+records the runnable set (`podman logs meduza-np-updater`); the planner container waits for it and then starts.
+Without network the updater keeps retrying with backoff and reports the bootstrap failure; planner keeps waiting —
+nothing is reported as online that is not.
+
+## Enrollment
+
+Set `MEDUZA_NP_ENROLL_URL` and `MEDUZA_NP_ENROLL_TOKEN_FILE` (mount the token file read-only into the planner
+container) for the first start, or later: `podman exec meduza-np-planner meduza-np enroll …` (needs the `cli`
+component). The identity is kept in the node volume and survives container re-creation.
+
+## Offline import
+
+Copy a release site directory (`channels/`, `releases/`, `packages/` — the same layout as the Pages site, produced by
+`tools/release`) to the host, mount it read-only into the updater container at `/var/lib/meduza-np/import`
+(`run.sh --import DIR` or the commented `Volume=` line) and set `MEDUZA_NP_UPDATE_BASE_URL=file:///var/lib/meduza-np/import`.
+Signatures are verified exactly as online. Refresh that directory in place for later imports (a replaced directory is not seen by the
+running updater container until it restarts).
+
+## Operations
+
+| Task | How |
+| --- | --- |
+| Status | `podman exec meduza-np-updater /usr/lib/meduza-np/image/meduza-np-updater status` (or `meduza-np update status` with the `cli` component) |
+| Update now / pause / defer | `meduza-np update apply`, `update pause`, `update resume` (cli component) — or set `MEDUZA_NP_UPDATE_AUTO=0` |
+| Change components | edit `MEDUZA_NP_COMPONENTS`, restart the updater container: added components install immediately; removed ones are deactivated (identity, configs and manual provider files stay) |
+| Stop / start | `systemctl stop meduza-np-planner meduza-np-updater` (volumes keep all state) |
+| Package upgrade | automatic per channel/window; planner is restarted through the container's restart loop; failure ⇒ previous generation restored and the group is not retried automatically |
+| Updater self-update | new updater version is activated last; the container's entrypoint starts it; three quick failures ⇒ the image baseline updater starts and rolls the generation back |
+| Base image replace | `deploy/podman/base-image.sh plan`, then `replace` (see below); `rollback` returns to the image that ran before. Volumes are reused; the persisted updater is used while it is newer and healthy |
+| Uninstall | stop units, remove the unit files; `podman volume rm meduza-np-store meduza-np-ipc` (keep `meduza-np-node` if the identity should survive) |
+
+## Base image replacement
+
+Package updates never need a new base image: the updater replaces planner, plugins and itself inside the store
+volume. A new base image (Alpine fixes, a new baseline updater, entrypoint changes) is deployed by the host helper
+`deploy/podman/base-image.sh`, run as the user that owns the containers (root, or the rootless user). It is part of
+the deployment files, needs no planner/updater on the host and gives the containers no access to Podman.
+
+```sh
+deploy/podman/base-image.sh status                   # running image, previous image, last results
+deploy/podman/base-image.sh plan [--group v0.9.0]    # verified target, pulled and checked; changes nothing
+deploy/podman/base-image.sh replace [--group v0.9.0] [--timeout 600]
+deploy/podman/base-image.sh rollback                 # back to the image recorded before the last replace
+deploy/podman/base-image.sh history
+```
+
+* **Which image**: only the one the running updater names from the signed package group (`meduza-np-updater
+  base-image` behind `entrypoint.sh updater-cli`): the `meduza-np-base-container` artifact for this platform,
+  `<repo>@sha256:<index>` (D30), the channel's current group or `--group`. A reference typed by hand is not accepted;
+  `rollback` uses only the image recorded as running before.
+* **Before the switch**: pull by digest; the local image must be that group's manifest for this platform, carry the
+  `meduza-np-base-container` title label and embed the group's updater version. Then the *new* image's baseline
+  updater checks the store volume mounted read-only (`store-check`): installed-set and journal formats it reads,
+  backend and platform match, a current view exists, and no package update is half done. Any problem ⇒ nothing changes.
+* **Switch**: Quadlet units (`Image=` of both units rewritten, `daemon-reload`, restart) or the `run.sh` deployment
+  (`run.sh --again --image …` repeats the recorded options). Then both containers must run the new image and pass
+  their health checks within `--timeout` (default 600 s).
+* **Failure**: the previous image is checked the same way (an older baseline must still read what a newer updater
+  wrote) and restored, also with its own health check; if it cannot take the store over, the node stays on the new
+  image for repair and the helper says why.
+* **Record**: `<state>/base-image.history` (time, action, result, reference, image id, group, package versions) and
+  `<state>/base-image.previous`; `<state>` is `/var/lib/meduza-np-deploy` (root) or
+  `~/.local/share/meduza-np-deploy` (rootless), `MEDUZA_NP_DEPLOY_STATE` overrides it.
+* The helper only touches `meduza-np-updater`, `meduza-np-planner` and the `meduza-np-store` volume (read-only).
+  Images are not pruned, so `rollback` works offline; remove old ones with `podman image prune` when no longer needed.
+* Deployments made before this helper: their updater image has no `updater-cli` role, so the first move to a new
+  image is manual (pin the digest of the group's `meduza-np-base-container` artifact in both units, restart);
+  `run.sh` deployments are recorded from their next `run.sh` call.
+
+Verified on the VPS with `tools/base-image-e2e.sh` (rootful, run.sh deployment, local registry): see D53.
+
+## Capability matrix
+
+| Feature | bridge (rootful) | bridge (rootless) | host (rootful) |
+| --- | --- | --- | --- |
+| Sync, updates, CLI | yes | yes | yes |
+| WireGuard / OpenVPN / Tinc endpoints | yes, published ports; tunnels live in the container namespace | yes (needs `/dev/net/tun`; kernel WireGuard needs the host module); peers appear with the container's address | yes, host namespace |
+| Port forwards | for traffic arriving through published ports | yes (source address of clients not preserved: no `sourceCidrs`) | yes |
+| Routing for the host/LAN (FRR, Anycast, TPROXY) | only for traffic routed into the container namespace — the host needs explicit routes | no | yes |
+| DNS front end on :53 | published port | needs `net.ipv4.ip_unprivileged_port_start` ≤ 53 on the host | yes (port must be free) |
+| mDNS (avahi) | no multicast across the bridge | no | yes |
+
+Kernel modules (WireGuard, TPROXY) come from the host; the image cannot add them.
+
+The deployment tells planner its mode (`MEDUZA_NP_NETWORK_MODE`, set by `run.sh` and the Quadlet units; D41). In
+bridge mode the node reports routing, TPROXY, mDNS, 1:1 mappings and port forwards as "container network only"
+(running, but not in effect for the host/LAN), and the manager warns before publishing such settings to the node.
+
+The planner container drops Podman's default capabilities and gets only its base set (D44): `NET_ADMIN NET_RAW
+NET_BIND_SERVICE` for the network, `CHOWN DAC_OVERRIDE FOWNER` for installing Alpine dependencies and preparing files of
+daemons that run as their own users, `SETUID SETGID` for those daemons to drop privileges (dnsmasq, dbus, FRR, avahi)
+and `KILL` for planner to signal them. Not granted: `FSETID SETFCAP SETPCAP SYS_CHROOT` (nothing installed or run
+needs them; verified per component in the lab).
+
+Per-component requirements: `frr` needs `SYS_ADMIN` in the planner container (run.sh adds it when the component is
+selected; uncomment `AddCapability=SYS_ADMIN` in the Quadlet unit). `avahi` gets `SYS_CHROOT` the same way for
+avahi-daemon's own chroot; without it planner turns that chroot off (`avahi-daemon --no-chroot`) instead of failing. While `avahi` is installed the planner
+container runs its own system D-Bus (`dbus-daemon --system`, D45); do not also run avahi-daemon on a host-network
+host. Routers (`frr`, mappings, port forwards) need
+`net.ipv4.ip_forward=1`: the bridge-mode unit sets it for the container namespace; in host mode set it on the host
+(`/etc/sysctl.d/`), since the container's `/proc/sys` is read-only and planner only verifies it.
+Capabilities are fixed when the container is created: if the configuration later enables FRR on a node deployed
+without the `frr` component, the updater installs the package but the node refuses the configuration until the
+planner container is re-created with `frr` in `MEDUZA_NP_COMPONENTS` (or `AddCapability=SYS_ADMIN`). The planner
+reports its capabilities (`system.capabilities`) and the manager warns about this before publishing (D43).

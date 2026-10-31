@@ -1,0 +1,29 @@
+[package]
+name = "meduza-np-updater"
+version = "0.1.0"
+description = "Meduza NP updater: signed package-group metadata, node subset resolution, staged verified install, maintenance-coordinated switch and rollback"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "meduza-np-updater"
+path = "src/main.rs"
+
+[dependencies]
+meduza-np-protocol.workspace = true
+meduza-np-plugin-sdk.workspace = true
+meduza-np-runtime.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+hex.workspace = true
+base64.workspace = true
+getrandom.workspace = true
+ed25519-dalek.workspace = true
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+tar = { version = "0.4", default-features = false }
+ruzstd = "0.8"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

@@ -1,0 +1,26 @@
+{
+  "manifestVersion": 1,
+  "package": "meduza-np-openvpn-pkg",
+  "version": "0.1.0",
+  "role": "binary-provider",
+  "plannerApi": {
+    "min": 1,
+    "max": 1
+  },
+  "requires": [
+    "meduza-np-planner"
+  ],
+  "conflicts": [],
+  "provides": [
+    "openvpn.binary"
+  ],
+  "providers": [
+    {
+      "slot": "openvpn.binary",
+      "binary": "/usr/lib/meduza-np/providers/openvpn/sbin/openvpn",
+      "versionArgs": [
+        "--version"
+      ]
+    }
+  ]
+}

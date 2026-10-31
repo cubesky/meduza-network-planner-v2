@@ -1,0 +1,20 @@
+# HTTPS reverse proxy for the manager (WebUI, node API, WebSocket push).
+# Caddy obtains certificates automatically; streams are flushed immediately and never time out while idle.
+manager.example.test {
+	encode zstd gzip
+
+	@stream path /api/v1/nodes/self/stream /api/v1/nodes/self/events
+	reverse_proxy @stream 127.0.0.1:8787 {
+		flush_interval -1
+		stream_timeout 0
+		stream_close_delay 5m
+	}
+
+	reverse_proxy 127.0.0.1:8787 {
+		header_up X-Forwarded-Proto https
+	}
+
+	header {
+		-Server
+	}
+}

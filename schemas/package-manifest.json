@@ -1,0 +1,339 @@
+{
+  "$defs": {
+    "ApiRange": {
+      "properties": {
+        "max": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "min",
+        "max"
+      ],
+      "type": "object"
+    },
+    "CapabilitySwitch": {
+      "description": "A capability that is only enabled when a switch in the package's service configuration is on (e.g.\n`mihomo.dns` ↔ `/dns/enabled`). Capabilities without a switch are enabled whenever the service is.",
+      "properties": {
+        "capability": {
+          "type": "string"
+        },
+        "equals": {
+          "description": "Value the switch must equal. Without it the value must be `true`, a non-empty string, array or object."
+        },
+        "item": {
+          "additionalProperties": true,
+          "description": "The value is an array of instances: on while one of them has all these fields with these values and is not\n`\"enabled\": false` (e.g. `openvpn.access` ↔ `/instances` holding `{\"kind\": \"access\"}`). Replaces `equals`.",
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "pointer": {
+          "description": "JSON pointer into `services.<short name>`. A missing value means off (the schema default must be off).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "capability",
+        "pointer"
+      ],
+      "type": "object"
+    },
+    "PackageRole": {
+      "oneOf": [
+        {
+          "enum": [
+            "service-adapter",
+            "binary-provider",
+            "ui-client",
+            "cli",
+            "updater",
+            "container-base"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "manager",
+          "description": "The central manager; never registered on a node.",
+          "type": "string"
+        },
+        {
+          "const": "controller",
+          "description": "The node controller itself.",
+          "type": "string"
+        }
+      ]
+    },
+    "ProviderDecl": {
+      "description": "Declaration of a binary a `-pkg` package provides for a provider slot (§3.1).",
+      "properties": {
+        "binary": {
+          "description": "Absolute path of the binary, or a path relative to `dataDir` for download/manual providers.",
+          "type": "string"
+        },
+        "dataDir": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requiresPreparation": {
+          "default": false,
+          "description": "Provider must be prepared (downloaded/imported) by the package's `prepare` operation before it can register.",
+          "type": "boolean"
+        },
+        "slot": {
+          "type": "string"
+        },
+        "versionArgs": {
+          "default": [],
+          "description": "Arguments that print the version (`[\"--version\"]`), run with a short timeout during checks.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "slot",
+        "binary"
+      ],
+      "type": "object"
+    },
+    "SchemaRefs": {
+      "properties": {
+        "config": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "SystemDependency": {
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/SystemDependencyKind"
+        },
+        "minVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "providerSlot": {
+          "description": "Provider slot this binary can be served by (system default, overridable by a `-pkg`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "when": {
+          "description": "Only needed when the given capability is enabled.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "name"
+      ],
+      "type": "object"
+    },
+    "SystemDependencyKind": {
+      "oneOf": [
+        {
+          "enum": [
+            "kernel-module"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "binary",
+          "description": "An executable looked up in PATH or at `path`.",
+          "type": "string"
+        },
+        {
+          "const": "kernel-feature",
+          "description": "A capability such as `nftables` or `tproxy` probed by planner.",
+          "type": "string"
+        },
+        {
+          "const": "service",
+          "description": "A system service that must exist (e.g. `dbus`).",
+          "type": "string"
+        }
+      ]
+    },
+    "UiRef": {
+      "properties": {
+        "descriptor": {
+          "type": "string"
+        },
+        "version": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "descriptor",
+        "version"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "capabilitySwitches": {
+      "description": "Capabilities of `provides` that a configuration switch turns on separately from the service.",
+      "items": {
+        "$ref": "#/$defs/CapabilitySwitch"
+      },
+      "type": "array"
+    },
+    "conflicts": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "consumes": {
+      "default": [],
+      "description": "Configuration paths this package consumes (`services.wireguard`, `networks.lan`, ...); used for the\ndependency graph instead of string searching (§8.2).",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "entrypoint": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "hostNetworkCapabilities": {
+      "description": "Capabilities of `provides` that act on the host's or LAN's traffic (routing, TPROXY, mDNS, NAT). In a\nbridge-network container they only act inside the container's namespace (§14.3.3); planner and manager say so.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "manifestVersion": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "operations": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "package": {
+      "type": "string"
+    },
+    "plannerApi": {
+      "$ref": "#/$defs/ApiRange"
+    },
+    "platforms": {
+      "description": "Platforms (`openwrt`, `linux`, `container`) where this package may be installed. Empty = all.",
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "providerSlot": {
+      "description": "Provider slot this service adapter consumes (e.g. `openvpn.binary`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "providers": {
+      "description": "Binaries this package provides, for `binary-provider` packages.",
+      "items": {
+        "$ref": "#/$defs/ProviderDecl"
+      },
+      "type": "array"
+    },
+    "provides": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "requires": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "type": "array"
+    },
+    "role": {
+      "$ref": "#/$defs/PackageRole"
+    },
+    "schemas": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SchemaRefs"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "systemDependencies": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/SystemDependency"
+      },
+      "type": "array"
+    },
+    "ui": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/UiRef"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "version": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "manifestVersion",
+    "package",
+    "version",
+    "role",
+    "plannerApi"
+  ],
+  "title": "PackageManifest",
+  "type": "object"
+}
