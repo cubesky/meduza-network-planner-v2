@@ -13,6 +13,9 @@ OpenVPN, Mihomo, MosDNS and more from the published configuration.
 ## Build and test
 
 Rust 1.99.1 (`rust-toolchain.toml`), Node 24 and pnpm 12 (`packageManager` in `package.json`).
+Cross builds pin Zig and cargo-zigbuild in `tools/cross-toolchain.json`, loaded by both workflows. These versions
+also affect Rust package fingerprints and build cache keys; cargo-zigbuild 0.23.1 handles the AArch64 linker
+arguments added by newer Rust versions.
 
 ```sh
 cargo fmt --all --check

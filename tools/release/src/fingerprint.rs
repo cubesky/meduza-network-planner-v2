@@ -101,6 +101,10 @@ impl Ctx {
         self.common_lines(&mut lines);
         let dir = self.repo.join("packages").join(package);
         file_lines(&self.repo, &dir, &mut lines)?;
+        if dir.join("Cargo.toml").is_file() {
+            let cross = std::fs::read_to_string(self.repo.join("tools/cross-toolchain.json")).map_err(|e| e.to_string())?;
+            lines.insert(format!("cross-toolchain {}", sha(cross.replace("\r\n", "\n").as_bytes())));
+        }
         if matches!(package, "meduza-np-manager" | "meduza-np-dashboard") {
             for shared in ["web/ui-kit", "web/descriptor-renderer", "web/tsconfig.base.json"] {
                 let p = self.repo.join(shared);
@@ -259,6 +263,25 @@ pub fn cargo_metadata(repo: &Path, target: &str) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cross_compiler_changes_invalidate_rust_packages_but_not_provider_recipes() {
+        let repo = std::env::temp_dir().join(format!("mnp-cross-fingerprint-{}", std::process::id()));
+        std::fs::create_dir_all(repo.join("packages/rust-plugin")).unwrap();
+        std::fs::create_dir_all(repo.join("packages/provider")).unwrap();
+        std::fs::create_dir_all(repo.join("tools")).unwrap();
+        std::fs::write(repo.join("packages/rust-plugin/Cargo.toml"), "[package]\nname = \"rust-plugin\"\n").unwrap();
+        std::fs::write(repo.join("packages/provider/upstream.lock.json"), "{}").unwrap();
+        let pins = repo.join("tools/cross-toolchain.json");
+        std::fs::write(&pins, r#"{"ziglang":"0.13.0","cargo-zigbuild":"0.19.8"}"#).unwrap();
+        let ctx = Ctx::load(&repo, vec!["aarch64-unknown-linux-musl".into()], None).unwrap();
+        let rust = ctx.fingerprint("rust-plugin").unwrap().0;
+        let provider = ctx.fingerprint("provider").unwrap().0;
+        std::fs::write(&pins, r#"{"ziglang":"0.13.0","cargo-zigbuild":"0.23.1"}"#).unwrap();
+        assert_ne!(ctx.fingerprint("rust-plugin").unwrap().0, rust);
+        assert_eq!(ctx.fingerprint("provider").unwrap().0, provider);
+        std::fs::remove_dir_all(repo).unwrap();
+    }
 
     #[test]
     fn closure_scoped_fingerprints() {

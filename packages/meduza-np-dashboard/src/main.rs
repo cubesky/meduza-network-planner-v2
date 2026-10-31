@@ -26,6 +26,10 @@ fn fail(msg: impl std::fmt::Display) -> ! {
 }
 
 fn main() {
+    if matches!(std::env::args().nth(1).as_deref(), Some("--version" | "version")) {
+        println!("meduza-np-dashboard {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap_or_else(|e| fail(e));
     rt.block_on(run());
 }

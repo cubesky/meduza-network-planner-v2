@@ -8,7 +8,7 @@ machine=$2
 status=0
 found=0
 
-for f in "$dir"/meduza-np-* "$dir"/mnp-*; do
+for f in "$dir"/*; do
 	[ -f "$f" ] && [ -x "$f" ] || continue
 	case "$f" in *.d) continue ;; esac
 	head -c 4 "$f" | grep -q 'ELF' || continue

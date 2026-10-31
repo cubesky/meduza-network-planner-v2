@@ -1,0 +1,9 @@
+name: Cross toolchain versions
+description: Load the shared pinned cross compiler versions for installation and cache isolation.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        echo "ZIG_VERSION=$(jq -er '.ziglang' tools/cross-toolchain.json)" >> "$GITHUB_ENV"
+        echo "CARGO_ZIGBUILD_VERSION=$(jq -er '.["cargo-zigbuild"]' tools/cross-toolchain.json)" >> "$GITHUB_ENV"

@@ -28,8 +28,6 @@ concurrency:
 
 env:
   RUST_TOOLCHAIN: "1.99.1"
-  ZIG_VERSION: "0.13.0"
-  CARGO_ZIGBUILD_VERSION: "0.19.8"
   TAG: ${{ inputs.tag || github.ref_name }}
   CHANNEL: ${{ inputs.channel || 'stable' }}
   PAGES_URL: https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}
@@ -54,6 +52,7 @@ jobs:
           export RUSTUP_TOOLCHAIN="$RUST_TOOLCHAIN"
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal -c clippy,rustfmt --target x86_64-unknown-linux-musl
           echo "RUSTUP_TOOLCHAIN=$RUST_TOOLCHAIN" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/cross-toolchain
       - uses: ./.github/actions/release-cache
         with:
           operation: restore
@@ -183,6 +182,7 @@ jobs:
         if: contains(needs.plan.outputs.rust_changed, 'meduza-np-dashboard')
         with: { name: dashboard-www, path: packages/meduza-np-dashboard/dist/www }
       - uses: ./.github/actions/release-tool
+      - uses: ./.github/actions/cross-toolchain
       - uses: ./.github/actions/release-cache
         with:
           operation: restore
@@ -400,6 +400,7 @@ jobs:
           export RUSTUP_TOOLCHAIN="$RUST_TOOLCHAIN"
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
           echo "RUSTUP_TOOLCHAIN=$RUST_TOOLCHAIN" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/cross-toolchain
       - uses: ./.github/actions/release-cache
         with:
           operation: restore

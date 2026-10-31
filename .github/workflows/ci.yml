@@ -13,8 +13,6 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_TOOLCHAIN: "1.99.1"
-  ZIG_VERSION: "0.13.0"
-  CARGO_ZIGBUILD_VERSION: "0.19.8"
 
 jobs:
   rust:
@@ -79,6 +77,7 @@ jobs:
             machine: "AArch64"
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/cross-toolchain
       - name: Install toolchain and cross linker
         run: |
           export RUSTUP_TOOLCHAIN="$RUST_TOOLCHAIN"
@@ -221,6 +220,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/cross-toolchain
       - name: Toolchain
         run: |
           export RUSTUP_TOOLCHAIN="$RUST_TOOLCHAIN"

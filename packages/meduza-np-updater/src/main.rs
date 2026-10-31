@@ -69,6 +69,10 @@ fn main() {
     let cmd = args.first().map(String::as_str).unwrap_or("help");
     let json_out = args.iter().any(|a| a == "--json");
     match cmd {
+        "--version" | "version" => {
+            println!("meduza-np-updater {}", env!("CARGO_PKG_VERSION"));
+            return;
+        }
         "keygen" => return keygen(&args[1..]),
         "sign" => return sign_cmd(&args[1..]),
         "verify" => return verify_cmd(&args[1..]),
