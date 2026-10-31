@@ -10,3 +10,4 @@ dist/
 /tests/.tmp/
 /release/out/
 .claude/
+/secret

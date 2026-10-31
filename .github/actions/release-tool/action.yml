@@ -1,5 +1,5 @@
-name: Release tool from plan
-description: Use the release tool already built and tested by this run's plan job.
+name: Release tool and public trust from plan
+description: Use the tested release tool and verified public signing trust roots prepared by this run's plan job.
 runs:
   using: composite
   steps:
@@ -9,3 +9,7 @@ runs:
         path: target/release
     - shell: bash
       run: chmod +x target/release/meduza-np-release
+    - uses: actions/download-artifact@v4
+      with:
+        name: release-trust
+        path: packages/meduza-np-base-container/trust

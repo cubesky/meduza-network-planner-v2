@@ -37,6 +37,13 @@ workflow (`release.yml`) on `v*` tags, including Rust and web tests before build
 re-run by hand for an existing tag and needs the `MEDUZA_NP_RELEASE_KEY` secret (see its header). Pushes to `main`
 and pull requests do not start builds.
 
+Configure `MEDUZA_NP_RELEASE_KEY` with the base64 Ed25519 seed from `meduza-np-updater keygen` (keep the same signing
+key across releases). Before fingerprinting, `plan` derives its public trust store at
+`packages/meduza-np-base-container/trust/release-keys.json` when this file is absent. If committed, the existing
+store is preserved and must trust the configured signer. Only this public JSON is passed to packaging and image
+jobs; the private signing seed is never included in artifacts or caches. Missing signing secrets or mismatched,
+revoked or expired trust roots fail in `plan`, before building the target binaries.
+
 The tag workflow computes package fingerprints against the last successful group of the selected channel before
 building. Only changed packages (including affected shared dependencies) are built for the release. Unchanged
 archives, OpenWrt packages and SBOMs are copied from their earlier Releases; package versions and SHA-256 digests

@@ -3,6 +3,7 @@
 //! ```text
 //! fingerprint --targets T1,T2 [--package P]...              → {package: fingerprint} (all distributable packages)
 //! matrix --fingerprints F --group-version V [--baseline M]  → {package: {fingerprint, changed, version, reusedFromGroup}}
+//! prepare-trust --key-env ENV --out FILE                    → public trust roots; validate an existing store without replacing it
 //! package --package P --version V --platform PL --out DIR [--bin-dir D] [--tree D]
 //!                                                           → DIR/<P>_<V>_<platform>.tar.gz + .json (BuiltArtifact)
 //! group --group-version V --sequence N --commit C --matrix M --artifacts DIR --url-base U --site DIR
@@ -35,6 +36,7 @@ mod mihomo_assets;
 mod oci;
 mod openwrt;
 mod sbom;
+mod trust;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -186,6 +188,12 @@ fn main() {
     let a = Args::parse(&raw[1..]);
     let repo = repo_root();
     match cmd.as_str() {
+        "prepare-trust" => {
+            let variable = a.req("key-env");
+            let secret = std::env::var(variable).unwrap_or_default();
+            let ids = trust::prepare(&secret, Path::new(a.req("out")), now_unix()).unwrap_or_else(|e| fail(e));
+            println!("public release trust ready: {} (signer {ids})", a.req("out"));
+        }
         "fingerprint" => {
             let targets: Vec<String> = a.req("targets").split(',').map(str::to_string).collect();
             let meta = fingerprint::cargo_metadata(&repo, &targets[0]).unwrap_or_else(|e| fail(e));
@@ -529,8 +537,13 @@ fn openwrt_cmd(a: &Args, repo: &Path) {
     };
     let formats: Vec<String> = a.opt("formats").unwrap_or("ipk,apk").split(',').map(str::to_string).collect();
     let trust = a.opt("trust").map(PathBuf::from);
-    if p == "meduza-np-updater" && trust.as_deref().is_none_or(|t| !t.is_file()) {
-        fail("meduza-np-updater needs --trust <release-keys.json> (the OpenWrt package carries the trust store)");
+    if p == "meduza-np-updater" {
+        let Some(path) = trust.as_deref() else {
+            fail("meduza-np-updater needs --trust <release-keys.json> (the OpenWrt package carries the trust store)");
+        };
+        if !path.is_file() {
+            fail(format!("trust store {} is missing; run prepare-trust before packaging meduza-np-updater", path.display()));
+        }
     }
     let data = openwrt::entries(repo, p, version, a.opt("bin-dir").map(Path::new), a.opt("tree").map(Path::new), trust.as_deref())
         .unwrap_or_else(|e| fail(e));

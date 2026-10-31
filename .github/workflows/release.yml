@@ -1,8 +1,8 @@
 # One-button release (AGENT.md §15). Tag push `v*` publishes; workflow_dispatch re-runs a given tag (idempotent:
 # immutable files that already exist are never overwritten, the channel pointer is written last).
 #
-# Required once: secret MEDUZA_NP_RELEASE_KEY (base64 Ed25519 seed from `meduza-np-updater keygen`; its public entry is
-# packages/meduza-np-base-container/trust/release-keys.json), GitHub Pages source = "GitHub Actions". OCI images go to
+# Required once: secret MEDUZA_NP_RELEASE_KEY (base64 Ed25519 seed from `meduza-np-updater keygen`). plan derives its
+# public trust store when absent, or verifies the committed store before packaging. GitHub Pages source = "GitHub Actions". OCI images go to
 # ghcr.io/<owner>/<package> with the workflow token (D30); after the first release make the GHCR packages public once
 # (Package settings -> visibility), otherwise nodes and the manager host need registry credentials to pull.
 name: release
@@ -87,10 +87,17 @@ jobs:
               ;;
             *) echo "::error::Baseline request failed (HTTP $status)"; exit 1 ;;
           esac
+      - name: Build release tool
+        run: cargo build --locked --release -p meduza-np-release
+      - name: Prepare public signing trust before fingerprints and packaging
+        env:
+          MEDUZA_NP_RELEASE_KEY: ${{ secrets.MEDUZA_NP_RELEASE_KEY }}
+        run: |
+          target/release/meduza-np-release prepare-trust --key-env MEDUZA_NP_RELEASE_KEY \
+            --out packages/meduza-np-base-container/trust/release-keys.json
       - name: Fingerprints and change/reuse matrix
         id: m
         run: |
-          cargo build --locked --release -p meduza-np-release
           R=target/release/meduza-np-release
           $R fingerprint --targets "$TARGETS" > plan/fingerprints.json
           base=""; [ -f plan/baseline.json ] && base="--baseline plan/baseline.json"
@@ -135,6 +142,11 @@ jobs:
         with: { name: dashboard-www, path: packages/meduza-np-dashboard/dist/www/, if-no-files-found: error }
       - uses: actions/upload-artifact@v4
         with: { name: release-tool, path: target/release/meduza-np-release, if-no-files-found: error }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-trust
+          path: packages/meduza-np-base-container/trust/release-keys.json
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with: { name: plan, path: plan/ }
       - uses: ./.github/actions/release-cache
