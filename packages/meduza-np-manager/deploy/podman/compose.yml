@@ -1,0 +1,74 @@
+# Use the native podman-compose provider >= 1.6 (external Podman secrets with UID/GID/target support).
+#   export PODMAN_COMPOSE_PROVIDER=podman-compose
+#   podman compose -f compose.yml up -d
+services:
+  manager:
+    image: "${MANAGER_IMAGE:?Set MANAGER_IMAGE to the manager OCI reference from the release manifest}"
+    container_name: meduza-np-manager
+    user: "10001:10001"
+    restart: unless-stopped
+    stop_grace_period: 30s
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:rw,size=64m,mode=1777
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      PUBLIC_ORIGIN: "${PUBLIC_ORIGIN:?Set PUBLIC_ORIGIN to the public HTTPS origin}"
+      # RP_ID defaults to PUBLIC_ORIGIN's hostname in the manager.
+      RP_NAME: Meduza NP Manager
+      LISTEN_HOST: 0.0.0.0
+      PORT: "8787"
+      DATA_DIR: /var/lib/meduza-np-manager
+      SESSION_SECRET_FILE: /run/secrets/session.key
+      SECRET_ENCRYPTION_KEY_FILE: /run/secrets/secret.key
+      TRUSTED_PROXIES: "${TRUSTED_PROXIES:-}"
+      # First administrator only: remove this variable and the bootstrap secret mount after registration.
+      BOOTSTRAP_TOKEN_FILE: /run/secrets/bootstrap
+    volumes:
+      - meduza-np-manager-data:/var/lib/meduza-np-manager:Z
+    secrets:
+      - source: meduza-np-session-key
+        target: session.key
+        uid: "10001"
+        gid: "10001"
+        mode: "0400"
+      - source: meduza-np-secret-key
+        target: secret.key
+        uid: "10001"
+        gid: "10001"
+        mode: "0400"
+      # First administrator only.
+      - source: meduza-np-bootstrap
+        target: bootstrap
+        uid: "10001"
+        gid: "10001"
+        mode: "0400"
+    healthcheck:
+      test: ["CMD", "node", "/app/packages/meduza-np-manager/dist/server/src/healthcheck.js"]
+      interval: 30s
+      timeout: 5s
+      start_period: 40s
+      retries: 3
+    networks:
+      - manager
+
+volumes:
+  meduza-np-manager-data:
+    name: meduza-np-manager-data
+
+networks:
+  manager:
+    name: meduza-np-manager
+
+secrets:
+  meduza-np-session-key:
+    external: true
+  meduza-np-secret-key:
+    external: true
+  meduza-np-bootstrap:
+    external: true
