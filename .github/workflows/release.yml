@@ -51,8 +51,9 @@ jobs:
           fetch-depth: 0
       - name: Toolchain
         run: |
+          export RUSTUP_TOOLCHAIN="$RUST_TOOLCHAIN"
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal -c clippy,rustfmt --target x86_64-unknown-linux-musl
-          rustup default "$RUST_TOOLCHAIN"
+          echo "RUSTUP_TOOLCHAIN=$RUST_TOOLCHAIN" >> "$GITHUB_ENV"
       - uses: ./.github/actions/release-cache
         with:
           operation: restore
@@ -192,8 +193,10 @@ jobs:
             .cache/zig
       - name: Toolchain
         run: |
+          # Override rust-toolchain.toml so cargo does not lazily install clippy/rustfmt in a minimal build job.
+          export RUSTUP_TOOLCHAIN="$RUST_TOOLCHAIN"
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target ${{ matrix.target }}
-          rustup default "$RUST_TOOLCHAIN"
+          echo "RUSTUP_TOOLCHAIN=$RUST_TOOLCHAIN" >> "$GITHUB_ENV"
           python3 -m pip install --user "ziglang==${ZIG_VERSION}" "cargo-zigbuild==${CARGO_ZIGBUILD_VERSION}"
           sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-user-static binutils jq
       - uses: ./.github/actions/release-cache
@@ -393,7 +396,10 @@ jobs:
         with: { pattern: oci-*, path: in }
       - uses: ./.github/actions/release-tool
       - name: Toolchain for SBOM dependency metadata
-        run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal && rustup default "$RUST_TOOLCHAIN"
+        run: |
+          export RUSTUP_TOOLCHAIN="$RUST_TOOLCHAIN"
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          echo "RUSTUP_TOOLCHAIN=$RUST_TOOLCHAIN" >> "$GITHUB_ENV"
       - uses: ./.github/actions/release-cache
         with:
           operation: restore
