@@ -152,7 +152,7 @@ of the planner service (or the procd init script) stops them.
 | Container re-created / base image replaced | volumes keep identity, config, installed set, journal and provider data; nothing is re-downloaded |
 | New base image (Podman) | `deploy/podman/base-image.sh plan`, then `replace`: verified digest from the signed group, store check by the new image, health check, automatic restore of the previous image; `rollback` returns to it later (base-container README) |
 | Stop a service for maintenance | `meduza-np maintenance start --reason … --minutes 30 --pause-apply`, then `meduza-np instance stop …` |
-| Remove a component (container) | drop it from `MEDUZA_NP_COMPONENTS` and restart the updater: it is deactivated; identity, configs and manual provider files stay |
+| Remove a component (container) | disable/remove its services in the published manager configuration and drop it from `MEDUZA_NP_COMPONENTS`, then re-create containers with `run.sh --again` (or restart the Quadlet services); identity, configs and manual provider files stay |
 | Uninstall | stop the services, remove the packages or units; delete `/var/lib/meduza-np` (or the volumes) only if the node identity should go too |
 
 ## 6. Routing roles (D17, D18, D24, D25)

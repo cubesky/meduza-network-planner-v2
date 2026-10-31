@@ -71,7 +71,7 @@ pub async fn dispatch(p: &Arc<Planner>, req: LocalRequest, authorized: bool) -> 
         }
         "packages" => {
             let reg = p.registry();
-            ok(json!({"packages": reg.package_statuses(), "providers": reg.providers, "providerErrors": reg.provider_errors}))
+            ok(json!({"packages": crate::reporter::packages(p), "providers": reg.providers, "providerErrors": reg.provider_errors}))
         }
         "instances" => {
             let applied = crate::state::AppliedState::load(&p.paths).unwrap_or_default();
@@ -217,7 +217,7 @@ pub async fn dispatch(p: &Arc<Planner>, req: LocalRequest, authorized: bool) -> 
         }
         "registry.rescan" => {
             p.rescan().await;
-            ok(serde_json::to_value(p.registry().package_statuses()).unwrap_or_default())
+            ok(serde_json::to_value(crate::reporter::packages(p)).unwrap_or_default())
         }
         "dashboard.login" | "dashboard.exchange" => {
             // Relay for meduza-np-dashboard: the node session authenticates it to the manager, which binds the

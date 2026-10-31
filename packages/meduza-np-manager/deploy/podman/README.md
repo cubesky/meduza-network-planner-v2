@@ -50,6 +50,7 @@ only together with CPU, and measure with the load test first.
 | `manager.env.example` → `manager.env` | `~/.config/meduza-np-manager/` |
 | `config.json.example` → `config.json` | `~/.config/meduza-np-manager/` (read-only mount) |
 | `proxy/Caddyfile` or `proxy/nginx.conf` | your proxy configuration |
+| `compose.yml`, `.env.compose.example` → `.env` | an alternative Compose deployment directory (see below) |
 
 ## First installation
 
@@ -100,6 +101,51 @@ podman run -d --name meduza-np-manager --network meduza-np-manager \
   --health-on-failure kill --restart on-failure --stop-timeout 30 \
   ghcr.io/OWNER/meduza-np-manager@sha256:IMAGE_DIGEST
 ```
+
+## Podman Compose
+
+`compose.yml` is an alternative to the Quadlet unit. Use the native **podman-compose >= 1.6** provider: this
+configuration mounts external Podman secrets with target names and UID/GID 10001; Docker Compose's local mode
+does not support these external secrets. Do not run the Quadlet unit and Compose deployment at the same time.
+
+Copy `compose.yml` and `.env.compose.example` to a directory on the server, then:
+
+```sh
+cp .env.compose.example .env
+# Edit .env: MANAGER_IMAGE = the manager artifact's OCI digest from the release manifest;
+# PUBLIC_ORIGIN = your public HTTPS origin, e.g. https://manager.example.com.
+# Reused manager packages may have a version older than the group tag.
+export PODMAN_COMPOSE_PROVIDER=podman-compose
+
+# Once only; keep backups of the two long-term keys as described above.
+openssl rand -hex 32 | podman secret create meduza-np-session-key -
+openssl rand -hex 32 | podman secret create meduza-np-secret-key -
+openssl rand -hex 24 | podman secret create meduza-np-bootstrap -
+
+podman compose -f compose.yml config
+podman compose -f compose.yml up -d
+curl -fsS http://127.0.0.1:8787/readyz
+podman compose -f compose.yml logs -f manager
+```
+
+The process runs as 10001, with a read-only root filesystem and a writable named volume
+`meduza-np-manager-data`. The database, passkeys and enrollment data survive container re-creation. Set the host
+reverse proxy's HTTPS upstream to `127.0.0.1:8787` using `proxy/Caddyfile` or `proxy/nginx.conf`; use the hostname
+from `PUBLIC_ORIGIN`. Set `TRUSTED_PROXIES` in `.env` to the proxy address visible inside the container (inspect
+`podman network inspect meduza-np-manager` for the gateway), then run `up -d` again. The Compose healthcheck is
+explicit because OCI images may omit the Containerfile healthcheck.
+
+Read the first-admin token with `podman secret inspect --showsecret meduza-np-bootstrap` (Podman >= 4.9), open
+`PUBLIC_ORIGIN` in a browser and register a passkey. Then remove `BOOTSTRAP_TOKEN_FILE`, the `meduza-np-bootstrap`
+service secret entry, and its top-level declaration from `compose.yml`; run
+`podman compose -f compose.yml up -d --force-recreate` and `podman secret rm meduza-np-bootstrap`.
+
+Use `podman compose -f compose.yml down` to remove containers; retain the data volume and the two long-term
+secrets. Upgrade by backing up the database/keys, changing `MANAGER_IMAGE` in `.env`, then running
+`podman compose -f compose.yml pull` and `podman compose -f compose.yml up -d`.
+
+Compose starts detached on a headless server. For startup after a host reboot, use the Quadlet/systemd setup
+above; Compose's restart policy on its own does not establish rootless boot startup.
 
 ## Operations
 

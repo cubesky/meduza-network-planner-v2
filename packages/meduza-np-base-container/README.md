@@ -83,6 +83,21 @@ records the runnable set (`podman logs meduza-np-updater`); the planner containe
 Without network the updater keeps retrying with backoff and reports the bootstrap failure; planner keeps waiting —
 nothing is reported as online that is not.
 
+## Component selection
+
+`MEDUZA_NP_COMPONENTS` selects optional packages to keep installed. Enabled services in a published manager
+configuration add their required packages automatically: planner writes `wanted-components.json` in the shared
+IPC volume, and updater checks for changes at most every 60 seconds. Both selections are combined; removing a
+package from the environment does not remove it while the published configuration still needs it. Mihomo's
+`mihomo-pkg` installs the source adapter; configure its `auto-download` mode and a supported pinned version to
+obtain the Mihomo binary, or provide it in `manual` mode.
+
+If updater says `NoChange` while planner's package list is missing an installed package, refresh it with
+`podman exec meduza-np-planner meduza-np rescan`. The updater now checks planner registration even when package
+versions/digests are unchanged, so a missed startup rescan is repaired without downloading the packages again.
+The image-provided updater is also included in planner's package report even though it has no store manifest;
+otherwise the manager can incorrectly display "install by hand".
+
 ## Enrollment
 
 Set `MEDUZA_NP_ENROLL_URL` and `MEDUZA_NP_ENROLL_TOKEN_FILE` (mount the token file read-only into the planner
@@ -103,7 +118,7 @@ running updater container until it restarts).
 | --- | --- |
 | Status | `podman exec meduza-np-updater /usr/lib/meduza-np/image/meduza-np-updater status` (or `meduza-np update status` with the `cli` component) |
 | Update now / pause / defer | `meduza-np update apply`, `update pause`, `update resume` (cli component) — or set `MEDUZA_NP_UPDATE_AUTO=0` |
-| Change components | edit `MEDUZA_NP_COMPONENTS`, restart the updater container: added components install immediately; removed ones are deactivated (identity, configs and manual provider files stay) |
+| Change components | edit `MEDUZA_NP_COMPONENTS`, then `run.sh --again` (or restart the Quadlet services) to re-create containers with the new environment; `podman restart` does not reload the env file. Packages still needed by the published configuration stay installed; identity, configs and manual provider files stay |
 | Stop / start | `systemctl stop meduza-np-planner meduza-np-updater` (volumes keep all state) |
 | Package upgrade | automatic per channel/window; planner is restarted through the container's restart loop; failure ⇒ previous generation restored and the group is not retried automatically |
 | Updater self-update | new updater version is activated last; the container's entrypoint starts it; three quick failures ⇒ the image baseline updater starts and rolls the generation back |

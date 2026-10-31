@@ -56,9 +56,21 @@ impl Env {
     /// Builds a package archive into the repo; `broken` makes the fake planner refuse to register it.
     fn package(&self, name: &str, version: &str, broken: bool) -> GroupPackage {
         let provides = if broken { "broken.test".to_string() } else { format!("{}.test", name.trim_start_matches("meduza-np-")) };
+        let conflicts: Vec<&str> = meduza_np_protocol::manifest::CONFLICTS
+            .iter()
+            .filter_map(|(a, b)| {
+                if *a == name {
+                    Some(*b)
+                } else if *b == name {
+                    Some(*a)
+                } else {
+                    None
+                }
+            })
+            .collect();
         let manifest = json!({
             "manifestVersion": 1, "package": name, "version": version, "role": "cli",
-            "plannerApi": {"min": 1, "max": 1}, "requires": [], "conflicts": [], "provides": [provides]
+            "plannerApi": {"min": 1, "max": 1}, "requires": [], "conflicts": conflicts, "provides": [provides]
         });
         let file = format!("packages/{name}_{version}{}.tar.gz", if broken { "-broken" } else { "" });
         let path = self.repo.join(&file);
@@ -188,7 +200,7 @@ fn now() -> u64 {
     meduza_np_plugin_sdk::rfc3339_to_unix("2026-10-22T00:00:00Z").unwrap()
 }
 
-fn engine<'a>(cfg: &'a Config, planner: &'a FakePlanner, now_fn: &'a dyn Fn() -> u64) -> Engine<'a> {
+fn engine<'a>(cfg: &'a Config, planner: &'a dyn PlannerApi, now_fn: &'a dyn Fn() -> u64) -> Engine<'a> {
     Engine { cfg, planner, runner: &NoRunner, now: now_fn, planner_timeout: Duration::from_millis(500), poll: Duration::from_millis(10) }
 }
 
@@ -335,4 +347,71 @@ fn configured_features_extend_the_selection() {
     let e = engine(&open, &planner, &now_fn);
     assert_eq!(explicit(e.selection()), vec!["meduza-np-frr", "meduza-np-tinc", "meduza-np-wireguard"]);
     let _ = std::fs::remove_dir_all(&env.root);
+}
+
+#[test]
+fn configured_features_install_without_a_new_group() {
+    let env = Env::new("wanted-install");
+    let cfg = env.config(Some(vec![]));
+    let planner = FakePlanner { store: cfg.store_dir(), up: Cell::new(false), boot: Cell::new(1), calls: RefCell::new(vec![]) };
+    let now_fn = now;
+    let e = engine(&cfg, &planner, &now_fn);
+    let names = ["meduza-np-planner", "meduza-np-updater", "meduza-np-mihomo", "meduza-np-mihomo-pkg", "meduza-np-frr", "meduza-np-tinc"];
+    env.publish("v0.1.0", 1, names.iter().map(|n| env.package(n, "0.1.0", false)).collect(), FAR);
+    assert_eq!(e.run_once(true).unwrap().1, Some(Outcome::Applied));
+    assert!(!e.installed().unwrap().packages.contains_key("meduza-np-mihomo"));
+    let startup_packages = planner.packages();
+
+    let wanted = cfg.paths.wanted_components();
+    std::fs::create_dir_all(wanted.parent().unwrap()).unwrap();
+    std::fs::write(&wanted, br#"["frr","mihomo","mihomo-pkg","tinc"]"#).unwrap();
+    let (plan, outcome) = e.run_once(true).unwrap();
+    assert_eq!(outcome, Some(Outcome::Applied), "{plan:?}");
+    let plan = plan.unwrap();
+    for name in &names[2..] {
+        assert_eq!(plan.action(name).unwrap().kind, meduza_np_updater::resolve::ActionKind::Install);
+        assert!(e.installed().unwrap().packages.contains_key(*name));
+    }
+    assert_eq!(e.installed().unwrap().group_version.as_deref(), Some("v0.1.0"));
+    assert_eq!(e.run_once(true).unwrap().1, Some(Outcome::NoChange), "NoChange only after the requested packages are installed");
+
+    // Planner can scan the old view before its socket starts accepting requests. An install during this gap
+    // sees planner as down and skips rescan; later NoChange passes must reconcile the cached registry.
+    struct CachedPlanner<'a> {
+        inner: &'a FakePlanner,
+        packages: RefCell<Value>,
+        refresh: Cell<bool>,
+    }
+    impl PlannerApi for CachedPlanner<'_> {
+        fn call(&self, method: &str, params: Value) -> Result<Value, String> {
+            if method == "packages" {
+                return Ok(self.packages.borrow().clone());
+            }
+            let result = self.inner.call(method, params)?;
+            if method == "registry.rescan" && self.refresh.get() {
+                *self.packages.borrow_mut() = self.inner.packages();
+            }
+            Ok(result)
+        }
+    }
+    planner.up.set(true);
+    let cached = CachedPlanner { inner: &planner, packages: RefCell::new(startup_packages.clone()), refresh: Cell::new(true) };
+    let e = engine(&cfg, &cached, &now_fn);
+    planner.calls.borrow_mut().clear();
+    assert_eq!(e.run_once(false).unwrap().1, Some(Outcome::NoChange));
+    assert!(!planner.calls.borrow().iter().any(|m| m == "registry.rescan"), "a check-only pass must not re-apply services");
+    assert_eq!(e.run_once(true).unwrap().1, Some(Outcome::NoChange));
+    assert!(planner.calls.borrow().iter().any(|m| m == "registry.rescan"), "NoChange must repair stale planner registration");
+    meduza_np_updater::planner::verify_packages(&cached, &[("meduza-np-mihomo".into(), "0.1.0".into())]).unwrap();
+    planner.calls.borrow_mut().clear();
+    assert_eq!(e.run_once(true).unwrap().1, Some(Outcome::NoChange));
+    assert!(!planner.calls.borrow().iter().any(|m| m == "registry.rescan"), "an up-to-date registry needs no rescan");
+
+    *cached.packages.borrow_mut() = startup_packages;
+    cached.refresh.set(false);
+    assert!(
+        e.run_once(true).unwrap_err().contains("meduza-np-mihomo not found by planner"),
+        "an unsuccessful rescan must not report success"
+    );
+    std::fs::remove_dir_all(&env.root).unwrap();
 }

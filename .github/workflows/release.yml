@@ -36,6 +36,9 @@ env:
 jobs:
   plan:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: read
     outputs:
       rust_changed: ${{ steps.m.outputs.rust_changed }}
       providers_changed: ${{ steps.m.outputs.providers_changed }}
@@ -43,6 +46,20 @@ jobs:
       images_changed: ${{ steps.m.outputs.images_changed }}
       sequence: ${{ steps.m.outputs.sequence }}
     steps:
+      - name: Check Pages is enabled with GitHub Actions before building
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          settings="https://github.com/$GH_REPO/settings/pages"
+          build_type=$(gh api "repos/$GH_REPO/pages" --jq .build_type) || {
+            echo "::error::Cannot read GitHub Pages configuration. Enable Pages at $settings and set Build and deployment > Source to GitHub Actions, then rerun the workflow."
+            exit 1
+          }
+          if [ "$build_type" != workflow ]; then
+            echo "::error::GitHub Pages source must be GitHub Actions (found: $build_type). Change it at $settings before releasing."
+            exit 1
+          fi
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
@@ -523,6 +540,9 @@ jobs:
   pages:
     needs: publish
     runs-on: ubuntu-24.04
+    env:
+      # Re-runs retain earlier artifacts; deploy-pages requires exactly one artifact with this name.
+      PAGES_ARTIFACT: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
     permissions:
       pages: write
       id-token: write
@@ -530,6 +550,8 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
+      - name: Check Pages configuration before deployment
+        uses: actions/configure-pages@v5
       - uses: actions/download-artifact@v4
         with: { name: site-new, path: new }
       - name: Merge with the published site (immutable releases kept, pointer replaced last)
@@ -551,6 +573,10 @@ jobs:
           mkdir -p site/channels && cp new/channels/* site/channels/
           jq --arg v "$TAG" --arg c "$CHANNEL" '.groups = (.groups + [$v] | unique) | .channels = (.channels + [$c] | unique)' site/index.json > site/index.tmp && mv site/index.tmp site/index.json
       - uses: actions/upload-pages-artifact@v3
-        with: { path: site }
+        with:
+          name: ${{ env.PAGES_ARTIFACT }}
+          path: site
       - id: deploy
         uses: actions/deploy-pages@v4
+        with:
+          artifact_name: ${{ env.PAGES_ARTIFACT }}

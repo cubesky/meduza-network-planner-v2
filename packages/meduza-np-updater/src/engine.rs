@@ -397,7 +397,8 @@ impl<'a> Engine<'a> {
         store.init()?;
         let previous = self.installed()?;
         if !plan.changed() {
-            // Record the group as current (reused packages) without touching anything.
+            self.reconcile_planner(plan)?;
+            // Record the group as current (reused packages) without changing package files.
             if previous.group_version.as_deref() != Some(&plan.group_version) && !previous.packages.is_empty() {
                 let mut s = previous.clone();
                 s.group_version = Some(plan.group_version.clone());
@@ -648,6 +649,25 @@ impl<'a> Engine<'a> {
         Ok(())
     }
 
+    fn reconcile_planner(&self, plan: &Plan) -> Result<(), String> {
+        if self.cfg.backend != Backend::Store || planner::boot_id(self.planner).is_none() {
+            return Ok(());
+        }
+        let expected: Vec<(String, String)> = plan
+            .target()
+            .filter(|a| a.package != "meduza-np-updater")
+            .filter_map(|a| a.to.clone().map(|v| (a.package.clone(), v)))
+            .collect();
+        if planner::verify_packages(self.planner, &expected).is_ok() {
+            return Ok(());
+        }
+        // Planner may have scanned the previous store view before opening its socket. An install in that
+        // startup gap saw it as down and skipped rescan; unchanged package bits still need registration.
+        eprintln!("installed packages are not reflected in planner; rescanning its registry");
+        self.planner.call("registry.rescan", Value::Null)?;
+        planner::verify_packages(self.planner, &expected).map_err(|e| format!("installed package verification failed after rescan: {e}"))
+    }
+
     fn restart_and_verify(&self, j: &Journal, next: &InstalledSet, affected: &[String]) -> Result<(), String> {
         if !j.planner_was_up {
             // Bootstrap / planner down: its owner starts it on the new set; nothing to verify against.
@@ -848,7 +868,12 @@ impl<'a> Engine<'a> {
         let group = self.check().map_err(|e| e.to_string())?;
         let plan = self.plan(&group)?;
         if !allow_apply || plan.is_blocked() || !plan.changed() {
-            let outcome = if !plan.changed() && !plan.is_blocked() { Some(self.apply(&group, &plan, false)?) } else { None };
+            let outcome = if !plan.changed() && !plan.is_blocked() {
+                // A paused/window-deferred check may inspect the plan, but must not rescan/re-apply services.
+                Some(if allow_apply { self.apply(&group, &plan, false)? } else { Outcome::NoChange })
+            } else {
+                None
+            };
             return Ok((Some(plan), outcome));
         }
         let st = self.load_state();

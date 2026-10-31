@@ -2,10 +2,13 @@
 //! packages only, instances (processes + plugin probes), resources and maintenance.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-use meduza_np_protocol::report::{InstanceStatus, NodeReport, ServiceState, SyncStatus, SystemInfo};
+use meduza_np_protocol::group::InstalledSet;
+use meduza_np_protocol::manifest::PackageRole;
+use meduza_np_protocol::report::{InstanceStatus, NodeReport, PackageStatus, RegistrationState, ServiceState, SyncStatus, SystemInfo};
 use meduza_np_protocol::REPORT_VERSION;
 use serde_json::Value;
 
@@ -82,7 +85,7 @@ pub fn build(p: &Arc<Planner>) -> NodeReport {
             last_error: st.last_error.clone(),
             backoff,
         },
-        packages: registry.package_statuses(),
+        packages: packages(p),
         features,
         instances,
         resources: Some(resources),
@@ -102,5 +105,83 @@ pub fn build(p: &Arc<Planner>) -> NodeReport {
             network_mode: network_mode.map(String::from),
             capabilities: crate::platform::capabilities(&p.platform),
         }),
+    }
+}
+
+pub fn packages(p: &Arc<Planner>) -> Vec<PackageStatus> {
+    let mut packages = p.registry().package_statuses();
+    let data_dir = std::env::var_os("MEDUZA_NP_DATA_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| p.paths.state.clone());
+    add_image_updater(
+        &mut packages,
+        &data_dir.join("store/installed.json"),
+        Path::new("/usr/lib/meduza-np/image/meduza-np-updater"),
+        std::env::var("MEDUZA_NP_IMAGE_UPDATER_VERSION").ok().as_deref(),
+    );
+    packages
+}
+
+// The base image's updater has no store object/manifest. Include its verified installation record so the
+// manager does not mistake this container for a node without an updater and ask for manual installation.
+fn add_image_updater(packages: &mut Vec<PackageStatus>, installed_path: &Path, binary: &Path, image_version: Option<&str>) {
+    if packages.iter().any(|p| p.name == "meduza-np-updater") || !binary.is_file() {
+        return;
+    }
+    let Some(image_version) = image_version.filter(|v| !v.is_empty()) else { return };
+    let Ok(Some(installed)) = meduza_np_runtime::fsutil::read_json::<InstalledSet>(installed_path, 4 * 1024 * 1024) else { return };
+    let Some(updater) = installed.packages.get("meduza-np-updater") else { return };
+    if installed.backend != "store" || updater.source != "image" || updater.version != image_version {
+        return;
+    }
+    packages.push(PackageStatus {
+        name: "meduza-np-updater".into(),
+        version: updater.version.clone(),
+        role: PackageRole::Updater,
+        manifest_digest: String::new(),
+        ui_digest: None,
+        registration: RegistrationState::Registered,
+        reason_code: None,
+        reason: None,
+        provides: vec!["updater.auto-update".into()],
+    });
+    packages.sort_by(|a, b| a.name.cmp(&b.name));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use meduza_np_protocol::group::InstalledPackage;
+
+    #[test]
+    fn image_updater_is_reported_only_when_installed_and_present() {
+        let dir = std::env::temp_dir().join(format!("mnp-report-image-updater-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let record = dir.join("installed.json");
+        let binary = dir.join("meduza-np-updater");
+        std::fs::write(&binary, b"image updater").unwrap();
+        let installed = InstalledSet {
+            format_version: 1,
+            backend: "store".into(),
+            packages: BTreeMap::from([(
+                "meduza-np-updater".into(),
+                InstalledPackage { version: "0.0.8".into(), sha256: String::new(), source: "image".into(), object: None },
+            )]),
+            ..Default::default()
+        };
+        meduza_np_runtime::fsutil::write_json_atomic(&record, &installed, 0o600).unwrap();
+        let mut packages = Vec::new();
+        add_image_updater(&mut packages, &record, &binary, None);
+        add_image_updater(&mut packages, &record, &binary, Some("0.0.7"));
+        add_image_updater(&mut packages, &record, &dir.join("missing"), Some("0.0.8"));
+        assert!(packages.is_empty(), "do not advertise absent or mismatched image installations");
+        add_image_updater(&mut packages, &record, &binary, Some("0.0.8"));
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].name, "meduza-np-updater");
+        assert_eq!(packages[0].version, "0.0.8");
+        assert_eq!(packages[0].registration, RegistrationState::Registered);
+        packages[0].version = "0.0.9".into();
+        add_image_updater(&mut packages, &record, &binary, Some("0.0.8"));
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].version, "0.0.9", "a store-installed updater takes precedence over the image baseline");
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

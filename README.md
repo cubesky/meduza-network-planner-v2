@@ -37,6 +37,22 @@ workflow (`release.yml`) on `v*` tags, including Rust and web tests before build
 re-run by hand for an existing tag and needs the `MEDUZA_NP_RELEASE_KEY` secret (see its header). Pushes to `main`
 and pull requests do not start builds.
 
+Before the first tag, open the repository's **Settings > Pages > Build and deployment > Source** and select
+**GitHub Actions**. The existing release workflow publishes the update feed; no additional Pages workflow is
+needed. In **Settings > Environments > github-pages > Deployment branches and tags**, choose
+**Selected branches and tags** and add a rule with type **Tag** and name pattern `v*` (a Branch rule with the same
+pattern does not allow tags). Keep/add a **Branch** rule for `main` if manually dispatching the release workflow
+from `main`: environment rules match the workflow run's ref, not the tag supplied in its input. A rejection such
+as `Tag "v0.0.8" is not allowed to deploy` requires changing these environment rules.
+`plan` checks Pages configuration before compiling. The workflow token can deploy to an enabled Pages site but
+cannot enable a new site automatically. If deployment returned HTTP 404, correct this setting and use
+**Re-run failed jobs** on that run to retry Pages using the existing build artifacts.
+Pages uploads use `github-pages-<run_id>-<run_attempt>` and deployment selects that exact name, so a retry does
+not collide with uploads from earlier attempts. For an older run using the fixed name `github-pages`, if
+deployment reports multiple artifacts with that name, delete **all** `github-pages` artifacts from that run
+(keep `site-new` and the build artifacts), then re-run the failed Pages job. Re-running an old run uses its
+original workflow revision; committing this fix does not change that run's artifact naming.
+
 Configure `MEDUZA_NP_RELEASE_KEY` with the base64 Ed25519 seed from `meduza-np-updater keygen` (keep the same signing
 key across releases). Before fingerprinting, `plan` derives its public trust store at
 `packages/meduza-np-base-container/trust/release-keys.json` when this file is absent. If committed, the existing
