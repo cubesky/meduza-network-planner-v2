@@ -17,10 +17,15 @@ Rust 1.99.1 (`rust-toolchain.toml`), Node 24 and pnpm 12 (`packageManager` in `p
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked
+cargo build --locked -p meduza-np-wireguard -p meduza-np-planner --bins --examples
+CI=true cargo test --workspace --locked
+python3 -B -m unittest discover -s tests -p 'test_release_*.py'
 pnpm install --frozen-lockfile
 pnpm -r run typecheck && pnpm -r run build && MEDUZA_NP_SKIP_E2E=1 pnpm -r run test
 ```
+
+The planner integration tests launch the WireGuard plugin and fake tool/plugin examples as separate processes.
+Build these executables before testing; `CI=true` makes missing executables fail instead of skipping coverage.
 
 ## Creating a new repository from a source pack
 
@@ -28,6 +33,23 @@ The CI (`.github/workflows/ci.yml`) runs only by hand from the Actions tab. Auto
 workflow (`release.yml`) on `v*` tags, including Rust and web tests before building release artifacts. It can also be
 re-run by hand for an existing tag and needs the `MEDUZA_NP_RELEASE_KEY` secret (see its header). Pushes to `main`
 and pull requests do not start builds.
+
+The tag workflow computes package fingerprints against the last successful group of the selected channel before
+building. Only changed packages (including affected shared dependencies) are built for the release. Unchanged
+archives, OpenWrt packages and SBOMs are copied from their earlier Releases; package versions and SHA-256 digests
+are preserved, and OCI images keep their original digests. The new group points at the copied assets in the new
+Release. The first release builds everything. An unavailable baseline for an existing release history fails rather
+than silently rebuilding every package. Rust and web tests still run for every tag; their dependencies and compiler
+outputs are cached independently of the change/reuse decision.
+
+Cargo registry data, host test/release-tool output, pnpm downloads, cross-linker downloads and each Rust target
+have separate cache scopes, keyed by OS, architecture, toolchain, lockfiles and run. The release tool is built once
+in `plan` and passed to the packaging jobs. Because GitHub isolates caches between different tags, `cache.yml`
+copies compressed cache bundles into the default branch's cache scope after the release run; subsequent tags can
+restore them without a main-branch build. This workflow only stores cache data and does not compile or publish.
+Its temporary handoff artifacts expire after three days; normal Actions cache eviction applies to the stored
+caches. Missing caches cause normal builds. Commit `cache.yml` to the default branch before tagging so that
+GitHub can trigger this cache-only workflow.
 
 1. Create an **empty** repository on GitHub (no README, licence or .gitignore, so the first push needs no merge).
 2. Unpack the pack and, inside `meduza-network-planner-v2/`:

@@ -1,0 +1,84 @@
+name: Release build cache
+description: Restore or export a cache bundle; cache.yml promotes exports to the default branch for reuse across tags.
+inputs:
+  operation:
+    description: restore or save
+    required: true
+  scope:
+    description: Separate namespace for dependencies, host tools, web dependencies, or a Rust target
+    required: true
+  paths:
+    description: Newline-separated relative paths to cache
+    required: true
+  root:
+    description: workspace, cargo, or home
+    default: workspace
+runs:
+  using: composite
+  steps:
+    - id: key
+      shell: bash
+      env:
+        SCOPE: ${{ inputs.scope }}
+        COMPAT: ${{ runner.os }}-${{ runner.arch }}-${{ env.RUST_TOOLCHAIN }}-${{ env.ZIG_VERSION }}-${{ env.CARGO_ZIGBUILD_VERSION }}
+        LOCK: ${{ hashFiles('Cargo.lock', 'pnpm-lock.yaml', 'rust-toolchain.toml') }}
+      run: |
+        [[ "$SCOPE" =~ ^[a-z0-9_-]+$ ]]
+        prefix="build-cache-v1--$SCOPE--$COMPAT-"
+        echo "key=$prefix$LOCK-${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+        echo "prefix=$prefix" >> "$GITHUB_OUTPUT"
+        echo "locked=$prefix$LOCK-" >> "$GITHUB_OUTPUT"
+    - if: inputs.operation == 'restore'
+      uses: actions/cache/restore@v4
+      with:
+        path: .build-cache/${{ inputs.scope }}
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: |
+          ${{ steps.key.outputs.locked }}
+          ${{ steps.key.outputs.prefix }}
+    - if: inputs.operation == 'restore'
+      shell: bash
+      env:
+        SCOPE: ${{ inputs.scope }}
+        ROOT: ${{ inputs.root }}
+      run: |
+        dest="$GITHUB_WORKSPACE"
+        [ "$ROOT" != cargo ] || dest="$HOME/.cargo"
+        [ "$ROOT" != home ] || dest="$HOME"
+        bundle="$GITHUB_WORKSPACE/.build-cache/$SCOPE/cache.tar.zst"
+        if [ -f "$bundle" ]; then
+          mkdir -p "$dest"
+          if ! tar --zstd -xf "$bundle" -C "$dest"; then
+            echo "::warning::Cache $SCOPE could not be restored; rebuilding normally"
+          fi
+        fi
+    - if: inputs.operation == 'save'
+      id: pack
+      shell: bash
+      env:
+        SCOPE: ${{ inputs.scope }}
+        ROOT: ${{ inputs.root }}
+        CACHE_PATHS: ${{ inputs.paths }}
+      run: |
+        src="$GITHUB_WORKSPACE"
+        [ "$ROOT" != cargo ] || src="$HOME/.cargo"
+        [ "$ROOT" != home ] || src="$HOME"
+        bundle="$GITHUB_WORKSPACE/.build-cache/$SCOPE"
+        mkdir -p "$bundle"
+        paths=()
+        while IFS= read -r path; do
+          [ -z "$path" ] || [ ! -e "$src/$path" ] || paths+=("$path")
+        done <<< "$CACHE_PATHS"
+        if [ "${#paths[@]}" -gt 0 ]; then
+          tar --zstd --exclude='*/incremental' -cf "$bundle/cache.tar.zst" -C "$src" "${paths[@]}"
+          echo 'packed=true' >> "$GITHUB_OUTPUT"
+        fi
+    - if: inputs.operation == 'save' && steps.pack.outputs.packed == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.key.outputs.key }}
+        path: .build-cache/${{ inputs.scope }}/cache.tar.zst
+        compression-level: 0
+        include-hidden-files: true
+        retention-days: 3
+        overwrite: true

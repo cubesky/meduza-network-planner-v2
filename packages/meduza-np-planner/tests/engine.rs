@@ -1,6 +1,7 @@
 //! Apply engine integration test with real plugin executables (the WireGuard plugin and a test plugin from
 //! `examples/`), a fake native tool, the real supervisor and a recording network backend.
-//! Run through `cargo test --workspace` so the plugin binaries are built.
+//! First run `cargo build --locked -p meduza-np-wireguard -p meduza-np-planner --bins --examples`,
+//! then `CI=true cargo test --locked --workspace` to require all executable dependencies.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -48,7 +49,7 @@ fn setup(name: &str) -> Option<Env> {
     let fake_plugin = target.join("examples").join(format!("fake_plugin{EXE}"));
     let wg_plugin = target.join(format!("meduza-np-wireguard{EXE}"));
     if !fake_tool.exists() || !fake_plugin.exists() {
-        // CI must never skip silently: `cargo test --workspace` builds examples and all plugin binaries.
+        // CI must never skip silently: the workflow explicitly builds the executable dependencies first.
         assert!(std::env::var_os("CI").is_none(), "example binaries missing in CI: {}", fake_tool.display());
         eprintln!("skipping: example binaries not built ({}); run cargo build --examples", fake_tool.display());
         return None;
@@ -99,7 +100,11 @@ fn setup(name: &str) -> Option<Env> {
     );
 
     let have_wg = wg_plugin.exists();
-    assert!(have_wg || std::env::var_os("CI").is_none(), "WireGuard plugin binary missing in CI");
+    assert!(
+        have_wg || std::env::var_os("CI").is_none(),
+        "WireGuard plugin binary missing in CI: {}; run cargo build --locked -p meduza-np-wireguard",
+        wg_plugin.display()
+    );
     if have_wg {
         let wg = pkgs.join("meduza-np-wireguard");
         let mut manifest: Value =

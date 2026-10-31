@@ -1,0 +1,11 @@
+name: Release tool from plan
+description: Use the release tool already built and tested by this run's plan job.
+runs:
+  using: composite
+  steps:
+    - uses: actions/download-artifact@v4
+      with:
+        name: release-tool
+        path: target/release
+    - shell: bash
+      run: chmod +x target/release/meduza-np-release

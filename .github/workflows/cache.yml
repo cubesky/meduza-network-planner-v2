@@ -1,0 +1,49 @@
+# No compilation runs here. workflow_run runs in the default branch's cache scope, which later tags can read.
+# A cache written directly by v1 cannot be restored by v2, even when the keys are identical.
+name: release cache
+on:
+  workflow_run:
+    workflows: [release]
+    types: [completed]
+permissions:
+  actions: read
+  contents: read
+jobs:
+  discover:
+    if: >-
+      (github.event.workflow_run.event == 'push' || github.event.workflow_run.event == 'workflow_dispatch') &&
+      (github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.conclusion == 'failure')
+    runs-on: ubuntu-24.04
+    outputs:
+      bundles: ${{ steps.list.outputs.bundles }}
+    steps:
+      - id: list
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          bundles=$(gh api "repos/$REPO/actions/runs/$RUN_ID/artifacts?per_page=100" | jq -c '[.artifacts[] | select(.expired == false) | select(.name | startswith("build-cache-v1--")) | {name: .name, scope: (.name | split("--")[1])}]')
+          echo "bundles=$bundles" >> "$GITHUB_OUTPUT"
+  store:
+    needs: discover
+    if: needs.discover.outputs.bundles != '[]'
+    runs-on: ubuntu-24.04
+    # workflow_run is read-only by default; this job only copies bundles from our tag/dispatch release workflow.
+    cache-mode: write-only
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.discover.outputs.bundles) }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: .build-cache/${{ matrix.scope }}
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+      # Keep the bundle compressed. No release scripts or cached executables run in this workflow.
+      - uses: actions/cache/save@v4
+        with:
+          path: .build-cache/${{ matrix.scope }}
+          key: ${{ matrix.name }}

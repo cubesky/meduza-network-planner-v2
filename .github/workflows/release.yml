@@ -51,27 +51,42 @@ jobs:
           fetch-depth: 0
       - name: Toolchain
         run: |
-          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target x86_64-unknown-linux-musl
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal -c clippy,rustfmt --target x86_64-unknown-linux-musl
           rustup default "$RUST_TOOLCHAIN"
-      - name: Tests (protocol/schemas, Rust, web)
-        run: |
-          cargo test --locked --workspace
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 24, cache: pnpm }
-      - run: pnpm install --frozen-lockfile && pnpm -r run typecheck && pnpm -r run build && MEDUZA_NP_SKIP_E2E=1 pnpm -r run test
-      # The dashboard UI is architecture-independent: built once here, packaged with every target's binary (§15.1 step 4)
-      - uses: actions/upload-artifact@v4
-        with: { name: dashboard-www, path: packages/meduza-np-dashboard/dist/www/, if-no-files-found: error }
+      - uses: ./.github/actions/release-cache
+        with:
+          operation: restore
+          scope: cargo
+          root: cargo
+          paths: |
+            registry/index
+            registry/cache
+            git/db
+      - uses: ./.github/actions/release-cache
+        with:
+          operation: restore
+          scope: host
+          paths: |
+            target/debug
+            target/release
       - name: Baseline = last published group of the channel
+        env: { GH_TOKEN: "${{ github.token }}" }
         run: |
           mkdir -p plan
-          if curl -fsSL "$PAGES_URL/channels/$CHANNEL.json" -o plan/pointer.json; then
-            curl -fsSL "$PAGES_URL/$(jq -r .manifest plan/pointer.json)" -o plan/baseline.json
-            echo "baseline $(jq -r .groupVersion plan/baseline.json) seq $(jq -r .sequence plan/baseline.json)"
-          else
-            echo "first release: everything is built"
-          fi
+          status=$(curl --retry 3 -sSL -o plan/pointer.json -w '%{http_code}' "$PAGES_URL/channels/$CHANNEL.json")
+          case "$status" in
+            200)
+              curl --retry 3 -fsSL "$PAGES_URL/$(jq -r .manifest plan/pointer.json)" -o plan/baseline.json
+              echo "$(jq -r .manifestSha256 plan/pointer.json)  plan/baseline.json" | sha256sum -c -
+              echo "baseline $(jq -r .groupVersion plan/baseline.json) seq $(jq -r .sequence plan/baseline.json)"
+              ;;
+            404)
+              published=$(gh api 'repos/${{ github.repository }}/releases?per_page=100' --jq '[.[] | select(.draft == false)] | length')
+              [ "$published" -eq 0 ] || { echo '::error::Published releases exist but the channel baseline is missing; refusing an unintended full rebuild'; exit 1; }
+              echo "first release: everything is built"
+              ;;
+            *) echo "::error::Baseline request failed (HTTP $status)"; exit 1 ;;
+          esac
       - name: Fingerprints and change/reuse matrix
         id: m
         run: |
@@ -91,8 +106,61 @@ jobs:
           echo "providers_changed=$(jq -c .providers plan/jobs.json)" >> "$GITHUB_OUTPUT"
           echo "noarch_changed=$(jq -c .noarch plan/jobs.json)" >> "$GITHUB_OUTPUT"
           echo "images_changed=$(jq -c .images plan/jobs.json)" >> "$GITHUB_OUTPUT"
+      - name: Build integration test executables
+        # Test fixtures are required independently of which production packages changed.
+        run: cargo build --locked -p meduza-np-wireguard -p meduza-np-planner --bins --examples
+      - name: Rust checks and release pipeline tests
+        run: |
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets --locked -- -D warnings
+          cargo test --locked --workspace
+          python3 -B -m unittest discover -s tests -p 'test_release_*.py'
+          sh tools/fix-exec-bits.sh --check
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 24 }
+      - run: pnpm config set store-dir "$PWD/.cache/pnpm"
+      - uses: ./.github/actions/release-cache
+        with:
+          operation: restore
+          scope: web
+          paths: .cache/pnpm
+      - name: Web checks
+        run: pnpm install --frozen-lockfile && pnpm -r run typecheck && MEDUZA_NP_SKIP_E2E=1 pnpm -r run test
+      - name: Build changed dashboard UI once for all architectures
+        if: contains(steps.m.outputs.rust_changed, 'meduza-np-dashboard')
+        run: pnpm --filter @meduza-np/dashboard-web run build
+      - uses: actions/upload-artifact@v4
+        if: contains(steps.m.outputs.rust_changed, 'meduza-np-dashboard')
+        with: { name: dashboard-www, path: packages/meduza-np-dashboard/dist/www/, if-no-files-found: error }
+      - uses: actions/upload-artifact@v4
+        with: { name: release-tool, path: target/release/meduza-np-release, if-no-files-found: error }
       - uses: actions/upload-artifact@v4
         with: { name: plan, path: plan/ }
+      - uses: ./.github/actions/release-cache
+        if: always() && !cancelled()
+        with:
+          operation: save
+          scope: cargo
+          root: cargo
+          paths: |
+            registry/index
+            registry/cache
+            git/db
+      - uses: ./.github/actions/release-cache
+        if: always() && !cancelled()
+        with:
+          operation: save
+          scope: host
+          paths: |
+            target/debug
+            target/release
+      - uses: ./.github/actions/release-cache
+        if: always() && !cancelled()
+        with:
+          operation: save
+          scope: web
+          paths: .cache/pnpm
 
   build-rust:
     needs: plan
@@ -111,31 +179,49 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { name: plan, path: plan }
       - uses: actions/download-artifact@v4
+        if: contains(needs.plan.outputs.rust_changed, 'meduza-np-dashboard')
         with: { name: dashboard-www, path: packages/meduza-np-dashboard/dist/www }
+      - uses: ./.github/actions/release-tool
+      - uses: ./.github/actions/release-cache
+        with:
+          operation: restore
+          scope: cross-tools
+          root: home
+          paths: |
+            .cache/pip
+            .cache/zig
       - name: Toolchain
         run: |
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target ${{ matrix.target }}
           rustup default "$RUST_TOOLCHAIN"
           python3 -m pip install --user "ziglang==${ZIG_VERSION}" "cargo-zigbuild==${CARGO_ZIGBUILD_VERSION}"
           sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-user-static binutils jq
-      - uses: actions/cache@v4
+      - uses: ./.github/actions/release-cache
         with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target/${{ matrix.target }}
-          key: release-${{ matrix.target }}-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: release-${{ matrix.target }}-${{ env.RUST_TOOLCHAIN }}-
+          operation: restore
+          scope: cargo
+          root: cargo
+          paths: |
+            registry/index
+            registry/cache
+            git/db
+      - uses: ./.github/actions/release-cache
+        with:
+          operation: restore
+          scope: rust-${{ matrix.target }}
+          paths: target/${{ matrix.target }}
       - name: Build changed Rust packages (one cargo invocation per target)
         run: |
           pkgs=$(jq -r '.[]' <<< '${{ needs.plan.outputs.rust_changed }}' | sed 's/^/-p /' | tr '\n' ' ')
           cargo zigbuild --locked --release --target ${{ matrix.target }} $pkgs
-          tools/check-elf.sh target/${{ matrix.target }}/release "${{ matrix.machine }}"
-          tools/smoke-bins.sh target/${{ matrix.target }}/release "${{ matrix.qemu }}"
+          mkdir -p checked-bins
+          cargo metadata --locked --no-deps --format-version 1 | jq -r --argjson pkgs '${{ needs.plan.outputs.rust_changed }}' \
+            '.packages[] | select(.name as $n | $pkgs | index($n)) | .targets[] | select(.kind | index("bin")) | .name' | \
+            while read -r bin; do cp "target/${{ matrix.target }}/release/$bin" checked-bins/; done
+          tools/check-elf.sh checked-bins "${{ matrix.machine }}"
+          tools/smoke-bins.sh checked-bins "${{ matrix.qemu }}"
       - name: Package (generic archive + OpenWrt ipk/apk for every OpenWrt arch of this target, D29)
         run: |
-          cargo build --locked --release -p meduza-np-release
           R=target/release/meduza-np-release
           for p in $(jq -r '.[]' <<< '${{ needs.plan.outputs.rust_changed }}'); do
             v=$(jq -r --arg p "$p" '.[$p].version' plan/matrix.json)
@@ -150,6 +236,21 @@ jobs:
           tools/openwrt-apk.sh dist "$R"
       - uses: actions/upload-artifact@v4
         with: { name: "dist-rust-${{ matrix.target }}", path: dist/ }
+      - uses: ./.github/actions/release-cache
+        if: always() && !cancelled()
+        with:
+          operation: save
+          scope: rust-${{ matrix.target }}
+          paths: target/${{ matrix.target }}
+      - uses: ./.github/actions/release-cache
+        if: always() && !cancelled() && matrix.target == 'x86_64-unknown-linux-musl'
+        with:
+          operation: save
+          scope: cross-tools
+          root: home
+          paths: |
+            .cache/pip
+            .cache/zig
 
   build-providers:
     needs: plan
@@ -167,14 +268,14 @@ jobs:
       - uses: actions/download-artifact@v4
         if: contains(needs.plan.outputs.providers_changed, matrix.package)
         with: { name: plan, path: plan }
+      - uses: ./.github/actions/release-tool
+        if: contains(needs.plan.outputs.providers_changed, matrix.package)
       - name: Build with the pinned recipe and package
         if: contains(needs.plan.outputs.providers_changed, matrix.package)
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-user-static podman jq
-          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal && rustup default "$RUST_TOOLCHAIN"
           slug=$(echo ${{ matrix.platform }} | tr / -)
           (cd packages/${{ matrix.package }} && podman build --platform ${{ matrix.platform }} -f build/Containerfile --output type=local,dest=out/$slug .)
-          cargo build --locked --release -p meduza-np-release
           v=$(jq -r --arg p ${{ matrix.package }} '.[$p].version' plan/matrix.json)
           target/release/meduza-np-release package --package ${{ matrix.package }} --version "$v" --platform ${{ matrix.platform }} \
             --tree packages/${{ matrix.package }}/out/$slug --out dist
@@ -194,10 +295,9 @@ jobs:
         with: { ref: "${{ env.TAG }}" }
       - uses: actions/download-artifact@v4
         with: { name: plan, path: plan }
+      - uses: ./.github/actions/release-tool
       - name: Architecture-independent OpenWrt packages (LuCI app)
         run: |
-          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal && rustup default "$RUST_TOOLCHAIN"
-          cargo build --locked --release -p meduza-np-release
           for p in $(jq -r '.[]' <<< '${{ needs.plan.outputs.noarch_changed }}'); do
             v=$(jq -r --arg p "$p" '.[$p].version' plan/matrix.json)
             target/release/meduza-np-release openwrt --package "$p" --version "$v" --noarch 1 --out dist
@@ -211,7 +311,8 @@ jobs:
   build-images:
     needs: [plan, build-rust]
     if: >-
-      always() && needs.plan.result == 'success' && needs.build-rust.result != 'failure' &&
+      always() && needs.plan.result == 'success' &&
+      (needs.build-rust.result == 'success' || needs.build-rust.result == 'skipped') &&
       needs.plan.outputs.images_changed != '[]'
     runs-on: ubuntu-24.04
     permissions:
@@ -225,15 +326,17 @@ jobs:
       - uses: actions/checkout@v4
         with: { ref: "${{ env.TAG }}" }
       - uses: actions/download-artifact@v4
-        with: { path: in }
+        with: { name: plan, path: in/plan }
+      - uses: actions/download-artifact@v4
+        if: needs.build-rust.result == 'success'
+        with: { pattern: dist-rust-*, path: in }
+      - uses: ./.github/actions/release-tool
       - uses: actions/setup-node@v4
         with: { node-version: 24 }
       - name: Tools and registry login
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends podman skopeo qemu-user-static jq
-          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal && rustup default "$RUST_TOOLCHAIN"
-          cargo build --locked --release -p meduza-np-release
           echo "REGISTRY=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
           echo "REGISTRY_AUTH_FILE=$RUNNER_TEMP/auth.json" >> "$GITHUB_ENV"
           printf '%s' "$GH_TOKEN" | REGISTRY_AUTH_FILE=$RUNNER_TEMP/auth.json skopeo login ghcr.io -u "${{ github.actor }}" --password-stdin
@@ -268,9 +371,11 @@ jobs:
   publish:
     needs: [plan, build-rust, build-providers, build-noarch, build-images]
     if: >-
-      always() && needs.plan.result == 'success' && needs.build-rust.result != 'failure' &&
-      needs.build-providers.result != 'failure' && needs.build-noarch.result != 'failure' &&
-      needs.build-images.result != 'failure'
+      always() && needs.plan.result == 'success' &&
+      (needs.build-rust.result == 'success' || needs.build-rust.result == 'skipped') &&
+      (needs.build-providers.result == 'success' || needs.build-providers.result == 'skipped') &&
+      (needs.build-noarch.result == 'success' || needs.build-noarch.result == 'skipped') &&
+      (needs.build-images.result == 'success' || needs.build-images.result == 'skipped')
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -279,26 +384,39 @@ jobs:
       - uses: actions/checkout@v4
         with: { ref: "${{ env.TAG }}" }
       - uses: actions/download-artifact@v4
-        with: { path: in }
+        with: { name: plan, path: in/plan }
+      - uses: actions/download-artifact@v4
+        if: needs.build-rust.result == 'success' || needs.build-providers.result == 'success' || needs.build-noarch.result == 'success'
+        with: { pattern: dist-*, path: in }
+      - uses: actions/download-artifact@v4
+        if: needs.build-images.result == 'success'
+        with: { pattern: oci-*, path: in }
+      - uses: ./.github/actions/release-tool
+      - name: Toolchain for SBOM dependency metadata
+        run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal && rustup default "$RUST_TOOLCHAIN"
+      - uses: ./.github/actions/release-cache
+        with:
+          operation: restore
+          scope: cargo
+          root: cargo
+          paths: |
+            registry/index
+            registry/cache
+            git/db
       - name: Collect changed artifacts
         run: |
           mkdir -p dist && find in -path 'in/dist-*' -type f -exec cp {} dist/ \;
           ls -la dist
-      - name: Verify reused artifacts still exist with their digests (§15.1 step 5)
+      - name: Copy unchanged assets from earlier Releases and verify size + SHA-256
         run: |
           [ -f in/plan/baseline.json ] || exit 0
-          for p in $(jq -r 'to_entries[] | select(.value.changed | not) | .key' in/plan/matrix.json); do
-            # registry images of reused packages are verified when they get the group tag (next step)
-            jq -c --arg p "$p" '.packages[] | select(.name == $p) | .artifacts[] | select(.format != "oci")' in/plan/baseline.json | while read -r a; do
-              url=$(jq -r .url <<< "$a"); sha=$(jq -r .sha256 <<< "$a")
-              curl -fsSL "$url" -o /tmp/reuse && echo "$sha  /tmp/reuse" | sha256sum -c - >/dev/null || { echo "reused $p artifact $url failed verification"; exit 1; }
-            done
-          done
+          python3 -B tools/release-reuse.py --baseline in/plan/baseline.json --matrix in/plan/matrix.json \
+            --out dist --url-base "https://github.com/${{ github.repository }}/releases/download/$TAG" \
+            --baseline-out in/plan/reused.json
       - name: OCI distribution images of changed packages, group tag on every image (§15.1 step 6, D30)
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
           sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
-          cargo build --locked --release -p meduza-np-release
           R=target/release/meduza-np-release
           REGISTRY="ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
           export REGISTRY_AUTH_FILE=$RUNNER_TEMP/auth.json
@@ -329,7 +447,6 @@ jobs:
           ls -la oci
       - name: SBOMs of the changed packages (CycloneDX 1.5, §15.1 step 7)
         run: |
-          cargo build --locked --release -p meduza-np-release
           mkdir -p sbom
           export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
           for p in $(jq -r 'to_entries[] | select(.value.changed) | .key' in/plan/matrix.json); do
@@ -344,7 +461,12 @@ jobs:
         run: |
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --draft --title "$TAG" --notes "Meduza NP package group $TAG"
           existing=$(gh release view "$TAG" --json assets -q '.assets[].name')
-          # unchanged packages keep the SBOM published with their (unchanged) version in the earlier release
+          # Preserve SBOMs of unchanged versions as well as their package bytes.
+          for p in $(jq -r 'to_entries[] | select(.value.changed | not) | .key' in/plan/matrix.json); do
+            v=$(jq -r --arg p "$p" '.[$p].version' in/plan/matrix.json)
+            origin=$(jq -r --arg p "$p" '.[$p].reusedFromGroup' in/plan/matrix.json)
+            gh release download "$origin" --pattern "${p}_${v}.cdx.json" --dir sbom --skip-existing
+          done
           for f in dist/*.tar.gz dist/*.ipk dist/*.apk sbom/*.cdx.json; do
             [ -f "$f" ] || continue
             # immutable: an asset already uploaded by an earlier run of this tag is never replaced
@@ -356,10 +478,9 @@ jobs:
           KEY: ${{ secrets.MEDUZA_NP_RELEASE_KEY }}
         run: |
           umask 077 && printf '%s' "$KEY" > /tmp/release.key
-          cargo build --locked --release -p meduza-np-release
-          mkdir -p site && base=""; [ -f in/plan/baseline.json ] && base="--baseline in/plan/baseline.json"
+          mkdir -p site && base=""; [ -f in/plan/reused.json ] && base="--baseline in/plan/reused.json"
           target/release/meduza-np-release group --group-version "$TAG" --sequence ${{ needs.plan.outputs.sequence }} \
-            --commit "$GITHUB_SHA" --matrix in/plan/matrix.json --artifacts dist --oci oci --require-oci 1 $base \
+            --commit "$(git rev-parse HEAD)" --matrix in/plan/matrix.json --artifacts dist --oci oci --require-oci 1 $base \
             --url-base "https://github.com/${{ github.repository }}/releases/download/$TAG" \
             --site site --channel "$CHANNEL" --key /tmp/release.key
           rm -f /tmp/release.key
