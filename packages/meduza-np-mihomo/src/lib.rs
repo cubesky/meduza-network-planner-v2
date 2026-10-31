@@ -805,8 +805,8 @@ mod tests {
     fn tproxy_rules_reference_sets_and_exclusions() {
         let r = req(base());
         let cfg = load(&r).unwrap().unwrap();
-        // Host facts (nft binary, tproxy module) vary between test machines; everything else must be clean.
-        let errs: Vec<_> = validate(&cfg, &r).into_iter().filter(|e| e.path != "/mode").collect();
+        // Host facts (nft binary, tproxy/conntrack modules) vary between test machines; everything else must be clean.
+        let errs: Vec<_> = validate(&cfg, &r).into_iter().filter(|e| e.path != "/mode" && e.path != "/tproxy/useConntrack").collect();
         assert!(errs.is_empty(), "{errs:?}");
         let t = tproxy_table(&cfg, &r);
         assert!(t.contains("set proxy_servers_v4"));

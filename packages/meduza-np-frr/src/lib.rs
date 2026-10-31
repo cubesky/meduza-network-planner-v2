@@ -413,6 +413,15 @@ pub fn system_frr_running() -> Option<String> {
 }
 
 pub fn validate(cfg: &FrrConfig, req: &PluginRequest) -> Vec<ValidationError> {
+    let mut errors = validate_config(cfg, req);
+    if cfg.enabled {
+        errors.extend(validate_environment(cfg, req));
+    }
+    errors
+}
+
+// Keep configuration validation independent of the host's installed daemons and privileges.
+fn validate_config(cfg: &FrrConfig, req: &PluginRequest) -> Vec<ValidationError> {
     let mut v = Validator::new();
     if !cfg.enabled {
         return Vec::new();
@@ -561,6 +570,11 @@ pub fn validate(cfg: &FrrConfig, req: &PluginRequest) -> Vec<ValidationError> {
             }
         }
     }
+    v.finish().err().unwrap_or_default()
+}
+
+fn validate_environment(cfg: &FrrConfig, req: &PluginRequest) -> Vec<ValidationError> {
+    let mut v = Validator::new();
     // Optional daemons are only required when their feature is configured (§9.5 "按配置按需启用").
     if let Some(p) = req.providers.get(SLOT) {
         let dir = std::path::Path::new(&p.path).parent().map(|d| d.to_path_buf()).unwrap_or_default();
@@ -1469,10 +1483,7 @@ mod tests {
     fn bgp_matches_spec_and_policies_are_complete() {
         let r = req(base());
         let cfg = load(&r).unwrap();
-        let errs: Vec<_> = validate(&cfg, &r)
-            .into_iter()
-            .filter(|e| !e.message.contains("system FRR") && !e.message.contains("is not installed next to"))
-            .collect();
+        let errs = validate_config(&cfg, &r);
         assert!(errs.is_empty(), "{errs:?}");
         let files = render(&cfg, &r).unwrap();
         let b = &files["bgpd"];
@@ -1518,6 +1529,21 @@ mod tests {
         assert_eq!(procs[0].id, "frr/zebra", "zebra starts first");
         assert!(procs[0].bound_to.is_none());
         assert!(procs[1..].iter().all(|p| p.bound_to.as_deref() == Some("frr/zebra")), "daemons restart with zebra");
+    }
+
+    #[test]
+    fn environment_checks_apply_only_when_enabled() {
+        let mut r = req(base());
+        r.providers.get_mut(SLOT).unwrap().path = "/meduza-np-test-missing-frr/zebra".into();
+        let mut cfg = load(&r).unwrap();
+        assert!(validate_config(&cfg, &r).is_empty());
+        let errors = validate(&cfg, &r);
+        assert!(errors.iter().any(|e| e.message.contains("bfdd is not installed next to")), "{errors:?}");
+        if meduza_np_plugin_sdk::has_effective_capability(meduza_np_plugin_sdk::CAP_SYS_ADMIN) == Some(false) {
+            assert!(errors.iter().any(|e| e.message.contains("CAP_SYS_ADMIN")), "{errors:?}");
+        }
+        cfg.enabled = false;
+        assert!(validate(&cfg, &r).is_empty());
     }
 
     #[test]
