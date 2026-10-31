@@ -11,11 +11,12 @@
 #   5. host admin tool: status, consistent backup into the volume; the root filesystem is not writable
 #   6. graceful SIGTERM stop (exit 0), re-creation without the bootstrap secret keeps all data: bootstrap stays
 #      "completed", the passkey still signs in, the node is still enrolled, recovery invite works
-#   7. the Quadlet files in deploy/podman are accepted by the local Quadlet generator (dry run)
+# Quadlet files in deploy/podman are checked first, before building or starting containers.
 #
 # Usage: tools/manager-podman-smoke.sh [WORKDIR]   (needs: podman, node 24, curl, jq)
 # Env: SKIP_BUILD=1 reuses $IMAGE; KEEP=1 leaves container, volume and secrets for inspection;
-#      MANAGER_SMOKE_PORT (default 18787).
+#      MANAGER_SMOKE_PORT (default 18787); QUADLET_ONLY=1 checks units without building/running containers;
+#      QUADLET overrides the generator path (otherwise uses the installed Podman generator).
 set -eu
 
 REPO=$(cd "$(dirname "$0")/.." && pwd)
@@ -28,6 +29,33 @@ VOL=mnp-manager-smoke-data
 SECRETS="mnp-smoke-session mnp-smoke-secret mnp-smoke-bootstrap"
 APP=/app/packages/meduza-np-manager/dist/server/src
 mkdir -p "$W"
+W=$(cd "$W" && pwd)
+
+check_quadlet() {
+	step "Quadlet dry run"
+	if [ -z "${QUADLET:-}" ]; then
+		for q in /usr/libexec/podman/quadlet /usr/lib/podman/quadlet; do
+			if [ -x "$q" ]; then QUADLET=$q; break; fi
+		done
+	fi
+	if [ -z "${QUADLET:-}" ]; then
+		echo "FAIL: Quadlet generator not found (Podman >= 4.8 required)" >&2
+		return 1
+	fi
+	mkdir -p "$W/quadlet"
+	cp "$REPO"/packages/meduza-np-manager/deploy/podman/*.container "$REPO"/packages/meduza-np-manager/deploy/podman/*.volume \
+		"$REPO"/packages/meduza-np-manager/deploy/podman/*.network "$W/quadlet/"
+	QUADLET_UNIT_DIRS="$W/quadlet" "$QUADLET" -dryrun -user >"$W/quadlet.out" 2>&1 || {
+		cat "$W/quadlet.out" >&2; echo "FAIL: quadlet rejected the units" >&2; return 1;
+	}
+	if grep -qi 'unsupported key' "$W/quadlet.out" ||
+		! grep -q '^ExecStart=.*podman run .*--stop-timeout=30' "$W/quadlet.out" ||
+		! grep -q '^TimeoutStopSec=45$' "$W/quadlet.out"; then
+		cat "$W/quadlet.out" >&2
+		echo "FAIL: quadlet did not produce the expected service with graceful stop" >&2
+		return 1
+	fi
+}
 
 fail() { echo "FAIL: $*" >&2; podman logs $NAME 2>&1 | tail -30 >&2 || true; exit 1; }
 step() { echo "== $*"; }
@@ -38,6 +66,13 @@ cleanup() {
 	podman volume rm -f $VOL >/dev/null 2>&1 || true
 	for s in $SECRETS; do podman secret rm $s >/dev/null 2>&1 || true; done
 }
+
+# Keep validation independent of Podman runtime state, including cleanup traps.
+check_quadlet
+if [ "${QUADLET_ONLY:-0}" = 1 ]; then
+	echo "manager Quadlet check: passed"
+	exit 0
+fi
 trap cleanup EXIT
 
 wait_ready() {
@@ -135,19 +170,5 @@ api status smoke-1 >"$W/node.json" || fail "passkey sign-in after re-creation"
 grep -q 'smoke-1' "$W/node.json" || fail "node lost after re-creation"
 grep -Eq '"enrolled_?[aA]t": "20' "$W/node.json" || { cat "$W/node.json" >&2; fail "node enrollment lost"; }
 podman exec $NAME node $APP/admin.js recovery-invite owner | grep -q "$ORIGIN/" || fail "recovery invite"
-
-step "7. Quadlet dry run"
-QUADLET=
-for q in /usr/libexec/podman/quadlet /usr/lib/podman/quadlet; do [ -x $q ] && QUADLET=$q && break; done
-if [ -n "$QUADLET" ]; then
-	mkdir -p "$W/quadlet"
-	cp "$REPO"/packages/meduza-np-manager/deploy/podman/*.container "$REPO"/packages/meduza-np-manager/deploy/podman/*.volume \
-		"$REPO"/packages/meduza-np-manager/deploy/podman/*.network "$W/quadlet/"
-	QUADLET_UNIT_DIRS="$W/quadlet" $QUADLET -dryrun -user >"$W/quadlet.out" 2>&1 || { cat "$W/quadlet.out" >&2; fail "quadlet rejected the units"; }
-	grep -q '^ExecStart=.*podman run' "$W/quadlet.out" || { cat "$W/quadlet.out" >&2; fail "quadlet produced no service"; }
-	if grep -qi 'unsupported key' "$W/quadlet.out"; then cat "$W/quadlet.out" >&2; fail "quadlet: unsupported keys"; fi
-else
-	echo "   (no quadlet generator on this host; skipped)"
-fi
 
 echo "manager podman smoke: all checks passed"

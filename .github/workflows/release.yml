@@ -355,6 +355,9 @@ jobs:
           echo "REGISTRY=ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
           echo "REGISTRY_AUTH_FILE=$RUNNER_TEMP/auth.json" >> "$GITHUB_ENV"
           printf '%s' "$GH_TOKEN" | REGISTRY_AUTH_FILE=$RUNNER_TEMP/auth.json skopeo login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - name: Validate manager Quadlet before building images
+        if: matrix.package == 'meduza-np-manager'
+        run: QUADLET_ONLY=1 tools/manager-podman-smoke.sh "$RUNNER_TEMP/manager-quadlet"
       - name: Updater archives the base image embeds (verified by digest)
         if: matrix.package == 'meduza-np-base-container'
         run: |

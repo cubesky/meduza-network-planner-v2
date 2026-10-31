@@ -31,7 +31,8 @@ HealthTimeout=5s
 HealthRetries=3
 HealthStartPeriod=40s
 HealthOnFailure=kill
-StopTimeout=30
+# Podman 4.8/4.9 Quadlet does not support the StopTimeout key.
+PodmanArgs=--stop-timeout=30
 LogDriver=journald
 
 [Service]
@@ -39,6 +40,8 @@ Restart=on-failure
 RestartSec=10
 # Migrations run before the server accepts requests; allow time on large databases.
 TimeoutStartSec=300
+# Leave time for Podman's 30-second graceful stop before systemd intervenes.
+TimeoutStopSec=45
 
 [Install]
 WantedBy=default.target
