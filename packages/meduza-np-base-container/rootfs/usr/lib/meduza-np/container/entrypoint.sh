@@ -17,6 +17,8 @@ RUN_DIR=${MEDUZA_NP_RUN_DIR:-/run/meduza-np}
 EX_TAKEOVER=75
 
 log() { echo "meduza-np-container[$1]: $2" >&2; }
+. "$(dirname "$0")/network.sh"
+trap stop_dns_monitor EXIT
 
 # tini signals only this script. A shell without a trap exits at once on SIGTERM, the container ends and the role
 # process is SIGKILLed with it, so planner never stopped its daemons on `podman stop` / `systemctl stop` (D57). The
@@ -25,6 +27,7 @@ stopping=0
 child=""
 on_stop() {
 	stopping=1
+	stop_dns_monitor
 	if [ -n "$child" ]; then kill -TERM "$child" 2>/dev/null || true; fi
 }
 trap on_stop TERM INT
@@ -66,6 +69,7 @@ store_updater() {
 }
 
 run_updater() {
+	start_network
 	ensure_dirs
 	mkdir -p "$STORE"
 	quick_failures=0
@@ -217,6 +221,7 @@ wait_for_bus() {
 }
 
 run_planner() {
+	start_network
 	ensure_dirs
 	mkdir -p "${MEDUZA_NP_ETC_DIR:-$DATA/etc}" "${MEDUZA_NP_STATE_DIR:-$DATA}"
 	wait_for_planner_package

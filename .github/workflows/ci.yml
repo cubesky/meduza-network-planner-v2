@@ -57,6 +57,10 @@ jobs:
       # scripts committed from Windows lose their executable bit; name them here instead of failing deep in a later job
       - name: scripts are executable
         run: sh tools/fix-exec-bits.sh --check
+      - name: container bootstrap networking
+        run: |
+          python3 tools/container-network-test.py
+          sudo python3 tools/container-network-test.py --real-network
 
   rust-targets:
     name: build ${{ matrix.target }}

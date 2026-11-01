@@ -28,6 +28,7 @@ container's own namespace only; see [Rootless](#rootless)).
 | `Containerfile` | image build (context prepared by release tooling: `bin/<arch>/meduza-np-updater`, `trust/release-keys.json`) |
 | `deploy/podman/*.container, *.volume, *.network` | Quadlet units, bridge mode (copy to `/etc/containers/systemd/`) |
 | `deploy/podman/host/meduza-np-planner.container` | planner in host network mode (replaces the bridge planner unit) |
+| `deploy/podman/macvlan/` | rootful macvlan network and both roles with independent static LAN addresses |
 | `deploy/podman/run.sh` | the same deployment with plain `podman run` (hosts without systemd) |
 | `deploy/podman/base-image.sh` | host helper: replace / roll back the base image (verified digest, store check, health, restore) |
 | `deploy/podman/meduza-np.env.example` | deployment parameters → `/etc/meduza-np/node.env` |
@@ -55,6 +56,84 @@ never reconnects (D42). With Quadlet, add the `ExecStartPost=` line the planner 
 Stopping is graceful: the entrypoint forwards SIGTERM to planner (which stops its daemons) or the updater and exits
 0 once it is gone, so `systemctl stop` / `podman stop` / a re-run of run.sh no longer kill planner with the
 container (D57; images built before that do).
+
+### macvlan side router
+
+LAN clients receive the **planner's LAN IP** as their gateway and DNS from the main router's DHCP server.
+The image's own software (planner, updater, package downloads and other local connections) uses the **main router**
+as its upstream gateway and independent system DNS. This bootstrap path works before remote configuration arrives
+and while the client-facing DNS/proxy services are stopped. Remote configuration still controls the LAN-facing
+services and routes; Mihomo's TPROXY rules act on incoming LAN traffic, not the node's own outbound connections.
+
+Use rootful Podman and a macvlan network with static IPAM. Reserve two free LAN addresses outside the main router's
+DHCP pool: one for planner (the side router), another for the independent updater. Both containers connect directly
+to the main router, so updater does not depend on planner or host routing to fetch the first packages. Edit the NIC,
+subnet and addresses below for your LAN:
+
+```sh
+podman network create --driver macvlan --opt parent=eth0 --ipam-driver host-local \
+  --subnet 192.168.1.0/24 --gateway 192.168.1.1 meduza-np-lan
+```
+
+In `/etc/meduza-np/node.env`, set the main router's LAN IP and independent DNS servers:
+
+```dotenv
+MEDUZA_NP_DEFAULT_GW=192.168.1.1
+MEDUZA_NP_DEFAULT_GW_DEV=eth0
+MEDUZA_NP_DNS_NAMESERVERS=223.5.5.5,119.29.29.29
+MEDUZA_NP_DNS_MONITOR_INTERVAL=5
+```
+
+The gateway and DNS may use different addresses. `DEFAULT_GW_DEV` names the interface **inside** each container,
+not the host parent NIC; omit it to let the kernel find the interface to the gateway. DNS may point to the main
+router if it resolves independently of this side router; never point bootstrap DNS at the planner's own IP or a
+resolver that forwards back to it.
+
+```sh
+deploy/podman/run.sh --env-file /etc/meduza-np/node.env --network macvlan \
+  --macvlan-network meduza-np-lan --ip 192.168.1.2 --updater-ip 192.168.1.3
+```
+
+`--macvlan-network` selects an existing network (default `meduza-np-lan`); the script verifies the driver before
+replacing containers. Both static IP arguments are required and must differ. `run.sh --again` and the base-image
+replacement helper retain these settings. A network change requires creating/selecting the appropriate network;
+re-running `podman network create` with the same name does not update the existing network.
+
+For Quadlet, edit `deploy/podman/macvlan/meduza-np-lan.network` (parent, subnet, gateway) and the `IP=` in both
+macvlan `.container` files. Install these three files instead of the bridge network/container files, together with
+the usual volume files, and use the same `node.env`. Pin the image digest in both container files as usual.
+
+| Environment variable | Behavior |
+| --- | --- |
+| `MEDUZA_NP_DEFAULT_GW` | IPv4 default gateway, applied to both roles before any download/dependency setup; requires declared `macvlan` mode and `NET_ADMIN` |
+| `MEDUZA_NP_DEFAULT_GW_DEV` | Optional container interface for that gateway |
+| `MEDUZA_NP_DNS_NAMESERVERS` | Comma/whitespace-separated IPv4/IPv6 system resolver addresses; applied to both roles in any mode |
+| `MEDUZA_NP_DNS_MONITOR_INTERVAL` | Positive integer seconds between DNS restoration checks; default 5 |
+
+Old-image names remain supported: `DEFAULT_GW`, `DEFAULT_GW_DEV`, `DNS_NAMESERVERS` (or `DNS_NAMESERVER`),
+`DNS_MONITOR_INTERVAL`. The corresponding `MEDUZA_NP_*` variable takes precedence, including an explicit empty
+value. An unset/empty gateway or DNS leaves the runtime's corresponding setting alone; no public resolver is
+forced by default. Invalid values or an unsuccessful initial route/DNS write stop the role with an error before
+it starts. DNS preserves resolver search/options and writes through the runtime's mounted `resolv.conf`; it is
+restored if another process overwrites its nameserver list. The monitor stops with its role.
+
+The supplied deployment uses static IPAM, so it does not acquire or renew a DHCP gateway/DNS lease. The startup
+gateway override replaces the metric-zero default route (and takes precedence over defaults with higher metrics).
+It is not a DHCP client or a watcher that competes with runtime DHCP renewals. Both macvlan units grant updater
+`NET_ADMIN` only to apply this explicit route; updater remains without network administration privileges in the
+bridge/host deployment. A gateway override in bridge/host mode is rejected, so it cannot change the host default
+route by accident. Host mode continues to use planner's remotely configured host networking.
+
+macvlan exposes listeners directly on each container's LAN IP, so do not use `--publish`/`PublishPort`.
+The parent host and macvlan containers are isolated by Linux by default: if the manager/update source is on the
+parent host, provide a host macvlan interface with a suitable route or another reachable address. The upstream
+switch/NIC must allow multiple MAC addresses. Container routing affects clients that actually send traffic to
+the planner IP; it does not take over the host's network namespace.
+
+Validation: `python3 tools/container-network-test.py` covers both roles' startup order, legacy variables, malformed
+parameters, DNS overwrite recovery, mode restrictions and deployment replay. On a Linux host with network/mount
+namespace privileges, `sudo python3 tools/container-network-test.py --real-network` checks real macvlan routing
+and a bind-mounted resolver in isolated namespaces. These checks are also in CI.
 
 ### Rootless
 

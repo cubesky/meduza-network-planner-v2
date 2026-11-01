@@ -844,3 +844,11 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   running that check in the actionlint job, and a root README with the publish steps. Tested on Windows git: unpacked,
   `git init` + `git add` gave 0 executables, the script 45; index all LF; `cargo metadata --locked`, `pnpm install
   --frozen-lockfile --lockfile-only` and `cargo fmt --check` pass on the unpacked tree. Not pushed or run on GitHub.
+- 2026-11-02 (per the user) macvlan side-router bootstrap: both planner and updater have their own static LAN IP
+  and go directly to the main router before package downloads or remote configuration. Added optional
+  `MEDUZA_NP_DEFAULT_GW` / `_DEV`, `MEDUZA_NP_DNS_NAMESERVERS` / `_MONITOR_INTERVAL`, legacy image aliases,
+  DNS overwrite recovery, run.sh macvlan selection/replay and rootful Quadlet examples. Planner/manager report
+  macvlan without the bridge-only scope warning. Startup/deployment tests, planner scope and Mihomo tests,
+  manager server compilation/network-mode tests, Quadlet 4.8/4.9 dry runs, Rust formatting and actionlint passed.
+  Real macvlan route/bind-mounted DNS test added to CI; local WSL denies network/mount namespace creation even
+  as root, so that check has not run here. Base image not published or deployed.

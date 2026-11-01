@@ -232,7 +232,7 @@ pub struct SystemInfo {
     pub openwrt: bool,
     #[serde(default)]
     pub container: bool,
-    /// Container network mode the deployment declared (`bridge` or `host`, `MEDUZA_NP_NETWORK_MODE`).
+    /// Container network mode the deployment declared (`bridge`, `host` or `macvlan`, `MEDUZA_NP_NETWORK_MODE`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network_mode: Option<String>,
     /// Effective Linux capabilities of the planner process without the `CAP_` prefix (`NET_ADMIN`, `SYS_ADMIN`, …).

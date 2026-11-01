@@ -1091,6 +1091,8 @@ updater 使用已安装的信任公钥验证签名、摘要、平台、版本序
 | `MEDUZA_NP_UPDATE_CHANNEL` | 默认 `stable`，只接受升级源声明的通道；整组选定组件使用兼容的包组快照。 |
 | `MEDUZA_NP_GROUP_VERSION` | 可选的固定包组版本；设置后只安装该已验证版本集合，后续新包组可检查/提示但不自动越过固定版本。未设置时按通道安排兼容更新。 |
 | `MEDUZA_NP_DATA_DIR` | 默认 `/var/lib/meduza-np`，对应持久卷，保存安装集合、已验证包、staging、上一代、状态和升级 journal；秘密按子目录权限隔离。 |
+| `MEDUZA_NP_DEFAULT_GW` / `MEDUZA_NP_DEFAULT_GW_DEV` | macvlan 部署时镜像自身使用的 IPv4 上联网关及可选容器内接口，在 planner/updater 首次联网前生效；兼容旧变量 `DEFAULT_GW` / `DEFAULT_GW_DEV`。不以此修改 host 模式的宿主默认路由。 |
+| `MEDUZA_NP_DNS_NAMESERVERS` / `MEDUZA_NP_DNS_MONITOR_INTERVAL` | 两角色自身的独立系统 DNS（IP 列表，逗号/空白分隔）及覆盖后恢复检查间隔（默认 5 秒）；兼容旧变量 `DNS_NAMESERVERS` / `DNS_NAMESERVER` / `DNS_MONITOR_INTERVAL`。不依赖镜像内尚未启动的 DNS 服务。 |
 
 最小部署选择示例（使用默认升级源和内置 updater）：
 
@@ -1128,6 +1130,7 @@ MEDUZA_NP_DATA_DIR=/var/lib/meduza-np
 | --- | --- |
 | bridge（默认） | 部署文件显式指定 `--network=bridge`，或等价的已声明 bridge 网络。planner/updater 能主动访问 manager 和签名升级源；按已启用功能声明并映射所需 TCP/UDP 端口，如 VPN 接入、DNS 前置及可选 dashboard。只发布所选功能的端口，不发布 planner 内部控制 API。VPN 接口、FRR 路由、TPROXY 和防火墙资源默认属于 planner 容器的网络命名空间；对外端点、NAT、转发、MTU、源地址变化与回程路由需实际预检并明确配置。 |
 | host | 部署文件显式指定 `--network=host`；planner 所管理网络功能使用宿主网络命名空间，不配置 bridge 端口映射。预检宿主已有监听、接口、路由、规则及系统服务，只操作本项目拥有的资源。对宿主路由/透明代理的变更按显式配置授权并验证权限，不能默认接管全部宿主网络。 |
+| macvlan | rootful Podman；两角色各使用独立静态 LAN IP，直接连接主路由，避免首次引导依赖 planner。主路由 DHCP 向 LAN 客户端下发 planner IP 作为网关与 DNS；镜像自身默认网关和系统 DNS 通过上述环境变量独立固定，先于下载/服务启动生效。提供已有网络接入及 Quadlet 示例，地址排除在 DHCP 池之外，不使用端口映射；容器路由作用于送入其 LAN IP 的流量，不接管宿主命名空间。 |
 
 网络模式与管理范围是独立的部署能力。bridge 中创建的路由或 TPROXY 规则不会自动作用于宿主/LAN 流量；用户要求容器承载 LAN 网关、路由宣告、Anycast 或 mDNS 时，部署计划必须说明其流量如何进入目标命名空间，以及所需的宿主转发/路由、组播或受控集成。缺少条件时在预检和界面显示具体限制，不把“容器内进程已启动”上报为宿主功能生效，也不静默切换到 host。bridge 仍必须完成真实的同步、升级、VPN 接入及声明支持的数据面验证，不能把全部网络业务标为不支持来代替实现。
 

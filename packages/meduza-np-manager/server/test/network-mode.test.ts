@@ -25,7 +25,7 @@ test("capability switches evaluate like the planner", () => {
 test("bridge-network nodes are warned about host-network features before publishing", async () => {
   const { app, s } = await startManager();
   const headers = await adminHeaders(app);
-  for (const id of ["br-a", "host-a"]) {
+  for (const id of ["br-a", "host-a", "mac-a"]) {
     assert.equal((await app.inject({ method: "POST", url: "/api/v1/nodes", headers, payload: { id } })).statusCode, 200);
   }
   const report = (mode: string) =>
@@ -37,14 +37,14 @@ test("bridge-network nodes are warned about host-network features before publish
       system: { arch: "x86_64", os: "linux", container: true, networkMode: mode },
     });
   const now = new Date().toISOString();
-  for (const [id, mode] of [["br-a", "bridge"], ["host-a", "host"]] as const) {
+  for (const [id, mode] of [["br-a", "bridge"], ["host-a", "host"], ["mac-a", "macvlan"]] as const) {
     s.db.run(
       "INSERT INTO node_reports (node_id, boot_id, sequence, observed_at, received_at, report) VALUES (?, 'boot-1', 1, ?, ?, ?)",
       id, now, now, report(mode),
     );
   }
   const node = { services: { avahi: {} } };
-  const doc = { schemaVersion: 1, nodes: { "br-a": node, "host-a": node } };
+  const doc = { schemaVersion: 1, nodes: { "br-a": node, "host-a": node, "mac-a": node } };
   const res = await app.inject({ method: "POST", url: "/api/v1/validate", headers, payload: { document: doc } });
   assert.equal(res.statusCode, 200, res.body);
   const problems = res.json().problems as Array<{ node?: string; path: string; message: string; severity?: string }>;

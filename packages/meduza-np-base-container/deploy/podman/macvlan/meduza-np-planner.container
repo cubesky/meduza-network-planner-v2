@@ -1,0 +1,36 @@
+# Rootful macvlan planner: LAN clients use this IP as their gateway/DNS. EDIT IP for your LAN.
+[Unit]
+Description=Meduza NP planner (macvlan network)
+Wants=network-online.target meduza-np-updater.service
+After=network-online.target meduza-np-updater.service
+
+[Container]
+ContainerName=meduza-np-planner
+Image=ghcr.io/meduza-np/meduza-np-base-container:stable
+Exec=planner
+EnvironmentFile=/etc/meduza-np/node.env
+Environment=MEDUZA_NP_NETWORK_MODE=macvlan
+Network=meduza-np-lan.network
+IP=192.168.1.2
+Volume=meduza-np-node.volume:/var/lib/meduza-np
+Volume=meduza-np-store.volume:/var/lib/meduza-np/store:ro
+Volume=meduza-np-ipc.volume:/run/meduza-np
+DropCapability=ALL
+AddCapability=CHOWN DAC_OVERRIDE FOWNER KILL SETUID SETGID NET_ADMIN NET_RAW NET_BIND_SERVICE
+#AddCapability=SYS_ADMIN
+#AddCapability=SYS_CHROOT
+AddDevice=/dev/net/tun
+Sysctl=net.ipv4.ip_forward=1
+Sysctl=net.ipv4.conf.all.src_valid_mark=1
+# No PublishPort: services are reached directly on the planner's LAN IP.
+HealthCmd=/usr/lib/meduza-np/container/entrypoint.sh health-planner
+HealthInterval=60s
+HealthStartPeriod=10m
+LogDriver=journald
+
+[Service]
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

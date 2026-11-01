@@ -1,0 +1,10 @@
+# Rootful only. EDIT the parent NIC/subnet/gateway for your LAN before installing.
+# Reserve the two container IPs outside the LAN DHCP pool. Static IPAM avoids DHCP overwriting gateway/DNS.
+[Network]
+NetworkName=meduza-np-lan
+Driver=macvlan
+Options=parent=eth0
+Subnet=192.168.1.0/24
+Gateway=192.168.1.1
+IPAMDriver=host-local
+IPv6=false

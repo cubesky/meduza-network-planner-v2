@@ -15,6 +15,7 @@ services:
       - no-new-privileges:true
     tmpfs:
       - /tmp:rw,size=64m,mode=1777
+      - /run/secrets:rw,size=1m,mode=0755,nosuid,nodev,noexec
     ports:
       - "127.0.0.1:8787:8787"
     environment:

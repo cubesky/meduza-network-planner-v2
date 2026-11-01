@@ -601,7 +601,9 @@ mod tests {
         // still running and healthy: the limitation is a statement about scope, not a failure
         assert!(avahi.healthy && avahi.limitation_code.as_deref() == Some("bridge-network"), "{avahi:?}");
         assert!(bridge.iter().find(|f| f.id == "mdns.bridge").unwrap().limitation_code.is_none());
-        assert!(marked(Some("host")).iter().chain(marked(None).iter()).all(|f| f.limitation_code.is_none()));
+        for mode in [Some("host"), Some("macvlan"), None] {
+            assert!(marked(mode).iter().all(|f| f.limitation_code.is_none()));
+        }
         // a capability that is not enabled carries no limitation
         let mut off = reg.features(&BTreeMap::new(), &up, &up);
         reg.mark_network_scope(&mut off, Some("bridge"));

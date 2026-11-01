@@ -189,7 +189,7 @@ export class ConfigService {
       reported: true,
       packages,
       capabilities,
-      ...(mode === "bridge" || mode === "host" ? { networkMode: mode } : {}),
+      ...(mode === "bridge" || mode === "host" || mode === "macvlan" ? { networkMode: mode } : {}),
       ...(Array.isArray(linux) ? { linuxCapabilities: new Set(linux) } : {}),
     };
   };

@@ -2,7 +2,8 @@
 # Equivalent of the Quadlet files for hosts without systemd (§14.3.4). Idempotent: re-running replaces the two
 # containers but keeps the volumes (identity, config, installed set, journal, provider data).
 #
-#   ./run.sh [--env-file FILE] [--image REF] [--network bridge|host] [--publish PORT/PROTO]... [--import DIR]
+#   ./run.sh [--env-file FILE] [--image REF] [--network bridge|host|macvlan] [--publish PORT/PROTO]... [--import DIR]
+#   ./run.sh --network macvlan --macvlan-network NAME --ip PLANNER_IP --updater-ip UPDATER_IP [other options]
 #            (--publish PORT/PROTO uses the same host port; HOST:PORT/PROTO or IP:HOST:PORT/PROTO are passed as given)
 #   ./run.sh --again [--image REF]   repeat the last deployment's options (base-image.sh uses this to re-create the
 #                                    containers from another image)
@@ -33,6 +34,9 @@ save_arg() { SAVED_ARGS="$SAVED_ARGS$1
 ENV_FILE=/etc/meduza-np/node.env
 IMAGE=ghcr.io/meduza-np/meduza-np-base-container:stable
 NETMODE=bridge
+MACVLAN_NETWORK=meduza-np-lan
+PLANNER_IP=""
+UPDATER_IP=""
 PUBLISH=""
 IMPORT=""
 UDP_PORTS=""
@@ -42,6 +46,9 @@ while [ $# -gt 0 ]; do
 	--env-file) ENV_FILE=$2; save_arg "$1"; save_arg "$2"; shift 2 ;;
 	--image) IMAGE=$2; shift 2 ;;
 	--network) NETMODE=$2; save_arg "$1"; save_arg "$2"; shift 2 ;;
+	--macvlan-network) MACVLAN_NETWORK=$2; save_arg "$1"; save_arg "$2"; shift 2 ;;
+	--ip) PLANNER_IP=$2; save_arg "$1"; save_arg "$2"; shift 2 ;;
+	--updater-ip) UPDATER_IP=$2; save_arg "$1"; save_arg "$2"; shift 2 ;;
 	--publish)
 		save_arg "$1"
 		save_arg "$2"
@@ -78,36 +85,63 @@ components=$(sed -n 's/^MEDUZA_NP_COMPONENTS=//p' "$ENV_FILE" | tail -1 | tr -d 
 caps="CHOWN,DAC_OVERRIDE,FOWNER,KILL,SETUID,SETGID,NET_ADMIN,NET_RAW,NET_BIND_SERVICE"
 case ",$components," in *,frr,* | *,meduza-np-frr,*) caps="$caps,SYS_ADMIN" ;; esac
 case ",$components," in *,avahi,* | *,meduza-np-avahi,*) caps="$caps,SYS_CHROOT" ;; esac
-case "$NETMODE" in bridge | host) ;; *) echo "--network must be bridge or host" >&2; exit 2 ;; esac
-if [ "$NETMODE" = host ] && [ -n "$PUBLISH" ]; then
-	echo "--publish has no meaning with --network host" >&2
+case "$NETMODE" in bridge | host | macvlan) ;; *) echo "--network must be bridge, host or macvlan" >&2; exit 2 ;; esac
+if [ "$NETMODE" != bridge ] && [ -n "$PUBLISH" ]; then
+	echo "--publish requires --network bridge (host/macvlan expose listeners directly)" >&2
+	exit 2
+fi
+updater_net=meduza-np
+updater_mode=bridge
+updater_caps=CHOWN,DAC_OVERRIDE,FOWNER,SETUID,SETGID
+if [ "$NETMODE" = macvlan ]; then
+	[ "$(id -u)" = 0 ] || { echo "macvlan requires rootful Podman" >&2; exit 2; }
+	[ -n "$PLANNER_IP" ] && [ -n "$UPDATER_IP" ] && [ "$PLANNER_IP" != "$UPDATER_IP" ] ||
+		{ echo "macvlan requires distinct --ip and --updater-ip LAN addresses" >&2; exit 2; }
+	case "$MACVLAN_NETWORK" in '' | *[!a-zA-Z0-9_.-]*) echo "invalid --macvlan-network name" >&2; exit 2 ;; esac
+	for address in "$PLANNER_IP" "$UPDATER_IP"; do
+		# Full address/subnet validation is done by Podman; reject option/network-spec injection here.
+		printf '%s\n' "$address" | awk -F. 'NF != 4 { exit 1 } { for (i=1; i<=4; i++) if ($i !~ /^[0-9]+$/ || $i ~ /^0[0-9]/ || $i+0 > 255) exit 1 }' ||
+			{ echo "macvlan addresses must be IPv4 literals: $address" >&2; exit 2; }
+	done
+	[ "$(podman network inspect --format '{{.Driver}}' "$MACVLAN_NETWORK")" = macvlan ] ||
+		{ echo "create the macvlan network $MACVLAN_NETWORK first (see README)" >&2; exit 2; }
+	updater_net="$MACVLAN_NETWORK:ip=$UPDATER_IP"
+	updater_mode=macvlan
+	# Only for this mode: the entrypoint applies the explicitly configured upstream gateway in its own namespace.
+	updater_caps="$updater_caps,NET_ADMIN"
+elif [ -n "$PLANNER_IP$UPDATER_IP" ] || [ "$MACVLAN_NETWORK" != meduza-np-lan ]; then
+	echo "--ip, --updater-ip and --macvlan-network require --network macvlan" >&2
 	exit 2
 fi
 
 for v in meduza-np-store meduza-np-node meduza-np-ipc; do
 	podman volume exists "$v" || podman volume create "$v" >/dev/null
 done
-podman network exists meduza-np || podman network create --driver bridge meduza-np >/dev/null
+if [ "$NETMODE" != macvlan ]; then
+	podman network exists meduza-np || podman network create --driver bridge meduza-np >/dev/null
+fi
 
 podman rm -f -t 30 meduza-np-planner meduza-np-updater >/dev/null 2>&1 || true
 
 import_mount=""
 [ -n "$IMPORT" ] && import_mount="--volume $IMPORT:/var/lib/meduza-np/import:ro"
 
-# updater: bridge network, no extra capabilities, store volume read-write
+# updater: bridge normally; macvlan gets its own LAN address and upstream route, independent of planner.
 # shellcheck disable=SC2086
 podman run -d --name meduza-np-updater --restart always \
-	--env-file "$ENV_FILE" --network meduza-np \
+	--env-file "$ENV_FILE" --env MEDUZA_NP_NETWORK_MODE="$updater_mode" --network "$updater_net" \
 	--volume meduza-np-store:/var/lib/meduza-np/store \
 	--volume meduza-np-ipc:/run/meduza-np \
 	$import_mount \
-	--cap-drop ALL --cap-add CHOWN,DAC_OVERRIDE,FOWNER,SETUID,SETGID --security-opt no-new-privileges \
+	--cap-drop ALL --cap-add "$updater_caps" --security-opt no-new-privileges \
 	--health-cmd "/usr/lib/meduza-np/container/entrypoint.sh health-updater" --health-interval 60s \
 	--log-opt max-size=10m \
 	"$IMAGE" updater
 
 if [ "$NETMODE" = bridge ]; then
 	net="--network meduza-np --sysctl net.ipv4.ip_forward=1 --sysctl net.ipv4.conf.all.src_valid_mark=1 $PUBLISH"
+elif [ "$NETMODE" = macvlan ]; then
+	net="--network $MACVLAN_NETWORK:ip=$PLANNER_IP --sysctl net.ipv4.ip_forward=1 --sysctl net.ipv4.conf.all.src_valid_mark=1"
 else
 	net="--network host"
 fi

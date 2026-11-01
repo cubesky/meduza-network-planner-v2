@@ -92,7 +92,7 @@ export interface NodeCapabilities {
   packages: Set<string>;
   capabilities: Set<string>;
   /** Container network mode the node declared in its report (`system.networkMode`). */
-  networkMode?: "bridge" | "host";
+  networkMode?: "bridge" | "host" | "macvlan";
   /** Effective Linux capabilities of the node's planner container (`system.capabilities`); absent outside containers. */
   linuxCapabilities?: Set<string>;
 }

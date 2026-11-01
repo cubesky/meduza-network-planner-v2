@@ -1,0 +1,32 @@
+# Rootful macvlan updater: its own IP and direct upstream path, even before planner is installed. EDIT IP.
+[Unit]
+Description=Meduza NP updater (macvlan network)
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+ContainerName=meduza-np-updater
+Image=ghcr.io/meduza-np/meduza-np-base-container:stable
+Exec=updater
+EnvironmentFile=/etc/meduza-np/node.env
+Environment=MEDUZA_NP_NETWORK_MODE=macvlan
+Network=meduza-np-lan.network
+IP=192.168.1.3
+Volume=meduza-np-store.volume:/var/lib/meduza-np/store
+Volume=meduza-np-ipc.volume:/run/meduza-np
+#Volume=/srv/meduza-np-import:/var/lib/meduza-np/import:ro
+HealthCmd=/usr/lib/meduza-np/container/entrypoint.sh health-updater
+HealthInterval=60s
+HealthStartPeriod=30s
+LogDriver=journald
+NoNewPrivileges=true
+DropCapability=ALL
+# NET_ADMIN is needed only to apply the configured default gateway in this container's namespace.
+AddCapability=CHOWN DAC_OVERRIDE FOWNER SETUID SETGID NET_ADMIN
+
+[Service]
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

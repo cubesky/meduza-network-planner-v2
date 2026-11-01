@@ -24,6 +24,7 @@ pub fn network_mode(p: &Platform) -> Option<&'static str> {
     match std::env::var("MEDUZA_NP_NETWORK_MODE").ok()?.trim() {
         "bridge" => Some("bridge"),
         "host" => Some("host"),
+        "macvlan" => Some("macvlan"),
         _ => None,
     }
 }
