@@ -57,6 +57,8 @@ jobs:
       # scripts committed from Windows lose their executable bit; name them here instead of failing deep in a later job
       - name: scripts are executable
         run: sh tools/fix-exec-bits.sh --check
+      - name: Pages discovery API
+        run: python3 -B -m unittest discover -s tests -p 'test_release_pages.py'
       - name: container bootstrap networking
         run: |
           python3 tools/container-network-test.py

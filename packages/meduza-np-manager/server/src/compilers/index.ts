@@ -55,6 +55,12 @@ const compilers = new Map<string, ServiceCompiler>([
 
 /** Brings a service written in an earlier shape to the current one before it is validated against its schema. */
 export function normalizeService(short: string, service: Record<string, unknown>): Record<string, unknown> {
+  if (short === "dnsmasq") {
+    // Backend endpoints follow the enabled DNS services; stale manual lists must not survive a migration.
+    const { backends: _backends, ...out } = service;
+    if (Array.isArray(out.fallbackServers) && out.fallbackServers.length === 0) delete out.fallbackServers;
+    return out;
+  }
   return short === "tinc" ? (normalizeTinc(service) as Record<string, unknown>) : service;
 }
 

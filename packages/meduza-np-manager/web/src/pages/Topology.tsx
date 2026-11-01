@@ -164,7 +164,7 @@ function toGraph(view: View, show: { ibgp: boolean; ebgp: boolean; paths: boolea
   return {
     vertices,
     groups: [
-      ...view.clusters.map((c) => ({ id: c.id, label: asLabel(c.asn, c.internal), color: c.internal ? ibgp : ebgp })),
+      ...view.clusters.map((c) => ({ id: c.id, label: asLabel(c.asn, c.internal), color: c.internal ? ibgp : ebgp, primary: c.internal })),
       { id: NO_BGP, label: t("No BGP"), color: css("--faint") },
     ],
     links: links.map<GraphLink>((l) => {
@@ -178,9 +178,9 @@ function toGraph(view: View, show: { ibgp: boolean; ebgp: boolean; paths: boolea
         color,
         width: l.kind === "ibgp" ? 1.6 : 2.2,
         dash: l.state === "up" ? undefined : l.state === "partial" ? [8, 4] : [4, 4],
-        particles: l.state === "up" ? 2 : 0,
+        particles: l.state === "up" ? 1 : 0,
         // short iBGP links inside an AS cluster, long eBGP links between the clusters
-        length: l.kind === "ibgp" ? 110 : 280,
+        length: l.kind === "ibgp" ? 110 : 420,
       };
     }),
   };
@@ -205,6 +205,7 @@ function useThemeTick(): number {
 
 /** Remembered per browser: whether external ASes are collapsed. */
 const COLLAPSE_KEY = "mnp.topology.collapse";
+const SPACING_KEY = "mnp.topology.spacing";
 const loadCollapse = () => {
   try {
     return localStorage.getItem(COLLAPSE_KEY) === "1";
@@ -212,12 +213,18 @@ const loadCollapse = () => {
     return false;
   }
 };
+const loadSpacing = () => {
+  try {
+    const value = Number(localStorage.getItem(SPACING_KEY));
+    return value >= 1 && value <= 3 ? value : 1.6;
+  } catch { return 1.6; }
+};
 
 export function TopologyPage() {
   const topo = useAsync(() => get<Topology>("/api/v1/topology"), [], 10_000);
   return (
     <div>
-      <PageHead title={t("Topology")} sub={t("BGP sessions between the nodes, from the published configuration and the nodes' FRR reports. Drag a node to move it, drag the background to rotate, scroll to zoom.")} />
+      <PageHead title={t("Topology")} sub={t("BGP sessions between the nodes, from the published configuration and the nodes' FRR reports.")} />
       <Loadable state={topo}>{(data) => <TopologyView topo={data} />}</Loadable>
     </div>
   );
@@ -228,7 +235,8 @@ function TopologyView(props: { topo: Topology }) {
   const graph = useRef<ForceGraph3D | null>(null);
   const [show, setShow] = useState({ ibgp: true, ebgp: true, paths: true });
   const [collapse, setCollapse] = useState(loadCollapse);
-  const [rotate, setRotate] = useState(true);
+  const [rotate, setRotate] = useState(false);
+  const [spacing, setSpacing] = useState(loadSpacing);
   const [tip, setTip] = useState<{ item: GraphItem; x: number; y: number } | null>(null);
   const [selected, setSelected] = useState<GraphItem | null>(null);
   const theme = useThemeTick();
@@ -249,6 +257,10 @@ function TopologyView(props: { topo: Topology }) {
   useEffect(() => {
     if (graph.current) graph.current.autoRotate = rotate;
   }, [rotate]);
+  useEffect(() => {
+    graph.current?.setSpacing(spacing);
+    try { localStorage.setItem(SPACING_KEY, String(spacing)); } catch { /* per-browser convenience */ }
+  }, [spacing]);
   useEffect(() => {
     if (graph.current) graph.current.highlight = selected?.id ?? null;
   }, [selected]);
@@ -275,10 +287,22 @@ function TopologyView(props: { topo: Topology }) {
         <Checkbox label={t("eBGP")} checked={show.ebgp} onChange={(v) => setShow({ ...show, ebgp: v })} />
         {hasPaths && <Checkbox label={t("Remote ASes (from AS paths)")} checked={show.paths} onChange={(v) => setShow({ ...show, paths: v })} />}
         <Checkbox label={t("Collapse external ASes")} checked={collapse} onChange={toggleCollapse} />
-        <Checkbox label={t("Rotate")} checked={rotate} onChange={setRotate} />
+        <Checkbox label={t("Rotate automatically")} checked={rotate} onChange={setRotate} />
+      </div>
+      <div class="graph-controls graph-navigation">
+        <label class="graph-spacing">
+          <span>{t("Cluster spacing")}</span>
+          <input type="range" min="1" max="3" step="0.1" value={spacing} onInput={(e) => setSpacing(e.currentTarget.valueAsNumber)} />
+          <output>{spacing.toFixed(1)}×</output>
+        </label>
         <span class="spacer" />
+        <Button small onClick={() => graph.current?.zoomBy(0.8)}>{t("Zoom in")}</Button>
+        <Button small onClick={() => graph.current?.zoomBy(1.25)}>{t("Zoom out")}</Button>
+        <Button small disabled={!selected} onClick={() => selected && graph.current?.focus(selected)}>{t("Focus selection")}</Button>
+        <Button small onClick={() => graph.current?.fitGraph()}>{t("Fit graph")}</Button>
         <Button small onClick={() => graph.current?.resetView()}>{t("Reset view")}</Button>
       </div>
+      <p class="graph-help muted small" id="topology-controls">{t("Drag the background to rotate; Shift-drag or right-drag to pan; scroll to zoom. Double-click a cluster to focus. Touch: pinch to zoom, two fingers to pan. Keyboard: arrows to rotate, Shift+arrows to pan, +/− to zoom, 0 to reset.")}</p>
       <div class="graph-legend">
         <span><span class="swatch" style={{ borderColor: "var(--accent)" }} />{t("iBGP (Tinc mesh)")} · {up(counts.ibgp)}/{counts.ibgp.length}</span>
         <span><span class="swatch" style={{ borderColor: "var(--ebgp)" }} />{t("eBGP (to the remote AS)")} · {up(counts.ebgp)}/{counts.ebgp.length}</span>
@@ -294,7 +318,7 @@ function TopologyView(props: { topo: Topology }) {
         <span>◆ {t("remote AS (only its number is known)")}</span>
       </div>
       <div class="graph-wrap">
-        <canvas ref={canvas} />
+        <canvas ref={canvas} tabIndex={0} aria-label={t("Interactive routing topology")} aria-describedby="topology-controls" />
         {tip && (
           <div class="graph-tip" style={{ left: `${Math.min(tip.x + 14, (canvas.current?.clientWidth ?? 600) - 330)}px`, top: `${tip.y + 14}px` }}>
             {tip.item.kind === "group" && tip.item.id === NO_BGP ? (

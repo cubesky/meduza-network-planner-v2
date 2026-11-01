@@ -228,12 +228,13 @@ export function convertEtcdExport(input: unknown): ImportResult {
       const c = n.clash;
       const apiRef = `mihomo-api-${id}`;
       need({ id: apiRef, kind: "text", label: `Mihomo API secret of ${source}`, node: id, usedBy: `${base}/services/mihomo/api`, generated: true });
-      const ports = lines(c.exclude_tproxy_port).map(Number).filter((p) => Number.isInteger(p) && p > 0 && p < 65536);
+      const ports = lines(c.exclude_tproxy_port);
       const minutes = num(c.refresh?.interval_minutes);
       const clusterMinutes = (doc.mihomo?.refreshSeconds ?? 0) / 60;
       services.mihomo = {
         enabled: bool(c.enable),
         mode: c.mode === "tproxy" ? "tproxy" : "proxy",
+        socksPort: 7891,
         api: { secretRef: apiRef },
         ...(c.active_subscription && stableId(c.active_subscription) !== doc.mihomo?.default ? { subscription: stableId(c.active_subscription) } : {}),
         ...(minutes && minutes !== clusterMinutes ? { refreshSeconds: Math.max(60, minutes * 60) } : {}),
@@ -241,7 +242,7 @@ export function convertEtcdExport(input: unknown): ImportResult {
           ? {
               tproxy: {
                 ...(c.tproxy_protocol ? { protocols: c.tproxy_protocol === "tcp" ? "tcp" : c.tproxy_protocol === "udp" ? "udp" : "both" } : {}),
-                ...(ports.length ? { excludePorts: ports } : {}),
+                ...(ports.length ? { excludePortRules: ports } : {}),
                 ...(c.exclude_rfc1918 !== undefined ? { excludePrivateDestinations: bool(c.exclude_rfc1918) } : {}),
                 ...(c.use_conntrack !== undefined ? { useConntrack: bool(c.use_conntrack) } : {}),
               },
@@ -249,6 +250,7 @@ export function convertEtcdExport(input: unknown): ImportResult {
           : {}),
       };
       if (c.refresh?.enable === "false") notes.push(`${source}: subscription refresh was off; it refreshes automatically here.`);
+      if (bool(c.enable)) notes.push(`${source}: subscription DNS is controlled by the new planner; configure Mihomo DNS upstreams and its listener explicitly before using it as a DNS backend.`);
     }
 
     // dnsmasq: the export has no listen addresses or fallback servers

@@ -170,9 +170,10 @@ function StatusTab(props: { n: NodeDetail; services: Inst[]; canAct: boolean; re
               label: "",
               render: (r) => {
                 const i = r as Inst;
+                const staticResource = i.kind === "mosdns-provider" || i.kind === "openvpn-provider";
                 const parts = i.id.split("/");
                 // a process restarts alone through its instance; a feature instance (pkg/inst) restarts as a whole
-                const target = i.kind === "process" ? (i.instance as string | undefined) : parts.length >= 2 ? `${parts[0]}/${parts[1]}` : undefined;
+                const target = staticResource ? undefined : i.kind === "process" ? (i.instance as string | undefined) : parts.length >= 2 ? `${parts[0]}/${parts[1]}` : undefined;
                 const proc = i.kind === "process" ? parts.slice(0, -1).join("/") : undefined;
                 return (
                   <span class="row" style={{ justifyContent: "flex-end", flexWrap: "nowrap" }}>
@@ -320,6 +321,17 @@ function ConnectionsTab(props: { items: Inst[]; canAct: boolean; restart: (insta
       <Button small onClick={async () => (await ask(t("Restart {name}? Its connections drop briefly.", { name: i }), { ok: t("Restart") })) && props.restart(i, undefined, i)}>{t("Restart {name}", { name: insts.length > 1 ? i : label })}</Button>
     ));
   };
+  const rowActions = (row: Record<string, unknown>) => {
+    const instance = instanceOf(String(row.id));
+    return (
+      <span class="row" style={{ justifyContent: "flex-end", flexWrap: "nowrap" }}>
+        <DetailsButton item={row as Inst} />
+        {props.canAct && <Button small onClick={async () =>
+          (await ask(t("Restart {name}? Its connections drop briefly.", { name: instance }), { ok: t("Restart") })) &&
+          props.restart(instance, undefined, instance)}>{t("Restart")}</Button>}
+      </span>
+    );
+  };
   return (
     <>
       {tinc.length > 0 && (
@@ -338,7 +350,7 @@ function ConnectionsTab(props: { items: Inst[]; canAct: boolean; restart: (insta
         </Section>
       )}
       {wg.length > 0 && (
-        <Section title={t("WireGuard peers")} actions={restartBtn(wg, "WireGuard")}>
+        <Section title={t("WireGuard peers")}>
           <Table
             rows={wg}
             rowKey={(r) => String(r.id)}
@@ -348,22 +360,22 @@ function ConnectionsTab(props: { items: Inst[]; canAct: boolean; restart: (insta
               { key: "state", label: t("State"), render: (r) => stateCell(r, r.reasonCode ? t(String(r.reasonCode)) : undefined) },
               { key: "latestHandshake", label: t("Last handshake"), render: (r) => relativeTime(r.latestHandshake as string | undefined) },
               { key: "traffic", label: t("Traffic in / out"), render: (r) => `${bytes(Number(r.rxBytes ?? 0))} / ${bytes(Number(r.txBytes ?? 0))}` },
-              { key: "d", label: "", render: (r) => <DetailsButton item={r as Inst} /> },
+              { key: "d", label: "", render: rowActions },
             ]}
           />
         </Section>
       )}
       {ovpn.length > 0 && (
-        <Section title={t("OpenVPN sessions")} actions={restartBtn(ovpn, "OpenVPN")}>
+        <Section title={t("OpenVPN sessions")}>
           <Table
             rows={ovpn}
             rowKey={(r) => String(r.id)}
             columns={[
-              { key: "id", label: t("Session"), render: (r) => <span><strong>{last(String(r.id))}</strong> <span class="faint small">{String(r.kind).replace("openvpn-", "")}</span></span> },
+              { key: "id", label: t("Session"), render: (r) => <span><strong>{last(String(r.id))}</strong> <span class="faint small">{String(r.id).split("/")[1]} · {String(r.kind).replace("openvpn-", "")}</span></span> },
               { key: "remote", label: t("Address"), render: (r) => <span class="mono">{String(r.realAddress ?? r.remote ?? r.remoteAddress ?? "—")}</span> },
               { key: "state", label: t("State"), render: (r) => stateCell(r) },
               { key: "since", label: t("Since"), render: (r) => relativeTime((r.connectedSince ?? r.since) as string | undefined) },
-              { key: "d", label: "", render: (r) => <DetailsButton item={r as Inst} /> },
+              { key: "d", label: "", render: rowActions },
             ]}
           />
         </Section>
@@ -427,7 +439,7 @@ function DiagnosticsTab(props: { n: NodeDetail; role: Role; job: (kind: string, 
           rowKey={(r) => String(r.package)}
           columns={[
             { key: "package", label: t("Package"), render: (r) => <span class="mono">{String(r.package)}</span> },
-            { key: "installed", label: t("Installed"), render: (r) => (r.installed ? <Badge tone="ok">{String(r.installedVersion)}</Badge> : <Badge tone="idle">{t("not installed")}</Badge>) },
+            { key: "installed", label: t("Installed"), render: (r) => (r.installed ? <Badge tone="ok">{r.installedVersion ? String(r.installedVersion) : t("unknown version")}</Badge> : <Badge tone="idle">{t("not installed")}</Badge>) },
             { key: "registration", label: t("Registration"), render: (r) => (r.registration ? <StateBadge state={String(r.registration)} /> : <span class="faint">—</span>) },
             { key: "reason", label: t("Reason"), render: (r) => <span class="small muted">{String(r.reason ?? "")}</span> },
           ]}

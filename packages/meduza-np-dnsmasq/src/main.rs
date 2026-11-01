@@ -65,7 +65,14 @@ impl Plugin for Dnsmasq {
             let healthy = s.and_then(|s| s.get("healthy")).and_then(Value::as_bool).unwrap_or(false);
             let mut d = BTreeMap::new();
             d.insert("backend".into(), serde_json::to_value(b.kind).unwrap_or_default());
-            d.insert("address".into(), Value::String(b.addr().to_string()));
+            let address = s.and_then(|s| s.get("address")).cloned().unwrap_or_else(|| {
+                if b.port != 0 {
+                    Value::String(b.addr().to_string())
+                } else {
+                    Value::Null
+                }
+            });
+            d.insert("address".into(), address);
             d.insert("priority".into(), Value::from(b.priority));
             out.push(InstanceStatus {
                 id: format!("dnsmasq/main/{}", b.id),

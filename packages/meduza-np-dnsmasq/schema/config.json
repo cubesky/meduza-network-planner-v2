@@ -1,56 +1,5 @@
 {
   "$defs": {
-    "Backend": {
-      "properties": {
-        "address": {
-          "default": "127.0.0.1",
-          "format": "ip",
-          "type": "string"
-        },
-        "enabled": {
-          "default": true,
-          "type": "boolean"
-        },
-        "id": {
-          "$ref": "#/$defs/StableId"
-        },
-        "kind": {
-          "$ref": "#/$defs/BackendKind"
-        },
-        "port": {
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "priority": {
-          "default": 100,
-          "description": "Lower = preferred.",
-          "format": "uint16",
-          "maximum": 65535,
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "id",
-        "kind",
-        "port"
-      ],
-      "type": "object"
-    },
-    "BackendKind": {
-      "enum": [
-        "mosdns",
-        "mihomo"
-      ],
-      "type": "string"
-    },
-    "StableId": {
-      "description": "Stable object id",
-      "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$",
-      "type": "string"
-    },
     "Strategy": {
       "oneOf": [
         {
@@ -68,13 +17,6 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
-    "backends": {
-      "default": [],
-      "items": {
-        "$ref": "#/$defs/Backend"
-      },
-      "type": "array"
-    },
     "cacheSize": {
       "default": 1000,
       "format": "uint32",
@@ -86,6 +28,10 @@
       "type": "boolean"
     },
     "fallbackServers": {
+      "default": [
+        "119.29.29.29",
+        "1.0.0.1"
+      ],
       "description": "Explicit fallback resolvers (`ip` or `ip#port`), used before backends are ready and when none is healthy.",
       "items": {
         "type": "string"
@@ -128,8 +74,7 @@
     }
   },
   "required": [
-    "listenAddresses",
-    "fallbackServers"
+    "listenAddresses"
   ],
   "title": "dnsmasq",
   "type": "object"

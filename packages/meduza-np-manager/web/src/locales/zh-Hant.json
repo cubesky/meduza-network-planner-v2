@@ -641,5 +641,19 @@
   "{count} router(s) collapsed: {nodes}": "已摺疊 {count} 個路由器：{nodes}",
   "Reached through: {names}.": "經由：{names}。",
   "External router in AS{asn}, not managed by this console; session address {address}.": "AS{asn} 中的外部路由器，不受本控制台管理；工作階段位址 {address}。",
-  "Router ID {id}.": "路由器 ID {id}。"
+  "Router ID {id}.": "路由器 ID {id}。",
+  "BGP sessions between the nodes, from the published configuration and the nodes' FRR reports.": "節點之間的 BGP 工作階段，來自已發佈的設定和節點的 FRR 回報。",
+  "Rotate automatically": "自動旋轉",
+  "Cluster spacing": "分組間距",
+  "Zoom in": "放大",
+  "Zoom out": "縮小",
+  "Focus selection": "聚焦所選",
+  "Fit graph": "適應全圖",
+  "Interactive routing topology": "可互動的路由拓撲",
+  "Drag the background to rotate; Shift-drag or right-drag to pan; scroll to zoom. Double-click a cluster to focus. Touch: pinch to zoom, two fingers to pan. Keyboard: arrows to rotate, Shift+arrows to pan, +/− to zoom, 0 to reset.": "拖曳背景旋轉，按住 Shift 拖曳或右鍵拖曳平移，滾輪縮放。按兩下分組可聚焦。觸控：雙指捏合縮放、雙指拖曳平移。鍵盤：方向鍵旋轉、Shift＋方向鍵平移、＋/− 縮放、0 重設。",
+  "Request packaged binary": "請求本體套件",
+  "Install packaged binary": "安裝本體套件",
+  "Stop requesting": "停止請求",
+  "Stop requesting {package}? Installed or deployment-pinned binaries may remain; the provider status shows what is active.": "停止請求 {package}？已安裝或由部署固定的本體套件可能仍被保留，實際使用情況以下方 provider 狀態為準。",
+  "unknown version": "版本未知"
 }

@@ -16,6 +16,11 @@ Alpine-based node runtime for non-OpenWrt hosts (AGENT.md §14.3). One image, tw
   volume for offline restarts) and runs planner.
 * Single writer per volume: only the updater writes the store, only planner writes the node volume. They talk over
   `planner.sock`/`updater.sock` in the shared IPC volume; no control port is published.
+* The image's own version is recorded in `/usr/lib/meduza-np/image/base-container.json` and OCI label
+  `org.opencontainers.image.version`, independently of the embedded updater version. Builds require both
+  `BASE_CONTAINER_VERSION` and `UPDATER_VERSION`. Planner reports the running base image alongside installed
+  packages; older images without this record are recognized by their runtime files and shown as installed with
+  an unknown version, rather than borrowing the updater or catalog version.
 
 Supported: Podman ≥ 4.4 (Quadlet), tested with Podman 5.4 on Debian 13; Alpine 3.24 base. Rootful is required for
 host network mode; bridge mode works rootful and rootless (rootless: the VPN/routing resources live in the

@@ -1,0 +1,91 @@
+{
+  "uiVersion": 1,
+  "package": "meduza-np-mosdns-pkg",
+  "requiresCapability": "mosdns.binary",
+  "title": "MosDNS 本体资源",
+  "description": "This package includes a pinned MosDNS binary. Apply the installation request to let the updater download and verify the package. Installed packages provide the binary automatically; the status below shows the actual provider. Stopping the request does not remove binaries retained by deployment settings or the installed package set.",
+  "settings": [
+    {
+      "path": "services.mosdns-pkg",
+      "title": "安装请求",
+      "sections": [
+        {
+          "title": "组件",
+          "fields": [
+            "enabled"
+          ]
+        }
+      ]
+    }
+  ],
+  "status": [
+    {
+      "title": "本体状态",
+      "instanceKind": "mosdns-provider",
+      "columns": [
+        "id",
+        "state",
+        "packageVersion",
+        "upstreamVersion",
+        "activeSource",
+        "path",
+        "reason"
+      ]
+    }
+  ],
+  "i18n": {
+    "en": {
+      "text": {
+        "MosDNS 本体资源": "MosDNS binary resource",
+        "安装请求": "Installation request",
+        "组件": "Component",
+        "本体状态": "Binary status"
+      },
+      "fields": {
+        "enabled": "Request packaged binary",
+        "packageVersion": "Package version",
+        "upstreamVersion": "Bundled binary version",
+        "activeSource": "Active provider",
+        "path": "Binary path"
+      }
+    },
+    "zh-Hans": {
+      "text": {
+        "MosDNS 本体资源": "MosDNS 本体资源",
+        "安装请求": "安装请求",
+        "组件": "组件",
+        "本体状态": "本体状态",
+        "This package includes a pinned MosDNS binary. Apply the installation request to let the updater download and verify the package. Installed packages provide the binary automatically; the status below shows the actual provider. Stopping the request does not remove binaries retained by deployment settings or the installed package set.": "此包包含固定版本的 MosDNS 本体。应用安装请求后，updater 会自动下载并校验该包。已安装的包会自动提供本体，下方显示实际 provider 状态。停止请求不会移除由部署配置或当前安装集合保留的包。"
+      },
+      "fields": {
+        "enabled": "申请安装本体包",
+        "id": "ID",
+        "state": "状态",
+        "packageVersion": "组件包版本",
+        "upstreamVersion": "随包本体版本",
+        "activeSource": "实际 provider",
+        "path": "本体路径",
+        "reason": "原因"
+      }
+    },
+    "zh-Hant": {
+      "text": {
+        "MosDNS 本体资源": "MosDNS 本體資源",
+        "安装请求": "安裝請求",
+        "组件": "元件",
+        "本体状态": "本體狀態",
+        "This package includes a pinned MosDNS binary. Apply the installation request to let the updater download and verify the package. Installed packages provide the binary automatically; the status below shows the actual provider. Stopping the request does not remove binaries retained by deployment settings or the installed package set.": "此套件包含固定版本的 MosDNS 本體。套用安裝請求後，updater 會自動下載並驗證套件。已安裝的套件會自動提供本體，下方顯示實際 provider 狀態。停止請求不會移除由部署設定或目前安裝集合保留的套件。"
+      },
+      "fields": {
+        "enabled": "請求安裝本體套件",
+        "id": "ID",
+        "state": "狀態",
+        "packageVersion": "元件套件版本",
+        "upstreamVersion": "隨附本體版本",
+        "activeSource": "實際 provider",
+        "path": "本體路徑",
+        "reason": "原因"
+      }
+    }
+  }
+}

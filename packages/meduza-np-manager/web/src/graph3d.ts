@@ -3,8 +3,8 @@
 //
 // Simulation (d3-force style): many-body repulsion, link springs, centering, velocity decay, cooling alpha.
 // View: perspective camera orbiting the origin. Dragging a vertex moves it in the screen plane at its depth (it is
-// pinned while held); dragging the background rotates; the wheel zooms; double-click resets the view. Links carry
-// particles (data flowing both ways) while their session is up; the scene slowly turns while idle.
+// pinned while held); background drag orbits with a fixed up direction, Shift/right drag pans, and the wheel zooms
+// towards the pointer. The camera fits during initial layout only; manual navigation is never auto-corrected.
 // Groups (the nodes of one AS) are drawn as translucent bubbles labelled with the group's name; members are pulled
 // towards their group's centre and bubbles collide as whole bodies, so every AS forms a cluster of its own.
 
@@ -26,6 +26,7 @@ export interface GraphGroup {
   id: string;
   label: string;
   color: string;
+  primary?: boolean;
 }
 
 export interface GraphLink {
@@ -63,6 +64,14 @@ export interface GraphOptions {
 }
 
 const FOCAL = 600;
+const NEAR = 20;
+const MAX_PITCH = Math.PI / 3;
+const DEFAULT_PITCH = -0.15;
+type Point = { x: number; y: number; z: number };
+type Drag =
+  | { kind: "vertex"; pointer: number; v: SimVertex; depth: number; x: number; y: number; moved: boolean }
+  | { kind: "rotate" | "pan"; pointer: number; x: number; y: number; startX: number; startY: number; moved: boolean }
+  | { kind: "gesture"; x: number; y: number; distance: number; moved: true };
 
 export class ForceGraph3D {
   private ctx: CanvasRenderingContext2D;
@@ -71,20 +80,26 @@ export class ForceGraph3D {
   private groups: GraphGroup[] = [];
   private alpha = 1;
   private alphaTarget = 0;
-  private yaw = 0.6;
-  private pitch = -0.35;
+  private yaw = 0;
+  private pitch = DEFAULT_PITCH;
   private distance = 520;
-  /** wheel zoom relative to the distance that fits the whole graph */
-  private zoom = 1;
+  private target: Point = { x: 0, y: 0, z: 0 };
+  private panX = 0;
+  private panY = 0;
+  private spacing = 1.6;
+  private anchors = new Map<string, Point>();
+  private fitting = true;
+  private userView = false;
   private frame = 0;
   private raf = 0;
   private width = 0;
   private height = 0;
-  private drag: null | { kind: "vertex"; v: SimVertex; depth: number; x: number; y: number; moved: boolean } | { kind: "rotate"; x: number; y: number; moved: boolean } = null;
+  private drag: Drag | null = null;
+  private pointers = new Map<number, { x: number; y: number }>();
   private hover: GraphItem | null = null;
   private interacted = 0;
   private resize: ResizeObserver;
-  autoRotate = true;
+  autoRotate = false;
   highlight: string | null = null;
 
   constructor(private canvas: HTMLCanvasElement, private opts: GraphOptions) {
@@ -96,9 +111,12 @@ export class ForceGraph3D {
     canvas.addEventListener("pointermove", this.onMove);
     canvas.addEventListener("pointerup", this.onUp);
     canvas.addEventListener("pointercancel", this.onUp);
+    canvas.addEventListener("lostpointercapture", this.onUp);
     canvas.addEventListener("pointerleave", this.onLeave);
     canvas.addEventListener("wheel", this.onWheel, { passive: false });
     canvas.addEventListener("dblclick", this.onDblClick);
+    canvas.addEventListener("contextmenu", this.onContextMenu);
+    canvas.addEventListener("keydown", this.onKey);
     const loop = () => {
       this.tick();
       this.draw();
@@ -108,15 +126,19 @@ export class ForceGraph3D {
   }
 
   destroy(): void {
+    this.cancelDrag();
     cancelAnimationFrame(this.raf);
     this.resize.disconnect();
     this.canvas.removeEventListener("pointerdown", this.onDown);
     this.canvas.removeEventListener("pointermove", this.onMove);
     this.canvas.removeEventListener("pointerup", this.onUp);
     this.canvas.removeEventListener("pointercancel", this.onUp);
+    this.canvas.removeEventListener("lostpointercapture", this.onUp);
     this.canvas.removeEventListener("pointerleave", this.onLeave);
     this.canvas.removeEventListener("wheel", this.onWheel);
     this.canvas.removeEventListener("dblclick", this.onDblClick);
+    this.canvas.removeEventListener("contextmenu", this.onContextMenu);
+    this.canvas.removeEventListener("keydown", this.onKey);
   }
 
   /** Replaces the graph; vertices that stay keep their position, new ones start next to a neighbour. */
@@ -125,42 +147,90 @@ export class ForceGraph3D {
     const structural =
       vertices.length !== this.vertices.size ||
       vertices.some((v) => !this.vertices.has(v.id) || this.vertices.get(v.id)!.group !== v.group) ||
-      links.length !== this.links.length;
+      links.length !== this.links.length ||
+      links.some((l, i) => l.id !== this.links[i]?.id || l.source !== this.links[i]?.source || l.target !== this.links[i]?.target);
+    const previous = this.vertices;
     this.groups = groups;
     for (const v of vertices) {
       const old = this.vertices.get(v.id);
-      next.set(v.id, old ? { ...old, ...v } : { ...v, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, pinned: false });
-    }
-    for (const v of next.values()) {
-      if (this.vertices.has(v.id)) continue;
-      // next to a member of its group, else next to a neighbour
-      const near =
-        [...this.vertices.values()].find((o) => v.group && o.group === v.group)?.id ??
-        links.map((l) => (l.source === v.id ? l.target : l.target === v.id ? l.source : null)).find((n) => n && this.vertices.has(n));
-      const base = near ? next.get(near)! : { x: 0, y: 0, z: 0 };
-      const r = () => (Math.random() - 0.5) * 80;
-      Object.assign(v, { x: base.x + r(), y: base.y + r(), z: base.z + r() });
+      // Reports/theme changes must keep the actual object being dragged, not copy it out from under the pointer.
+      next.set(v.id, old ? Object.assign(old, v) : { ...v, x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0, pinned: false });
     }
     this.vertices = next;
+    this.updateAnchors();
+    const indices = new Map<string, number>();
+    for (const v of next.values()) {
+      const key = this.bodyKey(v);
+      const index = indices.get(key) ?? 0;
+      indices.set(key, index + 1);
+      if (previous.has(v.id)) continue;
+      const existing = [...previous.values()].filter((o) => v.group && o.group === v.group);
+      const base = existing.length ? centroid(existing) : this.anchors.get(key)!;
+      const angle = index * 2.39996 + hash(v.id) * 0.5;
+      const radius = 20 + Math.sqrt(index) * 25;
+      Object.assign(v, { x: base.x + Math.cos(angle) * radius, y: base.y + Math.sin(angle) * radius, z: base.z + (hash(v.id + "z") - 0.5) * 30 });
+    }
+    if (this.drag?.kind === "vertex" && !next.has(this.drag.v.id)) this.cancelDrag();
     this.links = links.filter((l) => next.has(l.source) && next.has(l.target));
     if (structural) this.alpha = Math.max(this.alpha, 0.8);
+    if (!previous.size || structural && !this.userView) this.fitting = true;
   }
 
   resetView(): void {
-    this.yaw = 0.6;
-    this.pitch = -0.35;
-    this.zoom = 1;
-    this.alpha = Math.max(this.alpha, 0.5);
+    this.yaw = 0;
+    this.pitch = DEFAULT_PITCH;
+    this.fitGraph();
+  }
+
+  fitGraph(): void {
+    this.fitting = false;
+    this.userView = true;
+    this.frameVertices([...this.vertices.values()]);
+  }
+
+  focus(item: GraphItem): void {
+    let vertices: SimVertex[];
+    if (item.kind === "group") vertices = [...this.vertices.values()].filter((v) => v.group === item.id);
+    else if (item.kind === "link") {
+      const link = this.links.find((l) => l.id === item.id);
+      vertices = link ? [this.vertices.get(link.source)!, this.vertices.get(link.target)!] : [];
+    } else vertices = this.vertices.has(item.id) ? [this.vertices.get(item.id)!] : [];
+    if (!vertices.length) return;
+    this.fitting = false;
+    this.userView = true;
+    this.frameVertices(vertices);
+  }
+
+  setSpacing(value: number): void {
+    const next = Math.max(1, Math.min(3, value));
+    if (this.spacing === next) return;
+    this.spacing = next;
+    this.updateAnchors();
+    this.alpha = Math.max(this.alpha, 0.9);
+    this.userView = false;
+    this.fitting = true;
+  }
+
+  zoomBy(factor: number, x = this.width / 2, y = this.height / 2): void {
+    const next = Math.max(80, Math.min(100_000, this.distance * factor));
+    const ratio = this.distance / next;
+    this.panX = x - this.width / 2 - (x - this.width / 2 - this.panX) * ratio;
+    this.panY = y - this.height / 2 - (y - this.height / 2 - this.panY) * ratio;
+    this.distance = next;
+    this.manualView();
   }
 
   // ---- simulation ---------------------------------------------------------------------------------------------
 
   private tick(): void {
     this.frame++;
-    this.fitView();
     if (this.autoRotate && !this.drag && performance.now() - this.interacted > 2500) this.yaw += 0.0016;
+    if (this.drag && this.drag.kind !== "vertex") return;
     this.alpha += (this.alphaTarget - this.alpha) * 0.0228;
-    if (this.alpha < 0.002) return;
+    if (this.alpha < 0.002) {
+      this.fitting = false;
+      return;
+    }
     const vs = [...this.vertices.values()];
     const a = this.alpha;
     // many-body repulsion
@@ -170,7 +240,7 @@ export class ForceGraph3D {
         const q = vs[j]!;
         // only within a cluster: clusters are kept apart as whole bodies by the collision below (vertex repulsion
         // across clusters would let one cluster's nodes ring another instead of moving it)
-        if (p.group !== q.group) continue;
+        if (this.bodyKey(p) !== this.bodyKey(q)) continue;
         let dx = q.x - p.x, dy = q.y - p.y, dz = q.z - p.z;
         let l = dx * dx + dy * dy + dz * dz;
         if (l < 1) {
@@ -195,6 +265,15 @@ export class ForceGraph3D {
       const t = this.vertices.get(l.target)!;
       const dx = t.x + t.vx - s.x - s.vx, dy = t.y + t.vy - s.y - s.vy, dz = t.z + t.vz - s.z - s.vz;
       const d = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+      // Cross-AS links describe connectivity, not a demand to pull the routers out of their own clusters.
+      // Apply a weak translation to both whole bodies, leaving their local arrangement intact.
+      if (this.bodyKey(s) !== this.bodyKey(t)) {
+        const k = ((d - l.length) / d) * a * 0.018 / Math.max(degree.get(l.source)!, degree.get(l.target)!);
+        const left = this.bodyMembers(s), right = this.bodyMembers(t);
+        for (const v of left) { v.vx += dx * k; v.vy += dy * k; v.vz += dz * k; }
+        for (const v of right) { v.vx -= dx * k; v.vy -= dy * k; v.vz -= dz * k; }
+        continue;
+      }
       const strength = (l.strength ?? 1) / Math.min(degree.get(l.source)!, degree.get(l.target)!);
       const k = ((d - l.length) / d) * a * strength;
       const ds = degree.get(l.source)!, dt = degree.get(l.target)!;
@@ -212,40 +291,39 @@ export class ForceGraph3D {
         v.vz += (c.z - v.z) * 0.15 * a;
       }
     }
-    // bodies (cluster bubbles, lone vertices) do not overlap; a gentle gravity keeps unconnected ones in view
+    // Separated anchors keep the overview readable. A shallow scene preserves depth inside each cluster without
+    // stacking unrelated ASes along the camera axis; collisions move a large cluster as strongly as a small one.
     const bodies = [
       ...this.bubbles().map((b) => ({ members: this.members().get(b.group.id)!, x: b.x, y: b.y, z: b.z, r: b.r })),
       ...vs.filter((v) => !v.group).map((v) => ({ members: [v], x: v.x, y: v.y, z: v.z, r: v.radius * 2.4 + 18 })),
     ];
     for (let i = 0; i < bodies.length; i++) {
       const p = bodies[i]!;
+      const anchor = this.anchors.get(this.bodyKey(p.members[0]!))!;
       for (const v of p.members) {
-        v.vx -= p.x * 0.004 * a;
-        v.vy -= p.y * 0.004 * a;
-        v.vz -= p.z * 0.004 * a;
+        v.vx += (anchor.x - p.x) * 0.035 * a;
+        v.vy += (anchor.y - p.y) * 0.035 * a;
+        v.vz -= v.z * 0.06 * a;
       }
       for (let j = i + 1; j < bodies.length; j++) {
         const q = bodies[j]!;
-        const dx = q.x - p.x, dy = q.y - p.y, dz = q.z - p.z;
-        const d = Math.hypot(dx, dy, dz) || 1;
-        // a gap wide enough that bubbles rarely overlap in projection either
-        const overlap = p.r + q.r + 70 - d;
+        let dx = q.x - p.x, dy = q.y - p.y;
+        const d = Math.hypot(dx, dy) || 1;
+        if (Math.abs(dx) + Math.abs(dy) < 0.01) { dx = 1; dy = 0.5; }
+        const overlap = p.r + q.r + 140 * this.spacing - d;
         if (overlap <= 0) continue;
         const k = (overlap / d) * 0.35 * a;
         for (const v of p.members) {
-          v.vx -= (dx * k) / p.members.length;
-          v.vy -= (dy * k) / p.members.length;
-          v.vz -= (dz * k) / p.members.length;
+          v.vx -= dx * k;
+          v.vy -= dy * k;
         }
         for (const v of q.members) {
-          v.vx += (dx * k) / q.members.length;
-          v.vy += (dy * k) / q.members.length;
-          v.vz += (dz * k) / q.members.length;
+          v.vx += dx * k;
+          v.vy += dy * k;
         }
       }
     }
-    // integrate with velocity decay; keep the centre of mass at the origin
-    let cx = 0, cy = 0, cz = 0;
+    // Integrate with velocity decay. Do not recenter the simulation under the user's pointer/camera.
     for (const v of vs) {
       if (v.pinned) {
         v.vx = v.vy = v.vz = 0;
@@ -253,12 +331,38 @@ export class ForceGraph3D {
         v.vx *= 0.6; v.vy *= 0.6; v.vz *= 0.6;
         v.x += v.vx; v.y += v.vy; v.z += v.vz;
       }
-      cx += v.x; cy += v.y; cz += v.z;
     }
-    if (vs.length && !this.drag) {
-      cx /= vs.length; cy /= vs.length; cz /= vs.length;
-      for (const v of vs) {
-        v.x -= cx; v.y -= cy; v.z -= cz;
+    if (this.fitting && !this.drag) {
+      this.frameVertices(vs, 0.14);
+    }
+  }
+
+  private bodyKey(v: SimVertex): string {
+    return v.group ? `group:${v.group}` : `vertex:${v.id}`;
+  }
+
+  private bodyMembers(v: SimVertex): SimVertex[] {
+    return v.group ? [...this.vertices.values()].filter((o) => o.group === v.group) : [v];
+  }
+
+  private updateAnchors(): void {
+    const bodies = new Map<string, SimVertex[]>();
+    for (const v of this.vertices.values()) {
+      const key = this.bodyKey(v);
+      bodies.set(key, [...(bodies.get(key) ?? []), v]);
+    }
+    const primary = new Set(this.groups.filter((g) => g.primary).map((g) => `group:${g.id}`));
+    const keys = [...bodies.keys()].sort((a, b) => Number(primary.has(b)) - Number(primary.has(a)) || a.localeCompare(b));
+    const maxRadius = Math.max(65, ...[...bodies.values()].map((members) => members.length > 1 ? Math.sqrt(members.length) * 45 + 35 : 65));
+    const step = (maxRadius * 2 + 180) * this.spacing;
+    this.anchors.clear();
+    let index = 0;
+    if (keys.length) this.anchors.set(keys[index++]!, { x: 0, y: 0, z: 0 });
+    for (let ring = 1; index < keys.length; ring++) {
+      const count = Math.min(6 * ring, keys.length - index);
+      for (let i = 0; i < count; i++) {
+        const angle = -Math.PI / 2 + (i * Math.PI * 2) / count + (ring - 1) * 0.15;
+        this.anchors.set(keys[index++]!, { x: Math.cos(angle) * ring * step, y: Math.sin(angle) * ring * step, z: 0 });
       }
     }
   }
@@ -284,24 +388,23 @@ export class ForceGraph3D {
     return out;
   }
 
-  /**
-   * Eases the camera distance so the projected graph spans about 80% of the shorter side (times the wheel zoom):
-   * measured on screen, so lopsided layouts fill the view as well as round ones.
-   */
-  private fitView(): void {
-    if (!this.vertices.size || this.drag?.kind === "vertex" || !this.width) return;
-    let extent = 0;
-    for (const v of this.vertices.values()) {
-      const p = this.project(v.x, v.y, v.z);
-      extent = Math.max(extent, Math.abs(p.sx - this.width / 2) + v.radius * p.scale, Math.abs(p.sy - this.height / 2) + v.radius * p.scale + 16);
+  private frameVertices(vertices: SimVertex[], ease = 1): void {
+    if (!vertices.length || !this.width || !this.height) return;
+    const bounds = (key: "x" | "y" | "z") => (Math.min(...vertices.map((v) => v[key])) + Math.max(...vertices.map((v) => v[key]))) / 2;
+    this.target = { x: bounds("x"), y: bounds("y"), z: bounds("z") };
+    this.panX = this.panY = 0;
+    const ids = new Set(vertices.map((v) => v.id));
+    const points = [...vertices.map((v) => ({ ...v, r: v.radius + 28 })),
+      ...this.bubbles().filter((b) => [...this.vertices.values()].filter((v) => v.group === b.group.id).every((v) => ids.has(v.id)))];
+    const halfWidth = Math.max(40, this.width / 2 - 65), halfHeight = Math.max(40, this.height / 2 - 65);
+    let distance = 180;
+    for (const p of points) {
+      const [x, y, z] = this.rotate(p.x - this.target.x, p.y - this.target.y, p.z - this.target.z);
+      distance = Math.max(distance, z + p.r + NEAR,
+        z + p.r + (FOCAL * (Math.abs(x) + p.r)) / halfWidth,
+        z + p.r + (FOCAL * (Math.abs(y) + p.r)) / halfHeight);
     }
-    for (const b of this.bubbles()) {
-      const p = this.project(b.x, b.y, b.z);
-      extent = Math.max(extent, Math.abs(p.sx - this.width / 2) + b.r * p.scale, Math.abs(p.sy - this.height / 2) + b.r * p.scale + 18);
-    }
-    const want = (Math.min(this.width, this.height) / 2) * 0.8 / this.zoom;
-    const target = Math.max(150, Math.min(6000, this.distance * (extent / Math.max(want, 40))));
-    this.distance += (target - this.distance) * 0.06;
+    this.distance += (distance - this.distance) * ease;
   }
 
   // ---- projection ---------------------------------------------------------------------------------------------
@@ -314,6 +417,7 @@ export class ForceGraph3D {
     this.canvas.width = Math.max(1, Math.round(r.width * dpr));
     this.canvas.height = Math.max(1, Math.round(r.height * dpr));
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (!this.userView && this.vertices.size) this.frameVertices([...this.vertices.values()]);
   }
 
   /** World → camera space (rotation only). */
@@ -335,11 +439,11 @@ export class ForceGraph3D {
   }
 
   /** Screen position, perspective scale and depth (distance from the camera) of a world point. */
-  private project(x: number, y: number, z: number): { sx: number; sy: number; scale: number; depth: number } {
-    const [xr, yr, zr] = this.rotate(x, y, z);
-    const depth = Math.max(this.distance - zr, 20);
-    const scale = FOCAL / depth;
-    return { sx: this.width / 2 + xr * scale, sy: this.height / 2 + yr * scale, scale, depth };
+  private project(x: number, y: number, z: number): { sx: number; sy: number; scale: number; depth: number; visible: boolean } {
+    const [xr, yr, zr] = this.rotate(x - this.target.x, y - this.target.y, z - this.target.z);
+    const depth = this.distance - zr;
+    const scale = FOCAL / Math.max(NEAR, depth);
+    return { sx: this.width / 2 + this.panX + xr * scale, sy: this.height / 2 + this.panY + yr * scale, scale, depth, visible: depth > NEAR };
   }
 
   // ---- drawing ------------------------------------------------------------------------------------------------
@@ -350,12 +454,17 @@ export class ForceGraph3D {
     ctx.clearRect(0, 0, this.width, this.height);
     const proj = new Map([...this.vertices.values()].map((v) => [v.id, { v, ...this.project(v.x, v.y, v.z) }]));
     const fog = (depth: number) => Math.max(0.25, Math.min(1, 1.35 - depth / (this.distance * 2)));
-    const lit = (id: string) => !this.highlight || this.highlight === id;
+    const selectedNodes = new Set([...this.vertices.values()].filter((v) => v.id === this.highlight || v.group === this.highlight).map((v) => v.id));
+    const activeLinks = new Set(this.links.filter((l) => l.id === this.highlight || selectedNodes.has(l.source) || selectedNodes.has(l.target)).map((l) => l.id));
+    const activeNodes = new Set([...selectedNodes, ...this.links.filter((l) => activeLinks.has(l.id)).flatMap((l) => [l.source, l.target])]);
+    const lit = (id: string) => !this.highlight || activeNodes.has(id) || activeLinks.has(id);
     const t = performance.now() / 1000;
+    const occupied: Array<{ x: number; y: number; w: number; h: number }> = [];
 
     // AS clusters behind everything: translucent bubble, dashed outline, the AS label on top
     const bubbles = this.bubbles()
       .map((b) => ({ b, ...this.project(b.x, b.y, b.z) }))
+      .filter((p) => p.visible && p.b.r * p.scale < Math.max(this.width, this.height) * 2)
       .sort((x, y) => y.depth - x.depth);
     for (const { b, sx, sy, scale, depth } of bubbles) {
       const r = b.r * scale;
@@ -374,17 +483,24 @@ export class ForceGraph3D {
       ctx.setLineDash([]);
       ctx.globalAlpha = fog(depth) * (on ? 1 : 0.4);
       ctx.fillStyle = b.group.color;
-      ctx.font = `600 ${Math.round(Math.max(11, Math.min(16, 13 * scale)))}px system-ui, sans-serif`;
+      ctx.font = "600 14px system-ui, sans-serif";
       ctx.textAlign = "center";
       ctx.textBaseline = "bottom";
-      ctx.fillText(b.group.label, sx, sy - r - 3);
+      const labelWidth = ctx.measureText(b.group.label).width + 16;
+      const labelY = sy - r - 6;
+      ctx.fillStyle = background;
+      ctx.fillRect(sx - labelWidth / 2, labelY - 19, labelWidth, 22);
+      ctx.fillStyle = b.group.color;
+      ctx.fillText(b.group.label, sx, labelY);
+      occupied.push({ x: sx - labelWidth / 2, y: labelY - 19, w: labelWidth, h: 22 });
     }
 
     for (const l of this.links) {
       const s = proj.get(l.source)!;
       const e = proj.get(l.target)!;
-      const linked = lit(l.id) || lit(l.source) || lit(l.target);
-      ctx.globalAlpha = fog((s.depth + e.depth) / 2) * (linked ? 1 : 0.18);
+      if (!s.visible || !e.visible) continue;
+      const linked = !this.highlight || activeLinks.has(l.id);
+      ctx.globalAlpha = fog((s.depth + e.depth) / 2) * (linked ? (this.highlight || this.hover?.id === l.id ? 0.95 : 0.55) : 0.1);
       ctx.strokeStyle = l.color;
       ctx.lineWidth = Math.max(0.6, l.width * ((s.scale + e.scale) / 2)) * (this.hover?.id === l.id ? 2 : 1);
       ctx.setLineDash(l.dash ?? []);
@@ -408,7 +524,7 @@ export class ForceGraph3D {
       }
     }
 
-    const order = [...proj.values()].sort((a, b) => b.depth - a.depth);
+    const order = [...proj.values()].filter((p) => p.visible).sort((a, b) => b.depth - a.depth);
     for (const p of order) {
       const v = p.v;
       const r = v.radius * p.scale;
@@ -444,11 +560,33 @@ export class ForceGraph3D {
         ctx.arc(p.sx, p.sy, r * 1.25 + 4, 0, Math.PI * 2);
         ctx.stroke();
       }
+      occupied.push({ x: p.sx - r - 3, y: p.sy - r - 3, w: (r + 3) * 2, h: (r + 3) * 2 });
+    }
+    // Place readable labels after all geometry. Prioritize the selection/hover and avoid other labels/nodes.
+    order.sort((a, b) => Number(b.v.id === this.hover?.id || selectedNodes.has(b.v.id)) - Number(a.v.id === this.hover?.id || selectedNodes.has(a.v.id)) || a.depth - b.depth);
+    for (const p of order) {
+      const important = p.v.id === this.hover?.id || selectedNodes.has(p.v.id);
+      const r = p.v.radius * p.scale;
+      ctx.font = `${important ? "600 " : ""}12px system-ui, sans-serif`;
+      const w = ctx.measureText(p.v.label).width + 10, h = 19;
+      const candidates = [
+        { x: p.sx - w / 2, y: p.sy + r + 5, w, h },
+        { x: p.sx - w / 2, y: p.sy - r - h - 5, w, h },
+        { x: p.sx + r + 5, y: p.sy - h / 2, w, h },
+        { x: p.sx - r - w - 5, y: p.sy - h / 2, w, h },
+      ];
+      const box = candidates.find((b) => b.x >= 2 && b.y >= 2 && b.x + w < this.width - 2 && b.y + h < this.height - 2 &&
+        !occupied.some((o) => b.x < o.x + o.w + 2 && b.x + w + 2 > o.x && b.y < o.y + o.h + 2 && b.y + h + 2 > o.y))
+        ?? (important ? candidates[0] : undefined);
+      if (!box) continue;
+      occupied.push(box);
+      ctx.globalAlpha = lit(p.v.id) ? 0.9 : 0.25;
+      ctx.fillStyle = background;
+      ctx.fillRect(box.x, box.y, w, h);
       ctx.fillStyle = text;
-      ctx.font = `${Math.round(Math.max(10, Math.min(15, 12 * p.scale)))}px system-ui, sans-serif`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "top";
-      ctx.fillText(v.label, p.sx, p.sy + r * 1.3 + 3);
+      ctx.textAlign = "left";
+      ctx.textBaseline = "middle";
+      ctx.fillText(p.v.label, box.x + 5, box.y + h / 2);
     }
     ctx.globalAlpha = 1;
   }
@@ -461,7 +599,7 @@ export class ForceGraph3D {
   }
 
   private hit(x: number, y: number): GraphItem | null {
-    const proj = [...this.vertices.values()].map((v) => ({ v, ...this.project(v.x, v.y, v.z) })).sort((a, b) => a.depth - b.depth);
+    const proj = [...this.vertices.values()].map((v) => ({ v, ...this.project(v.x, v.y, v.z) })).filter((p) => p.visible).sort((a, b) => a.depth - b.depth);
     for (const p of proj) {
       const r = p.v.radius * p.scale * (p.v.shape === "diamond" ? 1.25 : 1) + 4;
       if ((p.sx - x) ** 2 + (p.sy - y) ** 2 <= r * r) return { kind: "vertex", id: p.v.id };
@@ -469,8 +607,9 @@ export class ForceGraph3D {
     const at = new Map(proj.map((p) => [p.v.id, p]));
     let best: { id: string; d: number } | null = null;
     for (const l of this.links) {
-      const s = at.get(l.source)!;
-      const e = at.get(l.target)!;
+      const s = at.get(l.source);
+      const e = at.get(l.target);
+      if (!s || !e) continue;
       const d = segmentDistance(x, y, s.sx, s.sy, e.sx, e.sy);
       if (d < 6 && (!best || d < best.d)) best = { id: l.id, d };
     }
@@ -478,24 +617,39 @@ export class ForceGraph3D {
     // inside a cluster bubble (the smallest one when they overlap)
     const inside = this.bubbles()
       .map((b) => ({ b, ...this.project(b.x, b.y, b.z) }))
-      .filter((p) => (p.sx - x) ** 2 + (p.sy - y) ** 2 <= (p.b.r * p.scale) ** 2)
+      .filter((p) => p.visible && p.b.r * p.scale < Math.max(this.width, this.height) * 2 && (p.sx - x) ** 2 + (p.sy - y) ** 2 <= (p.b.r * p.scale) ** 2)
       .sort((p, q) => p.b.r * p.scale - q.b.r * q.scale)[0];
     return inside ? { kind: "group", id: inside.b.group.id } : null;
   }
 
   private onDown = (e: PointerEvent) => {
+    if (e.button !== 0 && e.button !== 1 && e.button !== 2) return;
+    e.preventDefault();
     const [x, y] = this.point(e);
     this.canvas.setPointerCapture(e.pointerId);
-    this.interacted = performance.now();
+    this.canvas.focus({ preventScroll: true });
+    this.manualView();
+    this.pointers.set(e.pointerId, { x, y });
+    this.hover = null;
+    this.opts.onHover?.(null, x, y);
+    this.canvas.style.cursor = "grabbing";
+    if (this.pointers.size > 1) {
+      if (this.drag?.kind === "vertex") this.drag.v.pinned = false;
+      this.alphaTarget = 0;
+      this.drag = { kind: "gesture", ...this.gesture(), moved: true };
+      return;
+    }
     const h = this.hit(x, y);
-    if (h?.kind === "vertex") {
+    if (e.shiftKey || e.button === 1 || e.button === 2) {
+      this.drag = { kind: "pan", pointer: e.pointerId, x, y, startX: x, startY: y, moved: false };
+    } else if (h?.kind === "vertex") {
       const v = this.vertices.get(h.id)!;
       v.pinned = true;
-      this.drag = { kind: "vertex", v, depth: this.project(v.x, v.y, v.z).depth, x, y, moved: false };
+      this.drag = { kind: "vertex", pointer: e.pointerId, v, depth: this.project(v.x, v.y, v.z).depth, x, y, moved: false };
       this.alphaTarget = 0.25;
       this.alpha = Math.max(this.alpha, 0.25);
     } else {
-      this.drag = { kind: "rotate", x, y, moved: false };
+      this.drag = { kind: "rotate", pointer: e.pointerId, x, y, startX: x, startY: y, moved: false };
     }
   };
 
@@ -506,24 +660,39 @@ export class ForceGraph3D {
       if (h?.id !== this.hover?.id) this.canvas.style.cursor = h ? "pointer" : "grab";
       this.hover = h;
       this.opts.onHover?.(h, x, y);
+      if (h) this.interacted = performance.now(); // inspecting a tooltip pauses optional auto-rotation
       return;
     }
+    if (!this.pointers.has(e.pointerId)) return;
+    this.pointers.set(e.pointerId, { x, y });
     this.interacted = performance.now();
-    if (this.drag.kind === "vertex") {
+    if (this.drag.kind === "gesture") {
+      const next = this.gesture();
+      this.panX += next.x - this.drag.x;
+      this.panY += next.y - this.drag.y;
+      this.zoomBy(this.drag.distance / next.distance, next.x, next.y);
+      this.drag = { kind: "gesture", ...next, moved: true };
+    } else if (e.pointerId !== this.drag.pointer) return;
+    else if (this.drag.kind === "vertex") {
       // a click jitters by a pixel or two: only a real drag moves the vertex (and is no click)
       if (!this.drag.moved && Math.abs(x - this.drag.x) + Math.abs(y - this.drag.y) <= 3) return;
       const d = this.drag.depth;
-      const xr = ((x - this.width / 2) * d) / FOCAL;
-      const yr = ((y - this.height / 2) * d) / FOCAL;
+      const xr = ((x - this.width / 2 - this.panX) * d) / FOCAL;
+      const yr = ((y - this.height / 2 - this.panY) * d) / FOCAL;
       const [wx, wy, wz] = this.unrotate(xr, yr, this.distance - d);
-      Object.assign(this.drag.v, { x: wx, y: wy, z: wz });
+      Object.assign(this.drag.v, { x: wx + this.target.x, y: wy + this.target.y, z: wz + this.target.z });
       this.drag.moved = true;
     } else {
       const dx = x - this.drag.x;
       const dy = y - this.drag.y;
-      if (Math.abs(dx) + Math.abs(dy) > 2) this.drag.moved = true;
-      this.yaw += dx * 0.008;
-      this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch + dy * 0.008));
+      if (Math.hypot(x - this.drag.startX, y - this.drag.startY) > 3) this.drag.moved = true;
+      if (this.drag.kind === "pan") {
+        this.panX += dx;
+        this.panY += dy;
+      } else {
+        this.yaw = (this.yaw + dx * 0.005) % (Math.PI * 2);
+        this.pitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, this.pitch + dy * 0.005));
+      }
       this.drag.x = x;
       this.drag.y = y;
     }
@@ -531,11 +700,24 @@ export class ForceGraph3D {
 
   private onUp = (e: PointerEvent) => {
     const d = this.drag;
+    if (!this.pointers.has(e.pointerId)) return;
+    this.pointers.delete(e.pointerId);
+    if (this.canvas.hasPointerCapture(e.pointerId)) this.canvas.releasePointerCapture(e.pointerId);
+    if (d?.kind === "gesture" && this.pointers.size > 1) {
+      this.drag = { kind: "gesture", ...this.gesture(), moved: true };
+      return;
+    }
+    if (d?.kind === "gesture" && this.pointers.size) {
+      const [pointer, point] = [...this.pointers][0]!;
+      this.drag = { kind: "rotate", pointer, ...point, startX: point.x, startY: point.y, moved: true };
+      return;
+    }
     this.drag = null;
     this.alphaTarget = 0;
     if (!d) return;
     if (d.kind === "vertex") d.v.pinned = false;
-    if (!d.moved) {
+    this.canvas.style.cursor = "grab";
+    if (!d.moved && d.kind !== "pan" && e.type === "pointerup") {
       const [x, y] = this.point(e);
       this.opts.onClick?.(this.hit(x, y));
     }
@@ -549,13 +731,52 @@ export class ForceGraph3D {
 
   private onWheel = (e: WheelEvent) => {
     e.preventDefault();
-    this.interacted = performance.now();
-    this.zoom = Math.max(0.2, Math.min(5, this.zoom * Math.exp(e.deltaY * 0.001)));
+    const [x, y] = this.point(e);
+    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? this.height : 1;
+    this.zoomBy(Math.exp(Math.max(-160, Math.min(160, e.deltaY * unit)) * 0.002), x, y);
   };
 
   private onDblClick = (e: MouseEvent) => {
     const [x, y] = this.point(e);
-    if (!this.hit(x, y)) this.resetView();
+    const item = this.hit(x, y);
+    if (item) this.focus(item);
+    else this.fitGraph();
+  };
+
+  private gesture(): { x: number; y: number; distance: number } {
+    const [a, b] = [...this.pointers.values()];
+    return { x: (a!.x + b!.x) / 2, y: (a!.y + b!.y) / 2, distance: Math.max(10, Math.hypot(a!.x - b!.x, a!.y - b!.y)) };
+  }
+
+  private manualView(): void {
+    this.interacted = performance.now();
+    this.userView = true;
+    this.fitting = false;
+  }
+
+  private cancelDrag(): void {
+    if (this.drag?.kind === "vertex") this.drag.v.pinned = false;
+    this.drag = null;
+    this.alphaTarget = 0;
+    for (const id of this.pointers.keys()) if (this.canvas.hasPointerCapture(id)) this.canvas.releasePointerCapture(id);
+    this.pointers.clear();
+    this.canvas.style.cursor = "grab";
+  }
+
+  private onContextMenu = (e: Event) => e.preventDefault();
+
+  private onKey = (e: KeyboardEvent) => {
+    if (e.key === "+" || e.key === "=") this.zoomBy(0.8);
+    else if (e.key === "-") this.zoomBy(1.25);
+    else if (e.key === "0") this.resetView();
+    else if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
+      const x = e.key === "ArrowLeft" ? -1 : e.key === "ArrowRight" ? 1 : 0;
+      const y = e.key === "ArrowUp" ? -1 : e.key === "ArrowDown" ? 1 : 0;
+      if (e.shiftKey) { this.panX += x * 25; this.panY += y * 25; }
+      else { this.yaw += x * 0.08; this.pitch = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, this.pitch + y * 0.08)); }
+      this.manualView();
+    } else return;
+    e.preventDefault();
   };
 }
 

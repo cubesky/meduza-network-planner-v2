@@ -61,24 +61,22 @@ EOF
 publish)
 	$L api call GET /api/v1/config | jq '.document // .' >$LAB/dns-doc.json
 	front='{ listenAddresses: ["10.62.0.12"], port: 53, fallbackServers: ["10.50.0.30#5353"], probeName: "probe.lab.test", strategy: "ordered" }'
-	mosdns='{ id: "mosdns", kind: "mosdns", port: 1153, priority: 10 }'
-	mihomo='{ id: "mihomo", kind: "mihomo", port: 1053, priority: 20 }'
 	case "$2" in
-	fallback) backends="[]" ;;
-	mosdns) backends="[$mosdns]" ;;
-	mihomo) backends="[$mihomo]" ;;
-	both) backends="[$mosdns, $mihomo]" ;;
-	off) backends="" ;;
+	fallback) use_mosdns=false; use_mihomo=false ;;
+	mosdns) use_mosdns=true; use_mihomo=false ;;
+	mihomo) use_mosdns=false; use_mihomo=true ;;
+	both) use_mosdns=true; use_mihomo=true ;;
+	off) use_mosdns=false; use_mihomo=false ;;
 	*) echo "publish fallback|mosdns|mihomo|both|off" >&2; exit 2 ;;
 	esac
-	if [ -n "$backends" ]; then
+	if [ "$2" != off ]; then
 		# MosDNS runs from mosdns-pkg (the pinned static build); it blocks blocked.lab.test with NXDOMAIN.
-		jq ".nodes[\"lab-b\"].services.dnsmasq = ($front + { backends: $backends })
+		jq ".nodes[\"lab-b\"].services.dnsmasq = ($front)
 			| .nodes[\"lab-b\"].dns = { hosts: [ { hostname: \"nas.lab-b.test\", ips: [\"10.62.0.50\"] } ] }
-			| .nodes[\"lab-b\"].services.mosdns = { listen: \"127.0.0.1\", port: 1153, localUpstreams: [\"udp://10.50.0.30:53\"],
+			| .nodes[\"lab-b\"].services.mosdns = { enabled: $use_mosdns, listen: \"127.0.0.1\", port: 1153, localUpstreams: [\"udp://10.50.0.30:53\"],
 				probeName: \"probe.lab.test\", domains: { block: [\"full:blocked.lab.test\"] } }
 			| .nodes[\"lab-b\"].services[\"mosdns-pkg\"] = {}
-			| .nodes[\"lab-b\"].services.mihomo.dns = { enabled: true, listen: \"127.0.0.1:1053\",
+			| .nodes[\"lab-b\"].services.mihomo.dns = { enabled: $use_mihomo, listen: \"127.0.0.1:1053\",
 				nameservers: [\"udp://10.50.0.30:5354\"], defaultNameservers: [\"10.50.0.30\"] }" \
 			$LAB/dns-doc.json >$LAB/dns-doc2.json
 	else

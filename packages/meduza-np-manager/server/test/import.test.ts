@@ -52,7 +52,7 @@ function fixture(): Record<string, unknown> {
       kv("/nodes/Node-A/clash/active_subscription", "default"),
       kv("/nodes/Node-A/clash/refresh/interval_minutes", "1440"),
       kv("/nodes/Node-A/clash/tproxy_protocol", "tcp"),
-      kv("/nodes/Node-A/clash/exclude_tproxy_port", "22\n53"),
+      kv("/nodes/Node-A/clash/exclude_tproxy_port", "22\n53\nin:tcp:80\nout:udp:123"),
       kv("/nodes/Node-A/clash/use_conntrack", "false"),
       kv("/nodes/Node-A/clash/exclude_rfc1918", "true"),
       kv("/nodes/Node-A/mosdns/enable", "true"),
@@ -130,7 +130,9 @@ test("etcd import (D58): conversion of every taken-over key family", () => {
   const a = d.nodes["node-a"];
   assert.deepEqual(a.networks.lan, ["10.42.11.0/24", "10.42.50.0/24"]);
   assert.deepEqual(a.services.tinc, { enabled: true, privateKeyRef: "tinc-node-a", address: "10.42.1.1/24", publicAddresses: ["a.example.test"], port: 11010, device: "mesh0" });
-  assert.deepEqual(a.services.mihomo.tproxy, { protocols: "tcp", excludePorts: [22, 53], excludePrivateDestinations: true, useConntrack: false });
+  assert.deepEqual(a.services.mihomo.tproxy, { protocols: "tcp", excludePortRules: ["22", "53", "in:tcp:80", "out:udp:123"], excludePrivateDestinations: true, useConntrack: false });
+  assert.equal(a.services.mihomo.socksPort, 7891, "legacy MosDNS SOCKS references remain valid");
+  assert.ok(r.notes.some((n) => n.includes("Mihomo DNS upstreams")), "subscription DNS needs explicit migration");
   assert.equal(a.services.mihomo.refreshSeconds, undefined, "same as the cluster interval");
   assert.equal(d.nodes["node-b"].services.mihomo.refreshSeconds, 3600, "the node's own interval");
   assert.deepEqual(a.services.dnsmasq, { enabled: false, listenAddresses: [], fallbackServers: [] });

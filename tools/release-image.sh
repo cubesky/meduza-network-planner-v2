@@ -69,6 +69,7 @@ else
 		podman build --platform "$plist" --manifest "$LOCAL" $labels \
 			--label "io.meduza-np.updater.version=$UPDATER_VERSION" \
 			--build-arg "UPDATER_VERSION=$UPDATER_VERSION" \
+			--build-arg "BASE_CONTAINER_VERSION=$V" \
 			${UPDATE_BASE_URL:+--build-arg "UPDATE_BASE_URL=$UPDATE_BASE_URL"} "$ctx"
 		for pl in $PLATFORMS; do
 			step "smoke $pl: embedded updater runs and accepts the trust store"

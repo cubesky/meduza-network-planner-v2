@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OpenVPN binary resource",
+  "type": "object",
+  "required": [
+    "id",
+    "kind",
+    "state"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "kind": {
+      "const": "openvpn-provider"
+    },
+    "state": {
+      "enum": [
+        "up",
+        "down",
+        "unknown"
+      ]
+    },
+    "packageVersion": {
+      "type": "string"
+    },
+    "upstreamVersion": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "activeSource": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "path": {
+      "type": "string"
+    },
+    "reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

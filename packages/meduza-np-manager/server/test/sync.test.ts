@@ -650,7 +650,6 @@ test("DNS loops on a node are refused before publishing (front end, backends, up
           dnsmasq: {
             listenAddresses: ["10.62.0.12"],
             fallbackServers: ["10.50.0.30#5353"],
-            backends: [{ id: "mosdns", kind: "mosdns", port: 1153, priority: 10 }, { id: "mihomo", kind: "mihomo", port: 1053, priority: 20 }],
           },
           mosdns: { listen: "127.0.0.1", port: 1153, localUpstreams: ["udp://10.50.0.30:53"] },
           mihomo: { mode: "proxy", api: { secretRef: "api-gw-a" }, dns: { enabled: true, listen: "127.0.0.1:1053", nameservers: ["udp://10.50.0.30:5354"], defaultNameservers: ["10.50.0.30"] } },
@@ -670,13 +669,38 @@ test("DNS loops on a node are refused before publishing (front end, backends, up
   assert.deepEqual(problems((v) => (v.dnsmasq.fallbackServers = ["10.62.0.12#53"])), [at("dnsmasq/fallbackServers/0")]);
   assert.deepEqual(problems((v) => (v.mihomo.dns.nameservers = ["10.62.0.12"])), [at("mihomo/dns/nameservers/0")]);
   assert.deepEqual(problems((v) => (v.mihomo.dns.defaultNameservers = ["10.62.0.12"])), [at("mihomo/dns/defaultNameservers/0")]);
+  for (const field of ["fallback", "proxyServerNameservers", "directNameservers"]) {
+    assert.deepEqual(problems((v) => (v.mihomo.dns[field] = ["tcp://10.62.0.12:53#DIRECT"])), [at(`mihomo/dns/${field}/0`)]);
+  }
+  for (const field of ["nameserverPolicy", "proxyServerNameserverPolicy"]) {
+    assert.deepEqual(problems((v) => (v.mihomo.dns[field] = { "+.example/test": "10.62.0.12" })), [at(`mihomo/dns/${field}/+.example~1test`)]);
+    assert.deepEqual(problems((v) => (v.mihomo.dns[field] = { "+.example/test": ["127.0.0.1:1053"] })), [at(`mihomo/dns/${field}/+.example~1test`)]);
+  }
+  assert.deepEqual(problems((v) => {
+    delete v.dnsmasq;
+    v.mihomo.dns.listen = "0.0.0.0:1053";
+    v.mihomo.dns.nameservers = ["tcp://localhost:1053"];
+  }), [at("mihomo/dns/nameservers/0")], "self-loop check works without dnsmasq");
+  assert.deepEqual(problems((v) => {
+    v.dnsmasq.enabled = false;
+    v.mihomo.dns.nameservers = ["10.62.0.12"];
+  }), [], "disabled front end does not create a loop");
+  assert.deepEqual(problems((v) => (v.mihomo.dns.respectRules = true)), [at("mihomo/dns/proxyServerNameservers")]);
+  assert.deepEqual(problems((v) => {
+    v.mihomo.dns.respectRules = true;
+    v.mihomo.dns.proxyServerNameservers = ["119.29.29.29"];
+  }), []);
   assert.deepEqual(problems((v) => (v.mihomo.dns.enabled = false, v.mihomo.dns.nameservers = ["10.62.0.12"])), [], "Mihomo DNS off");
   // a wildcard front end is reached over loopback too
   assert.deepEqual(
     problems((v) => ((v.dnsmasq.listenAddresses = ["0.0.0.0"]), (v.mosdns.localUpstreams = ["udp://127.0.0.1:53"]))),
     [at("mosdns/localUpstreams/0")],
   );
-  assert.deepEqual(problems((v) => ((v.dnsmasq.port = 1153), (v.dnsmasq.listenAddresses = ["127.0.0.1"]))).sort(), [at("dnsmasq/backends/0/port"), at("mosdns/port")]);
+  assert.deepEqual(problems((v) => ((v.dnsmasq.port = 1153), (v.dnsmasq.listenAddresses = ["127.0.0.1"]))).sort(), [at("mosdns/port")]);
+  assert.deepEqual(problems((v) => {
+    v.dnsmasq.backends = [{id:"obsolete", kind:"mihomo", address:"10.62.0.12", port:53}];
+    delete v.dnsmasq.fallbackServers;
+  }), [], "legacy manual backend addresses are discarded and fallback has defaults");
 });
 
 test("diagnostics job results stay valid JSON: an oversized support bundle becomes a marker", async () => {

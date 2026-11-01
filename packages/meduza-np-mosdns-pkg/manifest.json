@@ -22,5 +22,13 @@
         "version"
       ]
     }
-  ]
+  ],
+  "schemas": {
+    "config": "schema/config.json",
+    "status": "schema/status.json"
+  },
+  "ui": {
+    "descriptor": "ui/descriptor.json",
+    "version": 1
+  }
 }

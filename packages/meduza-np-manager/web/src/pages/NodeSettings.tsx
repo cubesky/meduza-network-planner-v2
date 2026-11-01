@@ -21,7 +21,7 @@ const SYNC_FIELDS = [
 type Role = "admin" | "operator" | "viewer";
 
 interface CatalogEntry {
-  manifest: { package: string; role: string; provides: string[] };
+  manifest: { package: string; role: string; provides: string[]; providers?: Array<{ requiresPreparation?: boolean }> };
   ui: UiDescriptor | null;
   configSchema: JsonSchema | null;
 }
@@ -333,6 +333,7 @@ function FeaturesEditor(props: {
       {configurable.map((c) => {
         const pkg = c.manifest.package;
         const short = pkg.replace(/^meduza-np-/, "");
+        const staticProvider = c.manifest.role === "binary-provider" && c.manifest.providers?.some((p) => !p.requiresPreparation);
         const tx = translator(c.ui);
         const cfg = services[short];
         const present = cfg !== undefined;
@@ -340,14 +341,15 @@ function FeaturesEditor(props: {
         const installed = p?.registration === "registered";
         const installation = packageInstallLabel(props.detail.report?.update, pkg);
         const isOpen = open[short] ?? false;
+        const canOpen = present || (staticProvider && p?.installed);
         const hasCollection = (c.ui!.collections ?? []).some((col) => col.path === `services.${short}.instances`);
         const access = short === "openvpn" ? ((cfg?.instances ?? []) as Array<Record<string, any>>).filter((i) => i.kind === "access").map((i) => String(i.id)) : [];
         // warnings (e.g. "not installed yet") are not problems of the feature's settings
         const count = props.problems.filter((x) => x.path.includes(`/services/${short}`) && isError(x as Parameters<typeof isError>[0])).length;
         return (
           <Panel
-            open={isOpen && present}
-            onToggle={() => present && setOpen({ ...open, [short]: !isOpen })}
+            open={isOpen && !!canOpen}
+            onToggle={() => canOpen && setOpen((previous) => ({ ...previous, [short]: !previous[short] }))}
             title={tx.text(c.ui!.title)}
             badges={
               <>
@@ -360,24 +362,28 @@ function FeaturesEditor(props: {
                   <Badge tone={installation && props.detail.report?.update?.phase === "failed" ? "bad" : present ? "warn" : "idle"} title={installation ? props.detail.report?.update?.error ?? "" : ""}>{present ? (hasUpdater ? installation ?? t("installed after apply") : t("install by hand")) : t("not installed")}</Badge>
                 )}
                 {count > 0 && <Badge tone="bad">{t("{count} problem(s)", { count })}</Badge>}
+                {staticProvider && p?.installedVersion && <Badge>{p.installedVersion}</Badge>}
               </>
             }
             actions={
               !readOnly && (
                 <>
                   {access.length > 0 && props.role === "admin" && <Button small onClick={() => setProfileFor(access)}>{t("Client profile…")}</Button>}
-                  {present && <Checkbox label={t("Enabled")} checked={cfg.enabled !== false} onChange={(v) => props.onChange({ ...props.spec, services: { ...services, [short]: { ...cfg, enabled: v } } })} />}
+                  {present && <Checkbox label={staticProvider ? t("Request packaged binary") : t("Enabled")} checked={cfg.enabled !== false} onChange={(v) => props.onChange({ ...props.spec, services: { ...services, [short]: { ...cfg, enabled: v } } })} />}
                   {!present ? (
                     <Button small variant="primary" onClick={() => {
                       props.onChange({ ...props.spec, services: { ...services, [short]: hasCollection ? { enabled: true, instances: [] } : { enabled: true } } });
-                      setOpen({ ...open, [short]: true });
-                    }}>{t("Add")}</Button>
+                      setOpen((previous) => ({ ...previous, [short]: true }));
+                    }}>{staticProvider ? t("Install packaged binary") : t("Add")}</Button>
                   ) : (
                     <Button small variant="danger" onClick={async () => {
-                      if (!(await ask(t("Remove all {feature} configuration from {node}? Its instances are stopped and cleaned up after publishing.", { feature: tx.text(c.ui!.title), node: props.node }), { ok: t("Remove"), danger: true }))) return;
+                      const message = staticProvider
+                        ? t("Stop requesting {package}? Installed or deployment-pinned binaries may remain; the provider status shows what is active.", { package: pkg })
+                        : t("Remove all {feature} configuration from {node}? Its instances are stopped and cleaned up after publishing.", { feature: tx.text(c.ui!.title), node: props.node });
+                      if (!(await ask(message, { ok: staticProvider ? t("Stop requesting") : t("Remove"), danger: true }))) return;
                       const { [short]: _gone, ...rest } = services;
                       props.onChange({ ...props.spec, services: rest });
-                    }}>{t("Remove")}</Button>
+                    }}>{staticProvider ? t("Stop requesting") : t("Remove")}</Button>
                   )}
                 </>
               )
@@ -397,7 +403,7 @@ function FeaturesEditor(props: {
                 onRefresh={(v) => props.onChange({ ...props.spec, services: { ...services, [short]: { ...cfg, refreshSeconds: v } } })} />
             )}
             <DescriptorView
-              descriptor={c.ui!}
+              descriptor={staticProvider && !present ? { ...c.ui!, settings: [] } : c.ui!}
               schema={c.configSchema}
               value={props.spec}
               onChange={props.onChange}

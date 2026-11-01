@@ -27,6 +27,7 @@ export interface PackageManifest {
   capabilitySwitches?: CapabilitySwitch[];
   hostNetworkCapabilities?: string[];
   providerSlot?: string;
+  providers?: Array<{ slot: string; binary: string; requiresPreparation?: boolean }>;
   schemas?: { config?: string; status?: string };
   ui?: { descriptor: string; version: number };
   entrypoint?: string;

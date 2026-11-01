@@ -866,3 +866,56 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   includes the attempt count, retry deadline and transport error. Verification failures and permanent errors
   remain failures. Tests cover finite retry/exhaustion, real HTTP partial-body/503 recovery, signed-hash cache
   reuse and retry progress; the changes are source-only pending a new release.
+- 2026-11-02 (per the user) Compared Mihomo TPROXY/DNS with the previous planner. Added project-owned DNS fallback
+  and filters, domain/proxy-server/direct resolver policies, respect-rules bootstrap validation, Fake-IP range and
+  filters, plus corresponding schema and localized forms. Added optional dedicated SOCKS port (legacy import 7891),
+  preserved directional/protocol port exclusions during import, ingress exclusions and conntrack original-source
+  bypass. Exclusions precede cached decisions; side-router conntrack replies return through the main router.
+  TPROXY declares IPv4 forwarding without depending on NAT configuration. No OUTPUT interception is added.
+  Rust regressions and Clippy, manager import/publish/i18n checks and frontend builds passed. Both generated
+  conntrack/socket nftables tables passed `nft --check` on 10.42.10.9; generated DNS YAML passed the existing
+  Mihomo v1.19.17 `-t` check in an isolated temporary directory. No running configuration was applied or restarted;
+  these source changes still need a release and node upgrade.
+- 2026-11-02 (per the user) Front-end DNS upstreams are automatic. dnsmasq derives candidates from enabled,
+  installed MosDNS / Mihomo DNS services and follows their listener changes; OpenClash integration reads its
+  adapter's live DNS port. Manual backend entries are discarded and removed from the UI. Fallback defaults to
+  119.29.29.29 + 1.0.0.1, including old empty lists. Readiness still requires actual DNS answers; failures remove
+  a backend, recovery re-adds it, and a configuration reload removes disabled/moved endpoints before probing.
+  The frontend stays running throughout; node processes retain independent main-router gateway/system DNS.
+  Verified real UDP probe recovery and OpenClash port discovery, plus a wrapper process integration test that
+  follows generated service candidates through SIGHUP, fallback, failure/recovery with one unchanged frontend
+  child PID. Manager import/publish/i18n tests (20), frontend builds and strict Clippy passed. Lab helper updated
+  to select service switches instead of manual backends. These changes are not released or deployed.
+- 2026-11-02 (per the user) Pages discovery API: retain legacy index names and signed updater endpoints; add
+  sequence-ordered release/channel summaries and one-request full channel inventories with actual package versions,
+  download URLs/size/SHA-256, OCI digests/platforms, changed/reused origins, compatibility, package metadata, SBOMs
+  and pinned upstream assets. Generate catalogs/checksums from verified release files; backfill old groups without
+  inventing unknown SBOM hashes. Merge Pages history without GitHub API queries and fail closed on failed requests
+  or altered published manifests. SBOM reuse reads the Pages catalog and direct Release downloads, with hash and
+  package/version checks; legacy groups use deterministic download URLs. Release asset discovery is queried once
+  for idempotent uploads. Pages explicitly runs after a successful publish even when upstream build jobs skipped.
+  All 18 Python release/Pages tests (including the workflow CLI and digest/sequence mismatch cases), actionlint
+  and patch whitespace checks passed. Source/workflow changes only; the deployed Pages site updates on a
+  subsequent release workflow.
+- 2026-11-02 (per the user) Topology navigation: remove continuously fighting camera fit, keep dragged vertex
+  objects across report refreshes, bound orbit tilt and ignore geometry behind the camera. Default auto-rotation
+  is off; add screen-plane pan, pointer-anchored zoom, touch pinch/pan, keyboard controls, fit/focus and persistent
+  cluster spacing. Seed clusters at separated planar anchors, move them as whole bodies, weaken cross-AS springs,
+  and avoid overlapping labels. Six camera/layout/interaction regressions and a real Chrome topology preview passed;
+  native Chrome pointer input also verified dragging across report refresh, right-pan, wheel zoom and double-click
+  cluster focus.
+- 2026-11-02 (per the user) MosDNS/OpenVPN binary resource management: add schemas and localized descriptors for
+  both static `-pkg` providers, making them configurable in Manager without extra entrypoints/daemons. Show
+  installation requests/progress and actual provider/path/package/bundled-core versions, including preinstalled
+  resources with no Manager settings. Register standalone provider slots and report unavailable binaries clearly;
+  resources do not expose service restart actions. Existing deployment/installed-set retention is stated explicitly
+  when stopping requests. All 36 planner tests, schemas/manifests, strict Clippy and 10 Manager topology/catalog/
+  preview/translation tests passed; production frontend builds and Chrome checked both resource panels. These
+  source changes are not released or deployed.
+- 2026-11-02 (per the user) Connection controls and base-image diagnostics: move WireGuard/OpenVPN restart
+  buttons to their own peer/session rows and keep confirmation/restart scoped to the owning instance. Report
+  the running base container separately from store packages and the embedded updater; new images record their
+  own version, while legacy runtime files identify an installed image with an unknown version. All three
+  reporter tests, strict planner Clippy, four Manager API/translation tests, production frontend builds and
+  release/E2E shell syntax checks passed. Native Chrome verified four instance targets, row/header placement,
+  viewer permissions and the legacy image badge. Source changes only; not released or deployed.

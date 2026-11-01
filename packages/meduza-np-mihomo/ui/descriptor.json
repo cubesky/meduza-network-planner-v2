@@ -15,6 +15,7 @@
             "enabled",
             "mode",
             "mixedPort",
+            "socksPort",
             "allowLan",
             "bindAddress"
           ]
@@ -45,16 +46,41 @@
           ]
         },
         {
+          "title": "DNS 解析策略",
+          "when": "dns.enabled == true",
+          "fields": [
+            "dns.fallback",
+            "dns.nameserverPolicy",
+            "dns.proxyServerNameservers",
+            "dns.proxyServerNameserverPolicy",
+            "dns.directNameservers",
+            "dns.directNameserverFollowPolicy",
+            "dns.respectRules",
+            "dns.fallbackFilter"
+          ]
+        },
+        {
+          "title": "Fake-IP",
+          "when": "dns.enabled == true",
+          "fields": [
+            "dns.fakeIpRange",
+            "dns.fakeIpFilter",
+            "dns.fakeIpFilterMode"
+          ]
+        },
+        {
           "title": "TPROXY",
           "fields": [
             "tproxy.port",
             "tproxy.sources",
             "tproxy.inboundInterfaces",
+            "tproxy.excludeInterfaces",
             "tproxy.excludeSources",
             "tproxy.excludePrivateDestinations",
             "tproxy.excludeDestinations",
             "tproxy.protocols",
             "tproxy.excludePorts",
+            "tproxy.excludePortRules",
             "tproxy.useConntrack",
             "tproxy.bypassRouted"
           ],
@@ -145,7 +171,9 @@
         "重启": "Restart",
         "订阅下载": "Subscription download",
         "立即刷新订阅": "Refresh subscription now",
-        "旁路由": "Side router"
+        "旁路由": "Side router",
+        "DNS 解析策略": "DNS resolver policy",
+        "Fake-IP": "Fake-IP"
       },
       "fields": {
         "useConntrack": "Use conntrack",
@@ -155,7 +183,26 @@
         "replyPorts": "Ports the main router forwards",
         "lan": "This node's LAN",
         "privateLan": "Private LAN ranges",
-        "extra": "Extra source networks"
+        "extra": "Extra source networks",
+        "socksPort": "Dedicated SOCKS port",
+        "fallback": "Fallback resolvers",
+        "nameserverPolicy": "Domain resolver policy",
+        "proxyServerNameservers": "Proxy server resolvers",
+        "proxyServerNameserverPolicy": "Proxy server resolver policy",
+        "directNameservers": "Direct connection resolvers",
+        "directNameserverFollowPolicy": "Direct resolvers follow policy",
+        "respectRules": "DNS connections follow routing rules",
+        "fallbackFilter": "Fallback result filter",
+        "geoip": "Filter by GeoIP",
+        "geoipCode": "GeoIP country code",
+        "geosite": "Geosite categories",
+        "ipcidr": "IP ranges",
+        "domain": "Domains",
+        "fakeIpRange": "Fake-IP address range (IPv4)",
+        "fakeIpFilter": "Fake-IP domain filter",
+        "fakeIpFilterMode": "Fake-IP filter mode",
+        "excludeInterfaces": "Excluded ingress interfaces",
+        "excludePortRules": "Port exclusions: [in|out:][tcp|udp:]port"
       }
     },
     "zh-Hans": {
@@ -173,7 +220,9 @@
         "重启": "重启",
         "订阅下载": "订阅下载",
         "立即刷新订阅": "立即刷新订阅",
-        "旁路由": "旁路由"
+        "旁路由": "旁路由",
+        "DNS 解析策略": "DNS 解析策略",
+        "Fake-IP": "Fake-IP"
       },
       "fields": {
         "active": "生效",
@@ -221,7 +270,26 @@
         "replyPorts": "主路由转发的服务端口",
         "lan": "本节点 LAN",
         "privateLan": "私有地址段",
-        "extra": "额外源网段"
+        "extra": "额外源网段",
+        "socksPort": "独立 SOCKS 端口",
+        "fallback": "Fallback 解析器",
+        "nameserverPolicy": "域名解析策略",
+        "proxyServerNameservers": "代理节点域名解析器",
+        "proxyServerNameserverPolicy": "代理节点解析策略",
+        "directNameservers": "直连域名解析器",
+        "directNameserverFollowPolicy": "直连解析遵循域名策略",
+        "respectRules": "DNS 连接遵循分流规则",
+        "fallbackFilter": "Fallback 结果过滤",
+        "geoip": "使用 GeoIP 过滤",
+        "geoipCode": "GeoIP 国家代码",
+        "geosite": "Geosite 分类",
+        "ipcidr": "IP 地址段",
+        "domain": "域名",
+        "fakeIpRange": "Fake-IP 地址范围（IPv4）",
+        "fakeIpFilter": "Fake-IP 域名过滤",
+        "fakeIpFilterMode": "Fake-IP 过滤模式",
+        "excludeInterfaces": "排除入站接口",
+        "excludePortRules": "端口排除规则：[(in|out):][(tcp|udp):]端口"
       }
     },
     "zh-Hant": {
@@ -239,7 +307,9 @@
         "重启": "重新啟動",
         "订阅下载": "訂閱下載",
         "立即刷新订阅": "立即重新整理訂閱",
-        "旁路由": "旁路由"
+        "旁路由": "旁路由",
+        "DNS 解析策略": "DNS 解析策略",
+        "Fake-IP": "Fake-IP"
       },
       "fields": {
         "active": "生效",
@@ -287,7 +357,26 @@
         "replyPorts": "主路由轉送的服務連接埠",
         "lan": "本節點 LAN",
         "privateLan": "私有位址段",
-        "extra": "額外來源網段"
+        "extra": "額外來源網段",
+        "socksPort": "獨立 SOCKS 連接埠",
+        "fallback": "Fallback 解析器",
+        "nameserverPolicy": "網域解析策略",
+        "proxyServerNameservers": "代理節點網域解析器",
+        "proxyServerNameserverPolicy": "代理節點解析策略",
+        "directNameservers": "直連網域解析器",
+        "directNameserverFollowPolicy": "直連解析遵循網域策略",
+        "respectRules": "DNS 連線遵循分流規則",
+        "fallbackFilter": "Fallback 結果過濾",
+        "geoip": "使用 GeoIP 過濾",
+        "geoipCode": "GeoIP 國家代碼",
+        "geosite": "Geosite 分類",
+        "ipcidr": "IP 位址段",
+        "domain": "網域",
+        "fakeIpRange": "Fake-IP 位址範圍（IPv4）",
+        "fakeIpFilter": "Fake-IP 網域過濾",
+        "fakeIpFilterMode": "Fake-IP 過濾模式",
+        "excludeInterfaces": "排除入站介面",
+        "excludePortRules": "連接埠排除規則：[(in|out):][(tcp|udp):]連接埠"
       }
     }
   }

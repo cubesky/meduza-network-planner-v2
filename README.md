@@ -68,6 +68,10 @@ Release. The first release builds everything. An unavailable baseline for an exi
 than silently rebuilding every package. Rust and web tests still run for every tag; their dependencies and compiler
 outputs are cached independently of the change/reuse decision.
 
+The [Pages release API](docs/pages-api.md) provides release/channel summaries, full package download inventories,
+OCI digests, SBOMs and upstream provider data without GitHub REST discovery calls. Existing signed updater URLs
+remain unchanged; `/api/v1/channels/stable.json` returns the current stable inventory in one request.
+
 Cargo registry data, host test/release-tool output, pnpm downloads, cross-linker downloads and each Rust target
 have separate cache scopes, keyed by OS, architecture, toolchain, lockfiles and run. The release tool is built once
 in `plan` and passed to the packaging jobs. Because GitHub isolates caches between different tags, `cache.yml`

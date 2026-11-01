@@ -61,6 +61,7 @@ for v in a b c; do
 	podman manifest rm "localhost/mnp-bi:$v" >/dev/null 2>&1 || true
 	podman build -q --platform linux/amd64,linux/arm64,linux/arm/v7 --manifest "localhost/mnp-bi:$v" --label "io.meduza-np.e2e=$v" \
 		--label io.meduza-np.updater.version=0.1.0 --build-arg UPDATER_VERSION=0.1.0 \
+		--build-arg BASE_CONTAINER_VERSION=0.1.0 \
 		--build-arg UPDATE_BASE_URL=file:///var/lib/meduza-np/import "$ctx" >/dev/null
 	podman manifest push -q --all --tls-verify=false --digestfile "$W/digest-$v" "localhost/mnp-bi:$v" "docker://$IMG:$v"
 	curl -sf -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json' \

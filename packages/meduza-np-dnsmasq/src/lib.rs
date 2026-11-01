@@ -33,8 +33,11 @@ pub struct DnsmasqConfig {
     #[serde(default = "default_port")]
     pub port: u16,
     /// Explicit fallback resolvers (`ip` or `ip#port`), used before backends are ready and when none is healthy.
+    #[serde(default = "default_fallback_servers")]
     pub fallback_servers: Vec<String>,
-    #[serde(default)]
+    /// Derived from enabled DNS services and installed capabilities; legacy manual entries are ignored.
+    #[serde(skip)]
+    #[schemars(skip)]
     pub backends: Vec<Backend>,
     #[serde(default)]
     pub strategy: Strategy,
@@ -54,6 +57,9 @@ fn default_true() -> bool {
 }
 fn default_port() -> u16 {
     53
+}
+fn default_fallback_servers() -> Vec<String> {
+    vec!["119.29.29.29".into(), "1.0.0.1".into()]
 }
 fn default_ttl() -> u32 {
     60
@@ -80,6 +86,8 @@ pub enum Strategy {
 pub enum BackendKind {
     Mosdns,
     Mihomo,
+    #[serde(rename = "mihomo-openwrt")]
+    MihomoOpenwrt,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -111,7 +119,86 @@ impl Backend {
 }
 
 pub fn load(req: &PluginRequest) -> Result<Option<DnsmasqConfig>, PluginError> {
-    req.service::<DnsmasqConfig>("dnsmasq")
+    let Some(mut cfg) = req.service::<DnsmasqConfig>("dnsmasq")? else { return Ok(None) };
+    if cfg.fallback_servers.is_empty() {
+        cfg.fallback_servers = default_fallback_servers();
+    }
+    if cfg.enabled {
+        cfg.backends = discover_backends(req)?;
+    }
+    Ok(Some(cfg))
+}
+
+/// Candidate backends come from the services themselves, never an independently edited address list.
+/// Health probing in the wrapper decides which candidates actually enter dnsmasq's servers-file.
+pub fn discover_backends(req: &PluginRequest) -> Result<Vec<Backend>, PluginError> {
+    let active = |name: &str| req.config.services.get(name).filter(|s| s.get("enabled") != Some(&Value::Bool(false)));
+    let mut backends = Vec::new();
+    if let Some(service) = active("mosdns").filter(|_| req.has_capability("mosdns.dns")) {
+        let address = service
+            .get("listen")
+            .and_then(Value::as_str)
+            .unwrap_or("127.0.0.1")
+            .parse::<IpAddr>()
+            .map_err(|_| PluginError::new("invalid-config", "invalid MosDNS listen address"))?;
+        let port = service
+            .get("port")
+            .map_or(Some(1153), |p| p.as_u64().and_then(|p| u16::try_from(p).ok()))
+            .filter(|p| *p != 0)
+            .ok_or_else(|| PluginError::new("invalid-config", "invalid MosDNS DNS port"))?;
+        backends.push(Backend {
+            id: StableId::new("mosdns").expect("stable id"),
+            kind: BackendKind::Mosdns,
+            enabled: true,
+            address: local_target(address),
+            port,
+            priority: 10,
+        });
+    }
+    if let Some(service) = active("mihomo").filter(|_| req.has_capability("mihomo.dns")) {
+        if let Some(dns) = service.get("dns").filter(|d| d.get("enabled") == Some(&Value::Bool(true))) {
+            let listen = dns
+                .get("listen")
+                .and_then(Value::as_str)
+                .unwrap_or("127.0.0.1:1053")
+                .parse::<SocketAddr>()
+                .map_err(|_| PluginError::new("invalid-config", "invalid Mihomo DNS listener"))?;
+            if listen.port() == 0 {
+                return Err(PluginError::new("invalid-config", "invalid Mihomo DNS port"));
+            }
+            backends.push(Backend {
+                id: StableId::new("mihomo").expect("stable id"),
+                kind: BackendKind::Mihomo,
+                enabled: true,
+                address: local_target(listen.ip()),
+                port: listen.port(),
+                priority: 20,
+            });
+        }
+    }
+    if active("mihomo-openwrt").is_some_and(|s| s.get("dnsIntegration") == Some(&Value::Bool(true)))
+        && req.has_capability("mihomo-openwrt.dns")
+    {
+        // OpenClash owns its listener. The wrapper reads dnsPort from its live adapter state on every probe;
+        // port 0 is an unresolved candidate, never queried or written to servers-file.
+        backends.push(Backend {
+            id: StableId::new("mihomo-openwrt").expect("stable id"),
+            kind: BackendKind::MihomoOpenwrt,
+            enabled: true,
+            address: IpAddr::from([127, 0, 0, 1]),
+            port: 0,
+            priority: 20,
+        });
+    }
+    Ok(backends)
+}
+
+pub fn local_target(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(a) if a.is_unspecified() => Ipv4Addr::LOCALHOST.into(),
+        IpAddr::V6(a) if a.is_unspecified() => Ipv6Addr::LOCALHOST.into(),
+        _ => ip,
+    }
 }
 
 /// `ip` or `ip#port` → socket address.
@@ -220,6 +307,7 @@ pub fn validate(cfg: &DnsmasqConfig, req: &PluginRequest) -> Vec<ValidationError
         return Vec::new();
     }
     v.check(!cfg.listen_addresses.is_empty(), "/listenAddresses", "at least one listen address");
+    v.check(cfg.port != 0, "/port", "ports are 1-65535");
     v.check(!cfg.fallback_servers.is_empty(), "/fallbackServers", "explicit fallback servers are required (no /etc/resolv.conf)");
     let listeners: BTreeSet<SocketAddr> = cfg.listen_addresses.iter().map(|a| SocketAddr::new(*a, cfg.port)).collect();
     for (i, s) in cfg.fallback_servers.iter().enumerate() {
@@ -235,13 +323,18 @@ pub fn validate(cfg: &DnsmasqConfig, req: &PluginRequest) -> Vec<ValidationError
         let p = format!("/backends/{i}");
         v.check(ids.insert(b.id.clone()), format!("{p}/id"), "duplicate backend id");
         v.check(addrs.insert(b.addr()), format!("{p}/port"), "two backends share an address");
-        v.check(!listeners.contains(&b.addr()), format!("{p}/port"), "backend address equals the front-end listener (loop)");
+        v.check(
+            !listeners.iter().any(|l| l.port() == b.port && bind_conflicts(l.ip(), &[b.address])),
+            format!("{p}/port"),
+            "backend address equals the front-end listener (loop)",
+        );
         if b.enabled {
             // Only installed DNS-capable backends may be referenced (§9.10).
             // A Mihomo backend is either our own Mihomo or the DNS listener of an OpenClash-managed one.
             let caps: &[&str] = match b.kind {
                 BackendKind::Mosdns => &["mosdns.dns"],
-                BackendKind::Mihomo => &["mihomo.dns", "mihomo-openwrt.dns"],
+                BackendKind::Mihomo => &["mihomo.dns"],
+                BackendKind::MihomoOpenwrt => &["mihomo-openwrt.dns"],
             };
             v.check(
                 caps.iter().any(|c| req.has_capability(c)),
@@ -415,11 +508,9 @@ mod tests {
 
     #[test]
     fn fallback_first_and_spec_lines() {
-        let r = req(
-            json!({"listenAddresses": ["10.42.1.1"], "port": 53, "fallbackServers": ["119.29.29.29", "1.0.0.1"],
-            "backends": [{"id": "mosdns", "kind": "mosdns", "port": 1153, "priority": 10}, {"id": "mihomo", "kind": "mihomo", "port": 1053, "priority": 20}]}),
-            &["mosdns.dns", "mihomo.dns"],
-        );
+        let mut r = req(json!({"listenAddresses": ["10.42.1.1"], "port": 53}), &["mosdns.dns", "mihomo.dns"]);
+        r.config.services.insert("mosdns".into(), json!({}));
+        r.config.services.insert("mihomo".into(), json!({"dns": {"enabled": true}}));
         let cfg = load(&r).unwrap().unwrap();
         let errs: Vec<_> = validate(&cfg, &r).into_iter().filter(|e| !e.message.contains("already used")).collect();
         assert!(errs.is_empty(), "{errs:?}");
@@ -447,36 +538,64 @@ mod tests {
 
     #[test]
     fn backend_set_changes_reload_listener_changes_restart() {
-        let base = json!({"listenAddresses": ["10.42.1.1"], "port": 53, "fallbackServers": ["119.29.29.29"],
-            "backends": [{"id": "mosdns", "kind": "mosdns", "port": 1153, "priority": 10}]});
-        let digest = |d: &Value| {
-            let r = req(d.clone(), &["mosdns.dns", "mihomo.dns"]);
-            let p = plan(&load(&r).unwrap().unwrap(), &r).unwrap().remove(0);
-            (p.processes[0].restart_digest.clone().unwrap(), p.processes[0].argv.clone())
+        let mut r = req(json!({"listenAddresses": ["10.42.1.1"], "port": 53}), &["mosdns.dns", "mihomo.dns"]);
+        r.config.services.insert("mosdns".into(), json!({}));
+        let generated = |r: &PluginRequest| {
+            let p = plan(&load(r).unwrap().unwrap(), r).unwrap().remove(0);
+            (p.processes[0].restart_digest.clone().unwrap(), p.processes[0].argv.clone(), p.files[2].content.clone())
         };
-        let (d0, argv0) = digest(&base);
-        let mut more = base.clone();
-        more["backends"].as_array_mut().unwrap().push(json!({"id": "mihomo", "kind": "mihomo", "port": 1053, "priority": 20}));
-        more["fallbackServers"] = json!(["1.0.0.1"]);
-        assert_eq!(digest(&more), (d0.clone(), argv0), "backend set and fallback are reloaded (SIGHUP), not restarted");
-        let mut moved = base.clone();
-        moved["port"] = json!(5353);
-        assert_ne!(digest(&moved).0, d0, "listener change restarts");
+        let (d0, argv0, spec0) = generated(&r);
+        r.config.services.insert("mihomo".into(), json!({"dns": {"enabled": true}}));
+        r.config.services.get_mut("dnsmasq").unwrap()["fallbackServers"] = json!(["1.0.0.1"]);
+        let (d1, argv1, spec1) = generated(&r);
+        assert_eq!((d1, argv1), (d0.clone(), argv0), "backend set and fallback are reloaded (SIGHUP), not restarted");
+        assert_ne!(spec0, spec1);
+        r.config.services.get_mut("mosdns").unwrap()["port"] = json!(1253);
+        let moved = generated(&r);
+        assert_eq!(moved.0, d0, "moving a backend never restarts the client-facing DNS");
+        assert!(moved.2.contains("1253"));
+        r.config.services.get_mut("dnsmasq").unwrap()["port"] = json!(5353);
+        assert_ne!(generated(&r).0, d0, "front-end listener change restarts");
     }
 
     #[test]
-    fn loops_and_missing_backends_rejected() {
-        let r = req(
+    fn loops_rejected_and_uninstalled_backends_are_not_required() {
+        let mut r = req(
             json!({"listenAddresses": ["127.0.0.1"], "port": 1153, "fallbackServers": ["127.0.0.1#1153"],
             "backends": [{"id": "m", "kind": "mosdns", "port": 1153}], "mdnsForward": true}),
-            &[],
+            &["mosdns.dns"],
         );
+        r.config.services.insert("mosdns".into(), json!({}));
         let text = format!("{:?}", validate(&load(&r).unwrap().unwrap(), &r));
-        for needle in
-            ["points at this front end", "equals the front-end listener", "mosdns.dns is not provided", "requires meduza-np-avahi"]
-        {
+        for needle in ["points at this front end", "equals the front-end listener", "requires meduza-np-avahi"] {
             assert!(text.contains(needle), "missing {needle}: {text}");
         }
+        r.context.capabilities.clear();
+        assert!(load(&r).unwrap().unwrap().backends.is_empty(), "an uninstalled backend never prevents standalone fallback DNS");
+    }
+
+    #[test]
+    fn discovery_follows_services_ports_and_switches_ignoring_legacy_lists() {
+        let mut r = req(
+            json!({"listenAddresses": ["10.42.10.12"], "backends": [
+            {"id":"stale", "kind":"mosdns", "address":"192.0.2.1", "port":9}]}),
+            &["mosdns.dns", "mihomo.dns", "mihomo-openwrt.dns"],
+        );
+        assert!(load(&r).unwrap().unwrap().backends.is_empty(), "legacy entries do not create upstreams");
+        r.config.services.get_mut("dnsmasq").unwrap()["fallbackServers"] = json!([]);
+        assert_eq!(load(&r).unwrap().unwrap().fallback_servers, ["119.29.29.29", "1.0.0.1"], "empty legacy fallback selects the defaults");
+        r.config.services.insert("mosdns".into(), json!({"listen":"0.0.0.0", "port":1253}));
+        r.config.services.insert("mihomo".into(), json!({"dns":{"enabled":true,"listen":"[::]:2053"}}));
+        let cfg = load(&r).unwrap().unwrap();
+        assert_eq!(cfg.backends.iter().map(|b| b.addr().to_string()).collect::<Vec<_>>(), ["127.0.0.1:1253", "[::1]:2053"]);
+        r.config.services.get_mut("mihomo").unwrap()["dns"]["enabled"] = json!(false);
+        assert_eq!(load(&r).unwrap().unwrap().backends.len(), 1);
+        r.config.services.get_mut("mosdns").unwrap()["enabled"] = json!(false);
+        assert!(load(&r).unwrap().unwrap().backends.is_empty());
+        r.config.services.insert("mihomo-openwrt".into(), json!({"dnsIntegration":true}));
+        assert_eq!(load(&r).unwrap().unwrap().backends[0].kind, BackendKind::MihomoOpenwrt);
+        r.config.services.get_mut("mihomo-openwrt").unwrap()["dnsIntegration"] = json!(false);
+        assert!(load(&r).unwrap().unwrap().backends.is_empty());
     }
 
     #[test]

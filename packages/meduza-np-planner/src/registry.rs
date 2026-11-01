@@ -189,6 +189,7 @@ impl Registry {
     fn resolve_providers(&mut self) {
         let mut slots: BTreeSet<String> = BTreeSet::new();
         for p in self.packages.values().filter(|p| p.registered()) {
+            slots.extend(p.manifest.providers.iter().map(|d| d.slot.clone()));
             if let Some(s) = &p.manifest.provider_slot {
                 slots.insert(s.clone());
             }

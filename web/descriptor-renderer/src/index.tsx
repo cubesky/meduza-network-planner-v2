@@ -643,7 +643,9 @@ function Input(props: { info: FieldInfo; value: unknown; onChange: (v: unknown) 
     case "string":
       return <TextInput value={props.value as string} placeholder={fallback} invalid={props.invalid} onInput={(v) => props.onChange(v === "" && (info.nullable || fallback !== undefined) ? undefined : v)} />;
     case "string-list":
-      return <ListInput value={props.value as string[]} invalid={props.invalid} onChange={props.onChange} placeholder={t("one per line")} />;
+      return <ListInput value={props.value as string[]} invalid={props.invalid}
+        onChange={(v) => props.onChange(v.length === 0 && Array.isArray(info.defaultValue) ? undefined : v)}
+        placeholder={Array.isArray(info.defaultValue) ? info.defaultValue.join("\n") : t("one per line")} />;
     case "number-list":
       return <NumberListInput value={props.value as number[] | undefined} invalid={props.invalid} onChange={props.onChange} />;
     default:

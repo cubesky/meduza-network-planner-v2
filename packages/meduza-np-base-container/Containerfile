@@ -6,11 +6,12 @@
 #   bin/<TARGETARCH><TARGETVARIANT>/meduza-np-updater   static musl updater for that platform (amd64, arm64, armv7)
 #   trust/release-keys.json                            release trust store (no image without trust roots)
 #
-#   podman build --platform linux/arm64 --build-arg UPDATER_VERSION=0.2.0 -t meduza-np-base-container .
+#   podman build --platform linux/arm64 --build-arg BASE_CONTAINER_VERSION=0.3.0 --build-arg UPDATER_VERSION=0.2.0 -t meduza-np-base-container .
 FROM docker.io/library/alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 
 ARG TARGETARCH
 ARG TARGETVARIANT
+ARG BASE_CONTAINER_VERSION
 ARG UPDATER_VERSION
 ARG UPDATE_BASE_URL=https://meduza-np.github.io/meduza-network-planner
 
@@ -26,6 +27,9 @@ COPY rootfs/ /
 # Paths planner/plugins use are links into the store's current view (store volume, read-only for planner).
 RUN chmod 0755 /usr/lib/meduza-np/image/meduza-np-updater /usr/lib/meduza-np/container/entrypoint.sh && \
     test -n "$UPDATER_VERSION" && \
+    test -n "$BASE_CONTAINER_VERSION" && \
+    for version in "$BASE_CONTAINER_VERSION" "$UPDATER_VERSION"; do case "$version" in *[!A-Za-z0-9._+-]*) exit 1;; esac; done && \
+    printf '{"package":"meduza-np-base-container","version":"%s","updaterVersion":"%s"}\n' "$BASE_CONTAINER_VERSION" "$UPDATER_VERSION" > /usr/lib/meduza-np/image/base-container.json && \
     /usr/lib/meduza-np/image/meduza-np-updater trust-check /usr/share/meduza-np/trust/release-keys.json && \
     mkdir -p /usr/libexec /usr/share/meduza-np /usr/lib/meduza-np /etc/meduza-np && \
     ln -sfn /var/lib/meduza-np/store/current/usr/libexec/meduza-np /usr/libexec/meduza-np && \
@@ -43,6 +47,7 @@ ENV MEDUZA_NP_IMAGE_UPDATER_VERSION=${UPDATER_VERSION} \
     MEDUZA_NP_UPDATE_BACKEND=store
 
 LABEL org.opencontainers.image.title="meduza-np-base-container" \
+      org.opencontainers.image.version="${BASE_CONTAINER_VERSION}" \
       org.opencontainers.image.description="Meduza NP node runtime: updater + planner roles" \
       org.opencontainers.image.source="https://github.com/meduza-np/meduza-network-planner" \
       io.meduza-np.updater.version="${UPDATER_VERSION}"

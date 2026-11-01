@@ -39,6 +39,9 @@
   ],
   "consumes": [
     "services.dnsmasq",
+    "services.mosdns",
+    "services.mihomo",
+    "services.mihomo-openwrt",
     "dns.hosts"
   ]
 }

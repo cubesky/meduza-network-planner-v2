@@ -193,6 +193,108 @@ of the planner service (or the procd init script) stops them.
   resort. If a roaming node also has an eBGP session, give it short timers too (`keepalive` 3, `hold` 9): the hold
   timer is what detects a lost roaming peer.
 
+### Mihomo DNS and TPROXY on a side router
+
+Mihomo DNS is configured explicitly in the node's Mihomo settings. Subscription DNS is replaced, including its
+listener and upstreams. Enabling TPROXY alone does not enable Mihomo DNS or install/enable dnsmasq. A fragment
+to merge into an existing Mihomo service (keep its API secret and subscription settings) is:
+
+```json
+{
+  "mode": "tproxy",
+  "socksPort": 7891,
+  "dns": {
+    "enabled": true,
+    "listen": "127.0.0.1:1053",
+    "nameservers": ["https://doh.pub/dns-query"],
+    "defaultNameservers": ["119.29.29.29"],
+    "proxyServerNameservers": ["119.29.29.29"],
+    "fakeIp": true,
+    "fakeIpFilter": ["*.lan", "+.local"]
+  }
+}
+```
+
+Enable the client-facing dnsmasq with its listener; no backend list is needed:
+
+```json
+{
+  "enabled": true,
+  "listenAddresses": ["10.42.10.12"]
+}
+```
+
+The front end automatically discovers enabled, installed MosDNS and Mihomo DNS services and uses their actual
+listener addresses/ports (wildcard backend listeners are queried over loopback). MosDNS is preferred, then Mihomo.
+DNS queries must succeed before a backend is added. Failure removes it; recovery adds it again. Disabling/removing
+a service removes it on reload, and moving its listener requires fresh successful probes. These changes update
+the servers-file with SIGHUP and keep the front-end process running. The status panel shows the discovered
+backends, actual addresses, readiness and current upstreams. OpenClash integration requires `dnsIntegration` and
+uses the DNS port reported by its adapter, following port changes without taking control of OpenClash.
+
+Fallback defaults to `119.29.29.29` and `1.0.0.1`, so it works before any backend is ready; set `fallbackServers`
+only to override these defaults. An unset or empty list uses the defaults. With no healthy backend, fallback is
+restored automatically. Legacy manual `backends` entries are ignored and no longer appear in the configuration
+form. Enabling the front end does not install or enable any backend service.
+
+The main router's DHCP advertises `10.42.10.12` as gateway and DNS to clients.
+The container itself keeps its main-router gateway (`10.42.10.1`) and independent system DNS (`119.29.29.29`);
+planner/updater and subscription downloads are never redirected through TPROXY. Mihomo only intercepts forwarded
+IPv4 traffic from the selected LAN sources. It declares IPv4 forwarding even when no NAT rules are configured.
+
+The DNS resolver-policy tab supports `fallback`, `fallbackFilter`, `nameserverPolicy`, `proxyServerNameservers`,
+`proxyServerNameserverPolicy`, `directNameservers`, `directNameserverFollowPolicy` and `respectRules`; the Fake-IP
+tab sets its range, filter and filter mode. Policy maps accept a resolver string or an array per domain. All
+resolver groups are checked against the enabled dnsmasq front end and Mihomo's own DNS listener. `respectRules`
+requires explicit proxy-server resolvers to bootstrap proxy hostnames. These options map to the corresponding
+[Mihomo DNS keys](https://wiki.metacubex.one/en/config/dns/).
+
+For legacy MosDNS configurations referring to SOCKS port `7891`, set `socksPort: 7891`; the etcd importer does this
+automatically. New configurations open the optional dedicated SOCKS port only when configured (the mixed listener
+also supports SOCKS). `tproxy.excludePortRules` preserves the previous `[(in|out):][(tcp|udp):]port` syntax:
+`in:tcp:80` excludes destination TCP port 80, `out:udp:123` excludes source UDP port 123, and bare `53` excludes
+both directions of both selected protocols. Existing `excludePorts` keeps its destination-only meaning.
+`excludeInterfaces` complements the automatic mesh/VPN device exclusions. Imported subscription DNS needs explicit
+configuration because the etcd export does not include the downloaded subscription's DNS settings.
+
+### Managing bundled MosDNS / OpenVPN binaries
+
+Node Settings → Features includes **MosDNS binary resource** and **OpenVPN binary resource**, independently of
+the service adapter settings. Add/enable the installation request and apply the working copy to let the updater
+install the corresponding `meduza-np-mosdns-pkg` / `meduza-np-openvpn-pkg` component. These packages contain pinned
+binaries; they do not use Mihomo's separate manual-file/download preparation flow or start an extra daemon.
+
+The resource panel shows the component package version, bundled upstream version, actual active provider, binary
+path and any resolution failure. Installed resources can be inspected even without a Manager installation request.
+They register their binary slots independently of whether the service adapter has been installed. A missing binary
+is reported as unavailable, rather than silently advertised as a healthy system fallback.
+
+Stopping/removing the request stops asking the updater for that component. It does not forcibly uninstall a package
+retained by `MEDUZA_NP_COMPONENTS` or the updater's existing installed-set selection; change that deployment/selection
+when removing such a package. The reported active provider remains the source of truth. Runtime restarts belong to
+the MosDNS/OpenVPN service instances, not these binary resources.
+
+### Navigating the topology
+
+The initial view keeps AS clusters apart with adjustable spacing; auto-rotation is off by default. Background
+drag rotates with a fixed up direction and bounded tilt; Shift-drag or right/middle drag pans in screen directions.
+The wheel zooms towards the pointer, and manual navigation is not corrected by automatic fitting. Dragging a node
+continues across periodic report refreshes. Touch supports two-finger pan and pinch zoom.
+
+Use **Fit graph** for the complete current topology, **Focus selection** (or double-click a cluster) for a local
+view, and **Reset view** to restore orientation and framing. The canvas also supports arrows to rotate,
+Shift+arrows to pan, `+`/`-` to zoom and `0` to reset. Cluster spacing is remembered in this browser. Selecting a
+node/link/cluster emphasizes its connections; labels avoid overlapping one another where space permits.
+
+On a node's **Connections** tab, WireGuard and OpenVPN restart controls appear at the end of each peer/session
+row. Confirmation names the owning instance: restarting an instance briefly disconnects all of its peers or
+sessions. Viewers cannot restart instances.
+
+The **Diagnostics** package list includes the running `meduza-np-base-container` image even though updater does
+not install it into the package store. Its image version is independent of the updater version. Older images
+without their own version record show **unknown version** in the installed column; a new planner report is
+required for this detection to reach Manager.
+
 ## 7. Checks to run after changes
 
 ```sh

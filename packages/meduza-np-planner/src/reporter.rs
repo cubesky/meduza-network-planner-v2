@@ -58,6 +58,7 @@ pub fn build(p: &Arc<Planner>) -> NodeReport {
         })
         .collect();
     instances.extend(st.probes.iter().cloned());
+    instances.extend(binary_provider_statuses(&registry));
 
     let network_mode = crate::platform::network_mode(&p.platform);
     let mut features = registry.features(&enabled, &running, &healthy);
@@ -111,6 +112,48 @@ pub fn build(p: &Arc<Planner>) -> NodeReport {
     }
 }
 
+/// Static providers have no daemon/plugin probe. Report their actual slot resolution as a resource of its own.
+fn binary_provider_statuses(registry: &crate::registry::Registry) -> Vec<InstanceStatus> {
+    let mut result = Vec::new();
+    for package in registry.packages.values().filter(|p| p.manifest.role == PackageRole::BinaryProvider) {
+        for declaration in package.manifest.providers.iter().filter(|d| !d.requires_preparation) {
+            let resolved = registry.providers.get(&declaration.slot);
+            let active = resolved.is_some_and(|r| r.source == package.manifest.package);
+            let upstream: Option<Value> =
+                std::fs::read(package.dir.join("upstream.lock.json")).ok().and_then(|b| serde_json::from_slice(&b).ok());
+            let binary_name = declaration.slot.trim_end_matches(".binary");
+            let version = upstream
+                .as_ref()
+                .and_then(|u| u.get("sources"))
+                .and_then(Value::as_array)
+                .and_then(|sources| sources.iter().find(|s| s.get("name").and_then(Value::as_str) == Some(binary_name)))
+                .and_then(|s| s.get("version"))
+                .cloned()
+                .unwrap_or(Value::Null);
+            let reason = package
+                .reason
+                .clone()
+                .or_else(|| registry.provider_errors.get(&declaration.slot).cloned())
+                .or_else(|| (!active).then(|| "this package is not the active binary provider".into()));
+            result.push(InstanceStatus {
+                id: format!("{}/main", package.short()),
+                kind: format!("{binary_name}-provider"),
+                state: if active && package.registered() { ServiceState::Up } else { ServiceState::Down },
+                observed_at: Some(meduza_np_plugin_sdk::now_rfc3339()),
+                reason,
+                detail: BTreeMap::from([
+                    ("slot".into(), Value::String(declaration.slot.clone())),
+                    ("packageVersion".into(), Value::String(package.manifest.version.clone())),
+                    ("upstreamVersion".into(), version),
+                    ("activeSource".into(), resolved.map(|p| Value::String(p.source.clone())).unwrap_or(Value::Null)),
+                    ("path".into(), Value::String(declaration.binary.clone())),
+                ]),
+            });
+        }
+    }
+    result
+}
+
 pub fn packages(p: &Arc<Planner>) -> Vec<PackageStatus> {
     let mut packages = p.registry().package_statuses();
     let data_dir = std::env::var_os("MEDUZA_NP_DATA_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| p.paths.state.clone());
@@ -120,7 +163,53 @@ pub fn packages(p: &Arc<Planner>) -> Vec<PackageStatus> {
         Path::new("/usr/lib/meduza-np/image/meduza-np-updater"),
         std::env::var("MEDUZA_NP_IMAGE_UPDATER_VERSION").ok().as_deref(),
     );
+    add_image_base(
+        &mut packages,
+        Path::new("/usr/lib/meduza-np/image"),
+        Path::new("/usr/lib/meduza-np/container/entrypoint.sh"),
+        p.platform.container,
+    );
     packages
+}
+
+/// The running base image is not a store-installed package. Its immutable marker records its own version,
+/// independently of the updater baked into it. Older images can still be recognized by their runtime files.
+fn add_image_base(packages: &mut Vec<PackageStatus>, image_dir: &Path, entrypoint: &Path, container: bool) {
+    if !container
+        || packages.iter().any(|p| p.name == "meduza-np-base-container")
+        || !image_dir.join("meduza-np-updater").is_file()
+        || !entrypoint.is_file()
+    {
+        return;
+    }
+    let marker = meduza_np_runtime::fsutil::read_json::<Value>(&image_dir.join("base-container.json"), 64 * 1024).ok().flatten();
+    let version = marker
+        .as_ref()
+        .filter(|m| m.get("package").and_then(Value::as_str) == Some("meduza-np-base-container"))
+        .and_then(|m| m.get("version"))
+        .and_then(Value::as_str)
+        .filter(|v| valid_image_version(v))
+        .unwrap_or_default();
+    packages.push(PackageStatus {
+        name: "meduza-np-base-container".into(),
+        version: version.into(),
+        role: PackageRole::ContainerBase,
+        manifest_digest: String::new(),
+        ui_digest: None,
+        registration: RegistrationState::Registered,
+        reason_code: version.is_empty().then(|| "image-version-unknown".into()),
+        reason: version.is_empty().then(|| "The base-container runtime is present; this image does not record its own version.".into()),
+        provides: vec!["container.runtime".into()],
+    });
+    packages.sort_by(|a, b| a.name.cmp(&b.name));
+}
+
+fn valid_image_version(value: &str) -> bool {
+    // Bounded release labels; never derive the base image version from the embedded updater's version.
+    !value.is_empty()
+        && value.len() <= 64
+        && value.as_bytes()[0].is_ascii_alphanumeric()
+        && value.bytes().all(|c| c.is_ascii_alphanumeric() || b"._+-".contains(&c))
 }
 
 // The base image's updater has no store object/manifest. Include its verified installation record so the
@@ -153,6 +242,87 @@ fn add_image_updater(packages: &mut Vec<PackageStatus>, installed_path: &Path, b
 mod tests {
     use super::*;
     use meduza_np_protocol::group::InstalledPackage;
+
+    #[test]
+    fn base_image_is_reported_independently_of_the_updater_and_legacy_versions_stay_unknown() {
+        let dir = std::env::temp_dir().join(format!("mnp-report-base-image-{}", std::process::id()));
+        let image = dir.join("image");
+        let entrypoint = dir.join("entrypoint.sh");
+        std::fs::create_dir_all(&image).unwrap();
+        std::fs::write(image.join("meduza-np-updater"), "embedded updater").unwrap();
+        let mut packages = Vec::new();
+        add_image_base(&mut packages, &image, &entrypoint, true);
+        assert!(packages.is_empty(), "an updater alone does not identify this base image");
+        std::fs::write(&entrypoint, "base container entrypoint").unwrap();
+        add_image_base(&mut packages, &image, &entrypoint, false);
+        assert!(packages.is_empty(), "do not advertise a base image on native hosts");
+        add_image_base(&mut packages, &image, &entrypoint, true);
+        assert_eq!(packages[0].name, "meduza-np-base-container");
+        assert_eq!(packages[0].registration, RegistrationState::Registered);
+        assert_eq!(packages[0].version, "", "legacy images are installed but have no known version");
+        assert_eq!(packages[0].reason_code.as_deref(), Some("image-version-unknown"));
+        let marker = image.join("base-container.json");
+        std::fs::write(&marker, r#"{"package":"meduza-np-base-container","version":"0.3.0","updaterVersion":"0.2.0"}"#).unwrap();
+        packages.clear();
+        add_image_base(&mut packages, &image, &entrypoint, true);
+        add_image_base(&mut packages, &image, &entrypoint, true);
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].role, PackageRole::ContainerBase);
+        assert_eq!(packages[0].version, "0.3.0", "the base image and updater versions can differ");
+        assert!(packages[0].reason.is_none());
+        for invalid in [
+            r#"{"package":"another-image","version":"9.9.9"}"#,
+            r#"{"package":"meduza-np-base-container","updaterVersion":"0.2.0"}"#,
+            "malformed",
+        ] {
+            std::fs::write(&marker, invalid).unwrap();
+            packages.clear();
+            add_image_base(&mut packages, &image, &entrypoint, true);
+            assert_eq!(packages[0].version, "", "do not invent the image version from other package metadata");
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn static_provider_resources_resolve_without_an_adapter_and_report_real_status() {
+        let dir = std::env::temp_dir().join(format!("mnp-report-static-providers-{}", std::process::id()));
+        let binary = std::env::current_exe().unwrap();
+        for (name, version) in [("mosdns", "v5.3.4"), ("openvpn", "2.7.8")] {
+            let package = format!("meduza-np-{name}-pkg");
+            let root = dir.join(&package);
+            std::fs::create_dir_all(&root).unwrap();
+            std::fs::write(
+                root.join("manifest.json"),
+                serde_json::json!({
+                    "manifestVersion":1,"package":package,"version":"0.2.0","role":"binary-provider",
+                    "plannerApi":{"min":1,"max":1},"provides":[format!("{name}.binary")],
+                    "providers":[{"slot":format!("{name}.binary"),"binary":binary}]
+                })
+                .to_string(),
+            )
+            .unwrap();
+            std::fs::write(root.join("upstream.lock.json"), serde_json::json!({"sources":[{"name":name,"version":version}]}).to_string())
+                .unwrap();
+        }
+        let mut registry = crate::registry::scan(&dir, &meduza_np_plugin_sdk::Platform::default());
+        assert_eq!(registry.providers["mosdns.binary"].source, "meduza-np-mosdns-pkg", "standalone resources register their own slots");
+        assert_eq!(registry.providers["openvpn.binary"].source, "meduza-np-openvpn-pkg");
+        let statuses = binary_provider_statuses(&registry);
+        assert_eq!(statuses.len(), 2);
+        let mosdns = statuses.iter().find(|s| s.kind == "mosdns-provider").unwrap();
+        assert_eq!(mosdns.state, ServiceState::Up);
+        assert_eq!(mosdns.detail["packageVersion"], "0.2.0");
+        assert_eq!(mosdns.detail["upstreamVersion"], "v5.3.4");
+        assert_eq!(mosdns.detail["activeSource"], "meduza-np-mosdns-pkg");
+        registry.providers.remove("mosdns.binary");
+        registry.provider_errors.insert("mosdns.binary".into(), "packaged binary is missing".into());
+        let statuses = binary_provider_statuses(&registry);
+        let mosdns = statuses.iter().find(|s| s.kind == "mosdns-provider").unwrap();
+        assert_eq!(mosdns.state, ServiceState::Down);
+        assert!(mosdns.reason.as_ref().unwrap().contains("missing"));
+        assert_eq!(mosdns.detail["activeSource"], Value::Null);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn image_updater_is_reported_only_when_installed_and_present() {

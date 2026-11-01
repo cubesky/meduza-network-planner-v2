@@ -37,7 +37,8 @@
     "backend": {
       "enum": [
         "mosdns",
-        "mihomo"
+        "mihomo",
+        "mihomo-openwrt"
       ]
     }
   }

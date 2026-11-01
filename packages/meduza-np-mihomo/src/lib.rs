@@ -11,6 +11,7 @@
 //!   (filled by the wrapper with resolved addresses) plus automatic exclusions for mesh/VPN/Access devices and
 //!   local destinations; fwmark and routing table numbers are reserved resources checked for conflicts.
 
+mod dns;
 pub mod runner;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -39,6 +40,9 @@ pub struct MihomoConfig {
     pub mode: Mode,
     #[serde(default = "default_mixed")]
     pub mixed_port: u16,
+    /// Optional dedicated SOCKS listener (the previous planner used 7891).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub socks_port: Option<u16>,
     /// Listen only on loopback unless explicitly allowed.
     #[serde(default)]
     pub allow_lan: bool,
@@ -115,11 +119,91 @@ pub struct MihomoDns {
     /// Plain IP resolvers used to resolve DoH/DoT names and proxy servers (bootstrap path).
     #[serde(default)]
     pub default_nameservers: Vec<IpAddr>,
+    #[serde(default)]
+    pub fallback: Vec<String>,
+    #[serde(default)]
+    pub nameserver_policy: BTreeMap<String, DnsResolvers>,
+    /// Independent resolution of proxy server hostnames; required by respectRules.
+    #[serde(default)]
+    pub proxy_server_nameservers: Vec<String>,
+    #[serde(default)]
+    pub proxy_server_nameserver_policy: BTreeMap<String, DnsResolvers>,
+    #[serde(default)]
+    pub direct_nameservers: Vec<String>,
+    #[serde(default)]
+    pub direct_nameserver_follow_policy: bool,
+    #[serde(default)]
+    pub respect_rules: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_filter: Option<FallbackFilter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fake_ip_range: Option<IpNet>,
+    #[serde(default)]
+    pub fake_ip_filter: Vec<String>,
+    #[serde(default)]
+    pub fake_ip_filter_mode: FakeIpFilterMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum DnsResolvers {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl DnsResolvers {
+    fn servers(&self) -> &[String] {
+        match self {
+            Self::One(s) => std::slice::from_ref(s),
+            Self::Many(s) => s,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum FakeIpFilterMode {
+    #[default]
+    Blacklist,
+    Whitelist,
+    Rule,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FallbackFilter {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geoip: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geoip_code: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub geosite: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ipcidr: Vec<IpNet>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub domain: Vec<String>,
 }
 
 impl Default for MihomoDns {
     fn default() -> Self {
-        Self { enabled: false, listen: default_dns_listen(), fake_ip: false, nameservers: Vec::new(), default_nameservers: Vec::new() }
+        Self {
+            enabled: false,
+            listen: default_dns_listen(),
+            fake_ip: false,
+            nameservers: Vec::new(),
+            default_nameservers: Vec::new(),
+            fallback: Vec::new(),
+            nameserver_policy: BTreeMap::new(),
+            proxy_server_nameservers: Vec::new(),
+            proxy_server_nameserver_policy: BTreeMap::new(),
+            direct_nameservers: Vec::new(),
+            direct_nameserver_follow_policy: false,
+            respect_rules: false,
+            fallback_filter: None,
+            fake_ip_range: None,
+            fake_ip_filter: Vec::new(),
+            fake_ip_filter_mode: FakeIpFilterMode::default(),
+        }
     }
 }
 
@@ -181,6 +265,8 @@ pub struct Tproxy {
     #[serde(default)]
     pub inbound_interfaces: Vec<String>,
     #[serde(default)]
+    pub exclude_interfaces: Vec<String>,
+    #[serde(default)]
     pub exclude_sources: Vec<IpNet>,
     /// Destinations in RFC 1918 and other private/special ranges are never proxied.
     #[serde(default = "default_true")]
@@ -193,6 +279,9 @@ pub struct Tproxy {
     /// Destination ports never proxied (TCP and UDP).
     #[serde(default)]
     pub exclude_ports: Vec<u16>,
+    /// Legacy-compatible [(in|out):][(tcp|udp):]port. in = destination, out = source; no direction = both.
+    #[serde(default)]
+    pub exclude_port_rules: Vec<String>,
     /// Decide once per connection and remember it in the connection's conntrack mark (needs nf_conntrack). Without
     /// conntrack every packet is classified again and established proxied TCP connections are found with a socket
     /// lookup (needs nft_socket).
@@ -220,11 +309,13 @@ impl Default for Tproxy {
             port: default_tproxy_port(),
             sources: TproxySources::default(),
             inbound_interfaces: Vec::new(),
+            exclude_interfaces: Vec::new(),
             exclude_sources: Vec::new(),
             exclude_private_destinations: true,
             exclude_destinations: Vec::new(),
             protocols: Protocols::Both,
             exclude_ports: Vec::new(),
+            exclude_port_rules: Vec::new(),
             use_conntrack: true,
             bypass_routed: true,
             side_router: None,
@@ -343,6 +434,9 @@ pub fn tproxy_sources(cfg: &MihomoConfig, req: &PluginRequest) -> Vec<IpNet> {
 
 fn frontend_listeners(req: &PluginRequest) -> Vec<SocketAddr> {
     let Some(d) = req.config.services.get("dnsmasq") else { return Vec::new() };
+    if d.get("enabled").and_then(Value::as_bool) == Some(false) {
+        return Vec::new();
+    }
     let port = d.get("port").and_then(Value::as_u64).unwrap_or(53) as u16;
     d.get("listenAddresses")
         .and_then(Value::as_array)
@@ -384,38 +478,32 @@ pub fn validate(cfg: &MihomoConfig, req: &PluginRequest) -> Vec<ValidationError>
         None => v.error("/activeSubscription", "choose the active subscription"),
     }
     let mut ports = BTreeSet::from([cfg.mixed_port, cfg.api.port]);
+    v.check(cfg.mixed_port != 0, "/mixedPort", "ports are 1-65535");
+    v.check(cfg.api.port != 0, "/api/port", "ports are 1-65535");
     v.check(ports.len() == 2, "/api/port", "API and mixed port collide");
+    if let Some(port) = cfg.socks_port {
+        v.check(port != 0 && ports.insert(port), "/socksPort", "SOCKS port must be non-zero and distinct from other listeners");
+    }
     if cfg.dns.enabled {
-        v.check(
-            ports.insert(cfg.dns.listen.port()) || cfg.dns.listen.ip() != cfg.api.address,
-            "/dns/listen",
-            "DNS listener collides with another port",
-        );
+        v.check(ports.insert(cfg.dns.listen.port()), "/dns/listen", "DNS listener collides with another port");
         let front = frontend_listeners(req);
-        v.check(!front.contains(&cfg.dns.listen), "/dns/listen", "Mihomo DNS must use its own listener, not the front end's");
-        for (i, ns) in cfg.dns.nameservers.iter().enumerate() {
-            let looped =
-                front.iter().any(|f| ns.contains(&f.ip().to_string()) && (f.port() == 53 || ns.contains(&format!(":{}", f.port()))));
-            v.check(!looped, format!("/dns/nameservers/{i}"), "nameserver points back at the dnsmasq front end (loop)");
-        }
-        v.check(
-            !cfg.dns.default_nameservers.is_empty() || cfg.dns.nameservers.iter().all(|n| n.parse::<IpAddr>().is_ok()),
-            "/dns/defaultNameservers",
-            "plain IP bootstrap resolvers are required for DoH/DoT names",
-        );
-        for (i, d) in cfg.dns.default_nameservers.iter().enumerate() {
-            v.check(
-                !front.iter().any(|f| f.ip() == *d),
-                format!("/dns/defaultNameservers/{i}"),
-                "bootstrap must not depend on the front end",
-            );
-        }
+        let mut local_ips: Vec<_> = front.iter().map(SocketAddr::ip).collect();
+        local_ips.extend([cfg.api.address, cfg.dns.listen.ip()]);
+        local_ips.extend(cfg.bind_address);
+        dns::validate(&cfg.dns, &front, &local_ips, &mut v);
     }
     if cfg.mode == Mode::Tproxy {
         v.check(!tproxy_sources(cfg, req).is_empty(), "/tproxy/sources", "no source ranges selected (LAN is empty?)");
-        v.check(ports.insert(cfg.tproxy.port), "/tproxy/port", "TPROXY port collides with another port");
         v.check(
-            cfg.tproxy.fwmark != 0 && cfg.tproxy.route_table > 255 && cfg.tproxy.route_table < 0xFFFF_FF00,
+            cfg.tproxy.port != 0 && ports.insert(cfg.tproxy.port),
+            "/tproxy/port",
+            "TPROXY port must be non-zero and distinct from other listeners",
+        );
+        v.check(
+            cfg.tproxy.fwmark != 0
+                && cfg.tproxy.fwmark.checked_add(1).is_some()
+                && cfg.tproxy.route_table > 255
+                && cfg.tproxy.route_table < 0xFFFF_FF00,
             "/tproxy",
             "use a non-zero fwmark and a private routing table number (256..)",
         );
@@ -428,6 +516,16 @@ pub fn validate(cfg: &MihomoConfig, req: &PluginRequest) -> Vec<ValidationError>
         }
         for (i, d) in cfg.tproxy.inbound_interfaces.iter().enumerate() {
             v.check(meduza_np_protocol::ids::validate_ifname(d).is_ok(), format!("/tproxy/inboundInterfaces/{i}"), "invalid interface");
+        }
+        for (i, d) in cfg.tproxy.exclude_interfaces.iter().enumerate() {
+            v.check(meduza_np_protocol::ids::validate_ifname(d).is_ok(), format!("/tproxy/excludeInterfaces/{i}"), "invalid interface");
+        }
+        for (i, rule) in cfg.tproxy.exclude_port_rules.iter().enumerate() {
+            v.check(
+                parse_port_rule(rule).is_some(),
+                format!("/tproxy/excludePortRules/{i}"),
+                "expected [(in|out):][(tcp|udp):]port, port 1-65535",
+            );
         }
         if cfg!(target_os = "linux") {
             if cfg.tproxy.use_conntrack {
@@ -517,6 +615,9 @@ pub fn normalize(subscription_yaml: &str, controlled: &serde_json::Map<String, V
 pub fn controlled_fields(cfg: &MihomoConfig, secret: &str) -> serde_json::Map<String, Value> {
     let mut m = serde_json::Map::new();
     m.insert("mixed-port".into(), Value::from(cfg.mixed_port));
+    if let Some(port) = cfg.socks_port {
+        m.insert("socks-port".into(), Value::from(port));
+    }
     m.insert("allow-lan".into(), Value::Bool(cfg.allow_lan));
     m.insert(
         "bind-address".into(),
@@ -524,34 +625,43 @@ pub fn controlled_fields(cfg: &MihomoConfig, secret: &str) -> serde_json::Map<St
             cfg.bind_address.map(|a| a.to_string()).unwrap_or_else(|| if cfg.allow_lan { "*".into() } else { "127.0.0.1".into() }),
         ),
     );
-    m.insert("external-controller".into(), Value::String(format!("{}:{}", cfg.api.address, cfg.api.port)));
+    m.insert("external-controller".into(), Value::String(SocketAddr::new(cfg.api.address, cfg.api.port).to_string()));
     m.insert("secret".into(), Value::String(secret.into()));
     if cfg.mode == Mode::Tproxy {
         m.insert("tproxy-port".into(), Value::from(cfg.tproxy.port));
         m.insert("routing-mark".into(), Value::from(cfg.tproxy.fwmark + 1)); // own outbound traffic is never re-marked
     }
     m.insert("tun".into(), serde_json::json!({"enable": false}));
-    if cfg.dns.enabled {
-        m.insert(
-            "dns".into(),
-            serde_json::json!({
-                "enable": true,
-                "listen": cfg.dns.listen.to_string(),
-                "ipv6": false,
-                "enhanced-mode": if cfg.dns.fake_ip { "fake-ip" } else { "redir-host" },
-                "nameserver": cfg.dns.nameservers,
-                "default-nameserver": cfg.dns.default_nameservers.iter().map(|a| a.to_string()).collect::<Vec<_>>(),
-            }),
-        );
-    } else {
-        m.insert("dns".into(), serde_json::json!({"enable": false}));
-    }
+    m.insert("dns".into(), dns::controlled(&cfg.dns));
     m
 }
 
 /// Mark of side-router answers (D59): routed to the main router from a table of their own.
 pub fn reply_mark(t: &Tproxy) -> u32 {
     t.fwmark + 2
+}
+
+struct PortRule<'a> {
+    direction: Option<&'a str>,
+    protocol: Option<&'a str>,
+    port: u16,
+}
+
+fn parse_port_rule(value: &str) -> Option<PortRule<'_>> {
+    let mut parts = value.trim().split(':').peekable();
+    let direction = match parts.peek().copied() {
+        Some("in" | "out") => parts.next(),
+        _ => None,
+    };
+    let protocol = match parts.peek().copied() {
+        Some("tcp" | "udp") => parts.next(),
+        _ => None,
+    };
+    let port = parts.next()?.parse::<u16>().ok().filter(|p| *p != 0)?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(PortRule { direction, protocol, port })
 }
 
 /// Owned nftables table for TPROXY. Proxy server addresses are added to `proxy_servers_v4` by the wrapper.
@@ -592,23 +702,49 @@ pub fn tproxy_table(cfg: &MihomoConfig, req: &PluginRequest) -> String {
     }
     s.push_str("\tchain prerouting {\n\t\ttype filter hook prerouting priority mangle; policy accept;\n");
     s.push_str("\t\tmeta nfproto != ipv4 return\n");
+    s.push_str(&format!("\t\tmeta mark {:#x} return comment \"Mihomo outbound\"\n", t.fwmark + 1));
     if !t.inbound_interfaces.is_empty() {
         s.push_str(&format!("\t\tiifname != {{ {} }} return\n", quoted(&t.inbound_interfaces)));
     }
     if !devices.is_empty() {
         s.push_str(&format!("\t\tiifname {{ {} }} return comment \"mesh/vpn/access\"\n", quoted(&devices)));
     }
+    if !t.exclude_interfaces.is_empty() {
+        s.push_str(&format!("\t\tiifname {{ {} }} return\n", quoted(&t.exclude_interfaces)));
+    }
     s.push_str("\t\tip saddr != @sources_v4 return comment \"only this node's LAN\"\n");
-    if !t.exclude_sources.is_empty() {
+    if t.exclude_sources.iter().any(|n| n.addr().is_ipv4()) {
         s.push_str(&format!(
             "\t\tip saddr {{ {} }} return\n",
-            t.exclude_sources.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", ")
+            t.exclude_sources.iter().filter(|n| n.addr().is_ipv4()).map(|n| n.to_string()).collect::<Vec<_>>().join(", ")
         ));
+        if t.use_conntrack && t.exclude_sources.iter().any(|n| n.addr().is_ipv4()) {
+            s.push_str(&format!(
+                "\t\tct original ip saddr {{ {} }} return\n",
+                t.exclude_sources.iter().filter(|n| n.addr().is_ipv4()).map(|n| n.to_string()).collect::<Vec<_>>().join(", ")
+            ));
+        }
     }
     s.push_str("\t\tfib daddr type local return comment \"traffic to this node\"\n");
+    s.push_str(&format!("\t\tmeta l4proto {{ tcp, udp }} th dport {} return comment \"TPROXY listener\"\n", t.port));
+    if !t.exclude_ports.is_empty() {
+        s.push_str(&format!("\t\tmeta l4proto {{ tcp, udp }} th dport {{ {} }} return\n", ports(&t.exclude_ports)));
+    }
+    for rule in t.exclude_port_rules.iter().filter_map(|r| parse_port_rule(r)) {
+        let directions: &[&str] = match rule.direction {
+            Some("in") => &["dport"],
+            Some("out") => &["sport"],
+            _ => &["sport", "dport"],
+        };
+        for proto in protos.iter().filter(|p| rule.protocol.is_none_or(|rp| rp == **p)) {
+            for direction in directions {
+                s.push_str(&format!("\t\tmeta l4proto {proto} th {direction} {} return\n", rule.port));
+            }
+        }
+    }
     // packets of connections already handed to Mihomo
     if t.use_conntrack {
-        s.push_str("\t\tct direction reply return\n");
+        s.push_str(if t.side_router.is_some() { "\t\tct direction reply goto not_proxied\n" } else { "\t\tct direction reply return\n" });
         s.push_str(&format!("\t\tct mark {mark} meta l4proto {l4} {to} accept\n"));
     } else if protos.contains(&"tcp") {
         s.push_str(&format!("\t\tmeta l4proto tcp socket transparent 1 meta mark set {mark} accept\n"));
@@ -626,9 +762,6 @@ pub fn tproxy_table(cfg: &MihomoConfig, req: &PluginRequest) -> String {
         s.push_str(&format!("\t\tfib daddr oifname {{ {} }} return comment \"routed by the routing system\"\n", quoted(&devices)));
     }
     s.push_str("\t\tip daddr @proxy_servers_v4 return comment \"proxy servers: never loop\"\n");
-    if !t.exclude_ports.is_empty() {
-        s.push_str(&format!("\t\tmeta l4proto {{ tcp, udp }} th dport {{ {} }} return\n", ports(&t.exclude_ports)));
-    }
     // only connections that start here: a TCP packet that is not a SYN belongs to a connection this node did not see
     // start (a port forward's answer, or one older than the rules)
     s.push_str("\t\tmeta l4proto tcp tcp flags & (fin | syn | rst | ack) != syn goto not_proxied\n");
@@ -670,7 +803,7 @@ pub fn plan(cfg: &MihomoConfig, req: &PluginRequest) -> Result<Vec<GenerationPla
         "controlled": controlled,
         "subscriptions": subs,
         "active": cfg.active_subscription,
-        "api": format!("{}:{}", cfg.api.address, cfg.api.port),
+        "api": SocketAddr::new(cfg.api.address, cfg.api.port).to_string(),
         "downloadProxy": cfg.download_proxy,
         "stateDir": req.context.state_dir,
         "tproxy": cfg.mode == Mode::Tproxy,
@@ -680,6 +813,7 @@ pub fn plan(cfg: &MihomoConfig, req: &PluginRequest) -> Result<Vec<GenerationPla
     let mut resources = Vec::new();
     if cfg.mode == Mode::Tproxy {
         let t = &cfg.tproxy;
+        resources.push(NetworkResource::Sysctl { key: "net.ipv4.ip_forward".into(), value: "1".into() });
         resources.push(NetworkResource::Reservation { namespace: "fwmark".into(), value: t.fwmark });
         resources.push(NetworkResource::Reservation { namespace: "fwmark".into(), value: t.fwmark + 1 });
         resources.push(NetworkResource::Reservation { namespace: "rt_table".into(), value: t.route_table });
@@ -829,6 +963,13 @@ mod tests {
         assert!(plans[0].validate().is_empty(), "{:?}", plans[0].validate().errors());
         assert!(plans[0].resources.iter().any(|x| matches!(x, NetworkResource::Rule { table: 4626, fwmark: 0x4d4e, .. })));
         assert!(plans[0].resources.iter().any(|x| matches!(x, NetworkResource::Route { route_type: Some(t), .. } if t == "local")));
+        assert!(
+            plans[0]
+                .resources
+                .iter()
+                .any(|x| matches!(x, NetworkResource::Sysctl { key, value } if key == "net.ipv4.ip_forward" && value == "1")),
+            "forwarding is required even without NAT rules"
+        );
         let argv = plans[0].processes[0].argv.join(" ");
         assert!(!argv.contains("token=t") && !argv.contains("0123456789abcdef"), "no secrets in argv");
         assert!(plans[0].files[0].sensitive);
@@ -898,6 +1039,121 @@ mod tests {
         for needle in ["API secret is required", "loop", "own listener", "enabled subscription"] {
             assert!(text.contains(needle), "missing {needle}: {text}");
         }
+    }
+
+    #[test]
+    fn advanced_dns_is_project_owned_and_normalized() {
+        let mut m = base();
+        m["socksPort"] = json!(7891);
+        m["dns"] = json!({
+            "enabled": true, "fakeIp": true, "nameservers": ["https://dns.example/dns-query"],
+            "defaultNameservers": ["119.29.29.29"], "fallback": ["tls://1.1.1.1:853"],
+            "nameserverPolicy": {"+.example.cn": "223.5.5.5", "geosite:private": ["192.168.1.1"]},
+            "proxyServerNameservers": ["119.29.29.29"],
+            "proxyServerNameserverPolicy": {"+.proxy.example": ["223.5.5.5"]},
+            "directNameservers": ["223.5.5.5"], "directNameserverFollowPolicy": true, "respectRules": true,
+            "fallbackFilter": {"geoip": true, "geoipCode": "CN", "geosite": ["gfw"], "ipcidr": ["240.0.0.0/4"], "domain": ["+.example.org"]},
+            "fakeIpRange": "198.18.0.1/16", "fakeIpFilter": ["*.lan", "+.example.cn"], "fakeIpFilterMode": "blacklist"
+        });
+        let r = req(m);
+        let cfg = load(&r).unwrap().unwrap();
+        assert!(validate(&cfg, &r).into_iter().all(|e| e.path == "/mode" || e.path == "/tproxy/useConntrack"));
+        let (yaml, _) = normalize("proxies: []\ndns:\n  listen: 0.0.0.0:53\n  nameserver: [127.0.0.1]\n  fake-ip-filter: [subscription.example]\nsocks-port: 9999\n", &controlled_fields(&cfg, "secret")).unwrap();
+        let doc: Value = serde_norway::from_str(&yaml).unwrap();
+        assert_eq!(doc["socks-port"], 7891);
+        let dns = &doc["dns"];
+        assert_eq!(dns["listen"], "127.0.0.1:1053");
+        assert_eq!(dns["enhanced-mode"], "fake-ip");
+        assert_eq!(dns["nameserver-policy"]["+.example.cn"], "223.5.5.5");
+        assert_eq!(dns["proxy-server-nameserver-policy"]["+.proxy.example"], json!(["223.5.5.5"]));
+        assert_eq!(dns["fallback"], json!(["tls://1.1.1.1:853"]));
+        assert_eq!(dns["proxy-server-nameserver"], json!(["119.29.29.29"]));
+        assert_eq!(dns["direct-nameserver"], json!(["223.5.5.5"]));
+        assert_eq!(dns["respect-rules"], true);
+        assert_eq!(dns["direct-nameserver-follow-policy"], true);
+        assert_eq!(dns["fallback-filter"]["geoip-code"], "CN");
+        assert!(dns["fallback-filter"].get("geoipCode").is_none());
+        assert_eq!(dns["fake-ip-range"], "198.18.0.1/16");
+        assert_eq!(dns["fake-ip-filter"], json!(["*.lan", "+.example.cn"]));
+    }
+
+    #[test]
+    fn every_dns_upstream_is_checked_for_loops_and_bootstrap() {
+        for field in ["nameservers", "fallback", "proxyServerNameservers", "directNameservers", "defaultNameservers"] {
+            let mut m = base();
+            m["dns"][field] = json!(["10.42.1.1"]);
+            let r = req(m);
+            assert!(validate(&load(&r).unwrap().unwrap(), &r).iter().any(|e| e.path == format!("/dns/{field}/0")), "{field}");
+        }
+        for field in ["nameserverPolicy", "proxyServerNameserverPolicy"] {
+            for target in [json!("tcp://127.0.0.1:1053#DIRECT"), json!(["udp://10.42.1.1:53"])] {
+                let mut m = base();
+                m["dns"][field] = json!({"+.example/zone": target});
+                let r = req(m);
+                assert!(
+                    validate(&load(&r).unwrap().unwrap(), &r).iter().any(|e| e.path == format!("/dns/{field}/+.example~1zone")),
+                    "{field}"
+                );
+            }
+        }
+        let mut m = base();
+        m["dns"]["nameservers"] = json!(["10.42.1.10", "10.42.1.1:5353", "https://10.42.1.1/dns-query"]);
+        let r = req(m.clone());
+        assert!(
+            !validate(&load(&r).unwrap().unwrap(), &r).iter().any(|e| e.path.starts_with("/dns")),
+            "no substring false positives; distinct ports/transports"
+        );
+        m["dns"]["nameservers"] = json!(["119.29.29.29"]);
+        m["dns"]["defaultNameservers"] = json!([]);
+        m["dns"]["fallback"] = json!(["https://dns.example/dns-query"]);
+        m["dns"]["respectRules"] = json!(true);
+        let r = req(m);
+        let errors = validate(&load(&r).unwrap().unwrap(), &r);
+        assert!(errors.iter().any(|e| e.path == "/dns/defaultNameservers"));
+        assert!(errors.iter().any(|e| e.path == "/dns/proxyServerNameservers"));
+        // DNS is still validated without a front end. A wildcard listen reaches loopback.
+        let mut m = base();
+        m["dns"]["listen"] = json!("0.0.0.0:1053");
+        m["dns"]["nameservers"] = json!(["tcp://localhost:1053"]);
+        let mut r = req(m);
+        r.config.services.get_mut("dnsmasq").unwrap()["enabled"] = json!(false);
+        assert!(validate(&load(&r).unwrap().unwrap(), &r).iter().any(|e| e.path == "/dns/nameservers/0"));
+        // Disabled dnsmasq's saved listener is harmless.
+        r.config.services.get_mut("mihomo").unwrap()["dns"]["listen"] = json!("10.42.1.1:53");
+        r.config.services.get_mut("mihomo").unwrap()["dns"]["nameservers"] = json!(["119.29.29.29"]);
+        assert!(!validate(&load(&r).unwrap().unwrap(), &r).iter().any(|e| e.path.starts_with("/dns")));
+    }
+
+    #[test]
+    fn legacy_port_exclusions_preserve_direction_protocol_and_conntrack_source() {
+        let mut m = base();
+        m["tproxy"] = json!({"excludePortRules": ["53", "in:tcp:22", "out:udp:123"],
+            "excludeInterfaces": ["wan0"], "excludeSources": ["10.42.10.1/32"], "sideRouter": {"gateway": "10.42.10.1"}});
+        let r = req(m.clone());
+        let cfg = load(&r).unwrap().unwrap();
+        assert!(!validate(&cfg, &r).iter().any(|e| e.path.starts_with("/tproxy/exclude")));
+        let table = tproxy_table(&cfg, &r);
+        for rule in ["tcp th sport 53", "tcp th dport 53", "udp th sport 53", "udp th dport 53", "tcp th dport 22", "udp th sport 123"] {
+            assert!(table.contains(rule), "{rule}");
+        }
+        assert!(!table.contains("tcp th sport 22") && !table.contains("udp th dport 123"));
+        assert!(table.contains("iifname { \"wan0\" } return"));
+        assert!(table.contains("ct original ip saddr { 10.42.10.1/32 } return"));
+        assert!(table.contains("ct direction reply goto not_proxied"));
+        assert!(
+            table.find("th sport 53").unwrap() < table.find("ct mark 0x4d4e").unwrap(),
+            "exclusions apply before cached proxy decisions"
+        );
+        assert!(table.contains("meta mark 0x4d4f return"));
+        assert_eq!(table.matches("tproxy ip to").count(), 3, "only PREROUTING proxies; OUTPUT drops ICMP redirects only");
+        for invalid in ["in:udp:0", "65536", "out:icmp:53", "in:out:22", "53;drop"] {
+            m["tproxy"]["excludePortRules"] = json!([invalid]);
+            let r = req(m.clone());
+            assert!(validate(&load(&r).unwrap().unwrap(), &r).iter().any(|e| e.path == "/tproxy/excludePortRules/0"), "{invalid}");
+        }
+        m["socksPort"] = json!(7890);
+        let r = req(m);
+        assert!(validate(&load(&r).unwrap().unwrap(), &r).iter().any(|e| e.path == "/socksPort"));
     }
 
     #[test]

@@ -24,6 +24,62 @@
       },
       "type": "object"
     },
+    "DnsResolvers": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      ]
+    },
+    "FakeIpFilterMode": {
+      "enum": [
+        "blacklist",
+        "whitelist",
+        "rule"
+      ],
+      "type": "string"
+    },
+    "FallbackFilter": {
+      "properties": {
+        "domain": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "geoip": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "geoipCode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "geosite": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "ipcidr": {
+          "items": {
+            "$ref": "#/$defs/IpNet"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
     "IpNet": {
       "anyOf": [
         {
@@ -73,6 +129,17 @@
           },
           "type": "array"
         },
+        "directNameserverFollowPolicy": {
+          "default": false,
+          "type": "boolean"
+        },
+        "directNameservers": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "enabled": {
           "default": false,
           "type": "boolean"
@@ -81,9 +148,54 @@
           "default": false,
           "type": "boolean"
         },
+        "fakeIpFilter": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "fakeIpFilterMode": {
+          "$ref": "#/$defs/FakeIpFilterMode",
+          "default": "blacklist"
+        },
+        "fakeIpRange": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IpNet"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fallback": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "fallbackFilter": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FallbackFilter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "listen": {
           "default": "127.0.0.1:1053",
           "type": "string"
+        },
+        "nameserverPolicy": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DnsResolvers"
+          },
+          "default": {},
+          "type": "object"
         },
         "nameservers": {
           "default": [],
@@ -92,6 +204,25 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "proxyServerNameserverPolicy": {
+          "additionalProperties": {
+            "$ref": "#/$defs/DnsResolvers"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "proxyServerNameservers": {
+          "default": [],
+          "description": "Independent resolution of proxy server hostnames; required by respectRules.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "respectRules": {
+          "default": false,
+          "type": "boolean"
         }
       },
       "type": "object"
@@ -193,6 +324,21 @@
           "default": [],
           "items": {
             "$ref": "#/$defs/IpNet"
+          },
+          "type": "array"
+        },
+        "excludeInterfaces": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "excludePortRules": {
+          "default": [],
+          "description": "Legacy-compatible [(in|out):][(tcp|udp):]port. in = destination, out = source; no direction = both.",
+          "items": {
+            "type": "string"
           },
           "type": "array"
         },
@@ -337,10 +483,19 @@
       "$ref": "#/$defs/MihomoDns",
       "default": {
         "defaultNameservers": [],
+        "directNameserverFollowPolicy": false,
+        "directNameservers": [],
         "enabled": false,
         "fakeIp": false,
+        "fakeIpFilter": [],
+        "fakeIpFilterMode": "blacklist",
+        "fallback": [],
         "listen": "127.0.0.1:1053",
-        "nameservers": []
+        "nameserverPolicy": {},
+        "nameservers": [],
+        "proxyServerNameserverPolicy": {},
+        "proxyServerNameservers": [],
+        "respectRules": false
       }
     },
     "downloadProxy": {
@@ -365,6 +520,16 @@
       "$ref": "#/$defs/Mode",
       "default": "proxy"
     },
+    "socksPort": {
+      "description": "Optional dedicated SOCKS listener (the previous planner used 7891).",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
     "subscriptions": {
       "default": [],
       "items": {
@@ -377,6 +542,8 @@
       "default": {
         "bypassRouted": true,
         "excludeDestinations": [],
+        "excludeInterfaces": [],
+        "excludePortRules": [],
         "excludePorts": [],
         "excludePrivateDestinations": true,
         "excludeSources": [],

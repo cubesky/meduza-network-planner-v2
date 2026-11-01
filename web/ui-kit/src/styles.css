@@ -304,10 +304,16 @@ table.table { width: 100%; border-collapse: collapse; }
 .diff { font-family: var(--mono); font-size: 12px; display: grid; gap: 2px; max-height: 320px; overflow: auto; background: var(--surface-2); border-radius: var(--radius); padding: 8px 10px; }
 
 /* routing topology graph */
-.graph-wrap { position: relative; height: calc(100vh - 260px); min-height: 420px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); overflow: hidden; }
+.graph-wrap { position: relative; height: calc(100vh - 290px); min-height: 520px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); overflow: hidden; }
 .graph-wrap canvas { width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
+.graph-wrap canvas:focus-visible { outline: 2px solid var(--accent); outline-offset: -3px; }
 .graph-tip { position: absolute; pointer-events: none; max-width: 320px; padding: 7px 10px; border-radius: var(--radius); background: var(--surface-2); border: 1px solid var(--border-strong); box-shadow: var(--shadow-lg); font-size: 12px; z-index: 2; }
 .graph-controls { display: flex; flex-wrap: wrap; gap: 8px 18px; align-items: center; padding: 8px 12px; margin-bottom: 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.graph-navigation { gap: 8px; }
+.graph-spacing { display: flex; align-items: center; gap: 10px; font-size: 12.5px; }
+.graph-spacing input { width: clamp(100px, 15vw, 190px); accent-color: var(--accent); }
+.graph-spacing output { min-width: 3ch; font-variant-numeric: tabular-nums; color: var(--muted); }
+.graph-help { margin: 6px 0 10px; line-height: 1.6; }
 .graph-legend { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; margin-bottom: 6px; font-size: 12.5px; color: var(--muted); }
 .graph-legend + .graph-wrap { margin-top: 10px; }
 .graph-legend .swatch { display: inline-block; width: 22px; height: 0; border-top: 3px solid; vertical-align: middle; margin-right: 6px; }

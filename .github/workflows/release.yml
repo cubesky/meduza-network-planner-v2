@@ -498,14 +498,15 @@ jobs:
       - name: Create or update the GitHub Release (draft until the group is complete)
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --draft --title "$TAG" --notes "Meduza NP package group $TAG"
-          existing=$(gh release view "$TAG" --json assets -q '.assets[].name')
+          if ! existing=$(gh release view "$TAG" --json assets -q '.assets[].name'); then
+            gh release create "$TAG" --draft --title "$TAG" --notes "Meduza NP package group $TAG"
+            existing=""
+          fi
           # Preserve SBOMs of unchanged versions as well as their package bytes.
-          for p in $(jq -r 'to_entries[] | select(.value.changed | not) | .key' in/plan/matrix.json); do
-            v=$(jq -r --arg p "$p" '.[$p].version' in/plan/matrix.json)
-            origin=$(jq -r --arg p "$p" '.[$p].reusedFromGroup' in/plan/matrix.json)
-            gh release download "$origin" --pattern "${p}_${v}.cdx.json" --dir sbom --skip-existing
-          done
+          if [ -f in/plan/baseline.json ]; then
+            python3 tools/pages-api.py reuse-sboms --baseline in/plan/baseline.json --matrix in/plan/matrix.json \
+              --out sbom --repository "$GITHUB_REPOSITORY" --base-url "$PAGES_URL"
+          fi
           for f in dist/*.tar.gz dist/*.ipk dist/*.apk sbom/*.cdx.json; do
             [ -f "$f" ] || continue
             # immutable: an asset already uploaded by an earlier run of this tag is never replaced
@@ -534,44 +535,40 @@ jobs:
           done
           gh release edit "$TAG" --draft=false
           jq -r '.packages[].artifacts[] | select(.format != "oci") | .url' "$M" | while read -r u; do curl -fsIL "$u" >/dev/null || { echo "missing $u"; exit 1; }; done
+      - name: Pages release inventory (downloads, images, SBOMs and package metadata; no GitHub API)
+        run: |
+          python3 tools/pages-api.py release --site site --group-version "$TAG" \
+            --repository "$GITHUB_REPOSITORY" --base-url "$PAGES_URL" --artifacts dist --sbom sbom
+          jq -r '.assets[] | select(.kind == "sbom") | .url' "site/releases/$TAG/catalog.json" |
+            while read -r u; do curl --retry 3 -fsIL "$u" >/dev/null || { echo "missing $u"; exit 1; }; done
       - uses: actions/upload-artifact@v4
         with: { name: site-new, path: site/ }
 
   pages:
     needs: publish
+    if: ${{ always() && needs.publish.result == 'success' }}
     runs-on: ubuntu-24.04
     env:
       # Re-runs retain earlier artifacts; deploy-pages requires exactly one artifact with this name.
       PAGES_ARTIFACT: github-pages-${{ github.run_id }}-${{ github.run_attempt }}
     permissions:
+      contents: read
       pages: write
       id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
+      - uses: actions/checkout@v4
+        with: { ref: "${{ env.TAG }}" }
       - name: Check Pages configuration before deployment
         uses: actions/configure-pages@v5
       - uses: actions/download-artifact@v4
         with: { name: site-new, path: new }
       - name: Merge with the published site (immutable releases kept, pointer replaced last)
         run: |
-          mkdir -p site
-          if curl -fsSL "$PAGES_URL/index.json" -o site/index.json; then
-            for v in $(jq -r '.groups[]' site/index.json); do
-              mkdir -p "site/releases/$v"
-              curl -fsSL "$PAGES_URL/releases/$v/manifest.json" -o "site/releases/$v/manifest.json"
-              curl -fsSL "$PAGES_URL/releases/$v/manifest.json.sig" -o "site/releases/$v/manifest.json.sig"
-            done
-            mkdir -p site/channels && for c in $(jq -r '.channels[]' site/index.json); do
-              curl -fsSL "$PAGES_URL/channels/$c.json" -o "site/channels/$c.json" && curl -fsSL "$PAGES_URL/channels/$c.json.sig" -o "site/channels/$c.json.sig"
-            done
-          else
-            echo '{"groups":[],"channels":[]}' > site/index.json
-          fi
-          cp -rn new/releases site/ 2>/dev/null || cp -r new/releases site/
-          mkdir -p site/channels && cp new/channels/* site/channels/
-          jq --arg v "$TAG" --arg c "$CHANNEL" '.groups = (.groups + [$v] | unique) | .channels = (.channels + [$c] | unique)' site/index.json > site/index.tmp && mv site/index.tmp site/index.json
+          python3 tools/pages-api.py build --new new --out site \
+            --repository "$GITHUB_REPOSITORY" --base-url "$PAGES_URL"
       - uses: actions/upload-pages-artifact@v3
         with:
           name: ${{ env.PAGES_ARTIFACT }}

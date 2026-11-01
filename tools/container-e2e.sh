@@ -63,7 +63,7 @@ cp "$W"/dist3/*.tar.gz "$W/site3/packages/"
 step "image"
 cp -r "$REPO/packages/meduza-np-base-container/." "$W/ctx/"
 cp "$BIN/meduza-np-updater" "$W/ctx/bin/amd64/"
-podman build -q --platform linux/amd64 --build-arg UPDATER_VERSION=0.1.0 --build-arg UPDATE_BASE_URL=file:///var/lib/meduza-np/import -t $IMAGE "$W/ctx"
+podman build -q --platform linux/amd64 --build-arg BASE_CONTAINER_VERSION=0.1.0 --build-arg UPDATER_VERSION=0.1.0 --build-arg UPDATE_BASE_URL=file:///var/lib/meduza-np/import -t $IMAGE "$W/ctx"
 
 cat >"$W/node.env" <<EOF
 MEDUZA_NP_COMPONENTS=wireguard,cli,dashboard
