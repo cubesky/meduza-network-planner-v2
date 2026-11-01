@@ -1,4 +1,5 @@
 import { useState } from "preact/hooks";
+import { PackageProgress, progressFromStatus } from "@meduza-np/ui-kit/package-progress";
 import { Badge, Button, Card, Field, Loadable, StateBadge, Table, TextInput, NumberInput, Checkbox, bytes, relativeTime, toast, useAsync } from "@meduza-np/ui-kit";
 import { errorText, get, post, roleAtLeast, type Feature, type PackageStatus, type Report, type Session } from "./api.ts";
 
@@ -47,6 +48,7 @@ export function OverviewPage(props: { session: Session }) {
             )}
           </Card>
           <MaintenanceCard report={r} session={props.session} />
+          <PackageProgress progress={r.update} reportedAt={r.observedAt} />
           <Card title="资源">
             <dl class="kv">
               <dt>planner RSS</dt><dd>{kib(r.resources?.plannerRssKib)}</dd>
@@ -265,7 +267,7 @@ export function ConfigPage() {
 }
 
 export function UpdatesPage(props: { session: Session }) {
-  const st = useAsync(() => get<Record<string, any>>("/api/update/status"), [], 10000);
+  const st = useAsync(() => get<Record<string, any>>("/api/update/status"), [], 3000);
   const op = roleAtLeast(props.session.role, "operator");
   const admin = roleAtLeast(props.session.role, "admin");
   return (
@@ -275,12 +277,13 @@ export function UpdatesPage(props: { session: Session }) {
           <Card title="升级"><p>本节点未安装 meduza-np-updater，不提供自动升级。</p></Card>
         ) : (
           <div>
+            <PackageProgress progress={progressFromStatus(u)} />
             <Card
               title={<>升级 {u.busy ? <Badge tone="info">{u.busy}</Badge> : null} {u.control?.paused ? <Badge tone="warn">已暂停</Badge> : null}</>}
               actions={
                 <span style={{ display: "flex", gap: "6px" }}>
-                  {op && <Button small onClick={() => act("/api/update/check", {}, "已开始检查", st.reload)}>检查</Button>}
-                  {admin && <Button small variant="primary" onClick={() => act("/api/update/apply", {}, "已开始升级", st.reload)}>立即升级</Button>}
+                  {op && <Button small disabled={!!u.busy} onClick={() => act("/api/update/check", {}, "已开始检查", st.reload)}>检查</Button>}
+                  {admin && <Button small variant="primary" disabled={!!u.busy} onClick={() => act("/api/update/apply", {}, "已开始升级", st.reload)}>{u.progress?.phase === "failed" || u.state?.lastResult?.outcome === "failed" ? "重试安装" : "立即升级"}</Button>}
                   {op && (u.control?.paused
                     ? <Button small onClick={() => act("/api/update/resume", {}, "已恢复", st.reload)}>恢复</Button>
                     : <Button small onClick={() => act("/api/update/pause", {}, "已暂停", st.reload)}>暂停</Button>)}

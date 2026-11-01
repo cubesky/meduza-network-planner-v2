@@ -1,7 +1,9 @@
 import { Badge, Card, Loadable, PageHead, StateBadge, StatusDot, Table, msg, relativeTime, t, useAsync } from "@meduza-np/ui-kit";
 import { get } from "../api.ts";
+import { installPhaseLabel } from "@meduza-np/ui-kit/package-progress";
 
 export interface NodeSummary {
+  update?: import("@meduza-np/ui-kit/package-progress").InstallProgress | null;
   id: string;
   displayName: string;
   behavior: string;
@@ -34,6 +36,7 @@ export function syncCell(n: NodeSummary) {
   return (
     <span class="row" style={{ gap: "6px" }}>
       <StateBadge state={n.sync.state} />
+      {n.update && (n.update.active || ["failed", "waiting", "paused", "rolled-back"].includes(n.update.phase)) && <Badge tone={n.update.error ? "bad" : "info"} title={n.update.error ?? n.update.currentPackage ?? ""}>{installPhaseLabel(n.update.phase)}</Badge>}
       {n.sync.degradedReason && <Badge tone="warn" title={n.sync.degradedReason}>{t("degraded")}</Badge>}
       {/* backoff left over from an earlier outage is noise once the node is in sync again */}
       {n.sync.state !== "in-sync" && (n.sync.backoff?.failureLevel ?? 0) > 0 && <Badge tone="warn" title={n.sync.backoff?.lastFailure}>{t("backoff {level}", { level: n.sync.backoff?.failureLevel ?? 0 })}</Badge>}

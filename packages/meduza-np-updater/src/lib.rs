@@ -9,6 +9,7 @@ pub mod meta;
 pub mod openwrt;
 pub mod planner;
 pub mod resolve;
+pub mod retry;
 pub mod sig;
 pub mod store;
 

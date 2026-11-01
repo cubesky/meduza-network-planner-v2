@@ -363,19 +363,61 @@ impl<'a> Engine<'a> {
         Ok(plan)
     }
 
-    fn download(&self, plan: &Plan) -> Result<BTreeMap<String, PathBuf>, String> {
+    fn download(&self, plan: &Plan, started_at: &str) -> Result<BTreeMap<String, PathBuf>, String> {
         let store = self.store();
         let source = Source::new(&self.cfg.base_url).map_err(|e| e.to_string())?;
         let mut files = BTreeMap::new();
-        for a in plan.actions.iter().filter(|a| a.downloads()) {
+        let downloads: Vec<_> = plan.actions.iter().filter(|a| a.downloads()).collect();
+        let packages: Vec<_> = downloads.iter().map(|a| &a.package).collect();
+        let total: u64 = downloads.iter().filter_map(|a| a.artifact.as_ref()).map(|a| a.size).sum();
+        let mut completed_bytes = 0u64;
+        for (index, a) in downloads.iter().enumerate() {
             let art = a.artifact.as_ref().ok_or_else(|| format!("{}: no artifact", a.package))?;
             if art.size > crate::store::MAX_ARTIFACT_BYTES {
                 return Err(format!("{}: artifact larger than {} bytes", a.package, crate::store::MAX_ARTIFACT_BYTES));
             }
             let dest = store.staging().join(format!("{}_{}.{}", a.package, a.to.as_deref().unwrap_or("x"), art.format));
-            let url = source.resolve(&art.url).map_err(|e| e.to_string())?;
-            source.fetch_to(&url, &dest, art.size, 900).map_err(|e| e.to_string())?;
+            let progress = |done: bool| {
+                let value = json!({"startedAt":started_at, "packages":packages,
+                    "currentPackage":if done { None } else { Some(&a.package) },
+                    "file":if done { None } else { dest.file_name().and_then(|n| n.to_str()) },
+                    "packageBytesTotal":if done { 0 } else { art.size }, "bytesTotal":total,
+                    "completedBytes":completed_bytes + if done { art.size } else { 0 },
+                    "completedPackages":index + usize::from(done), "totalPackages":downloads.len()});
+                let _ = meduza_np_runtime::fsutil::write_json_atomic(&store.root.join("download-progress.json"), &value, 0o644);
+            };
+            progress(false);
+            // A later automatic pass may reuse only a complete file matching the signed size AND digest.
+            if crate::store::verify_file(&dest, art.size, &art.sha256).is_err() {
+                let _ = std::fs::remove_file(&dest);
+                eprintln!("downloading {} ({}/{}, {} bytes)", a.package, index + 1, downloads.len(), art.size);
+                let url = source.resolve(&art.url).map_err(|e| e.to_string())?;
+                source
+                    .fetch_to_with_progress(&url, &dest, art.size, 900, |attempt| {
+                        progress(false);
+                        let path = store.root.join("download-progress.json");
+                        if let Ok(Some(mut value)) = meduza_np_runtime::fsutil::read_json::<Value>(&path, 256 * 1024) {
+                            value["attempt"] = json!(attempt.number);
+                            value["maxAttempts"] = json!(attempt.maximum);
+                            value["retryError"] = json!(attempt.error);
+                            value["retryAtUnix"] = attempt
+                                .retry_after
+                                .map(|d| {
+                                    let now =
+                                        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                    json!(now + d.as_secs() + u64::from(d.subsec_nanos() > 0))
+                                })
+                                .unwrap_or(Value::Null);
+                            let _ = meduza_np_runtime::fsutil::write_json_atomic(&path, &value, 0o644);
+                        }
+                    })
+                    .map_err(|e| e.to_string())?;
+            } else {
+                eprintln!("reusing verified download: {}", a.package);
+            }
             crate::store::verify_file(&dest, art.size, &art.sha256).map_err(|e| format!("{}: {e}", a.package))?;
+            progress(true);
+            completed_bytes += art.size;
             files.insert(a.package.clone(), dest);
         }
         Ok(files)
@@ -432,10 +474,11 @@ impl<'a> Engine<'a> {
             error: None,
             history: vec![],
         };
+        let _ = std::fs::remove_file(store.root.join("download-progress.json"));
         self.save_journal(&mut j, Phase::Downloading)?;
 
         // 1. download + verify, no lock held
-        let files = match self.download(plan) {
+        let files = match self.download(plan, &j.started_at) {
             Ok(f) => f,
             Err(e) => {
                 j.error = Some(e.clone());
@@ -483,6 +526,13 @@ impl<'a> Engine<'a> {
                     continue;
                 }
                 let art = a.artifact.as_ref().ok_or_else(|| format!("{}: no artifact", a.package))?;
+                let progress_path = store.root.join("download-progress.json");
+                if let Ok(Some(mut progress)) = meduza_np_runtime::fsutil::read_json::<Value>(&progress_path, 256 * 1024) {
+                    progress["step"] = json!("installing");
+                    progress["currentPackage"] = json!(a.package);
+                    progress["file"] = Value::Null;
+                    let _ = meduza_np_runtime::fsutil::write_json_atomic(&progress_path, &progress, 0o644);
+                }
                 let object = if self.cfg.backend == Backend::Store {
                     Some(store.install_object(&a.package, &version, art, &files[&a.package])?)
                 } else {

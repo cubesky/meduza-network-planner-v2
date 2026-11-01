@@ -65,6 +65,7 @@ export function overview(s: Services) {
       inSync: !!desired && sync?.applied_revision === desired.revision,
       enabledFeatures: features.filter((f) => f.enabled).map((f) => f.id),
       problems: [
+        ...(report?.update?.error ? [{ id: "updater.installation", reason: report.update.error }] : []),
         ...((report?.packages ?? []) as Array<Record<string, unknown>>)
           .filter((p) => p.registration !== "registered")
           .map((p) => ({ id: String(p.name), reason: (p.reason ?? p.reasonCode ?? p.registration) as unknown })),

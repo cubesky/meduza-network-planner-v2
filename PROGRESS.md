@@ -852,3 +852,17 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   manager server compilation/network-mode tests, Quadlet 4.8/4.9 dry runs, Rust formatting and actionlint passed.
   Real macvlan route/bind-mounted DNS test added to CI; local WSL denies network/mount namespace creation even
   as root, so that check has not run here. Base image not published or deployed.
+- 2026-11-02 (per the user) Package installation progress: updater records the current package and verified byte
+  totals; a shared read-only snapshot measures the current staging file, exposes phases/errors/retry time and
+  pending components through updater.status and planner reports. Manager node lists/status/settings and dashboard
+  overview/updates render the same progress panel; download completion is separate from installation/registration.
+  Planner requests FRR for Tinc and active external WireGuard/OpenVPN links, including configurations without an
+  explicit FRR service; disabled and Access-only links are excluded. Rust installation/schema/dependency tests,
+  Clippy, manager progress/FRR/i18n tests, frontend typechecks/builds and a Chrome progress/error/verification
+  preview were checked. These source changes have not been released or deployed to the v0.1.1 node.
+- 2026-11-02 (per the user) Updater file downloads automatically retry transient errors (four total attempts,
+  exponential 2/4/8 s waits with jitter); metadata uses the same policy. Failed passes retain the existing daemon
+  backoff. Verified staging files are reused across passes; partial or tampered files are replaced. Progress
+  includes the attempt count, retry deadline and transport error. Verification failures and permanent errors
+  remain failures. Tests cover finite retry/exhaustion, real HTTP partial-body/503 recovery, signed-hash cache
+  reuse and retry progress; the changes are source-only pending a new release.

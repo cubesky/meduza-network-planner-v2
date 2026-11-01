@@ -31,6 +31,8 @@ pub fn run(engine: &Engine<'_>, running_new_updater: bool) -> ! {
     if let Err(e) = engine.store().init() {
         eprintln!("store: {e}");
     }
+    let activity = engine.cfg.store_dir().join("activity.json");
+    let _ = meduza_np_runtime::fsutil::write_json_atomic(&activity, &json!({"busy":null}), 0o644);
     if let Some(msg) = engine.recover(running_new_updater) {
         eprintln!("recovery: {msg}");
     }
@@ -45,6 +47,7 @@ pub fn run(engine: &Engine<'_>, running_new_updater: bool) -> ! {
             let _ = meduza_np_runtime::fsutil::set_mode(&socket, 0o660);
             let st = state.clone();
             let store_root = engine.cfg.store_dir();
+            let run_dir = engine.cfg.paths.run.clone();
             let cfg_summary = json!({
                 "backend": engine.cfg.backend.name(), "platform": engine.cfg.platform, "channel": engine.cfg.channel,
                 "pinnedGroupVersion": engine.cfg.group_version, "source": engine.cfg.base_url, "autoApply": engine.cfg.auto_apply,
@@ -55,7 +58,8 @@ pub fn run(engine: &Engine<'_>, running_new_updater: bool) -> ! {
                     let st = st.clone();
                     let root = store_root.clone();
                     let summary = cfg_summary.clone();
-                    std::thread::spawn(move || serve(conn, st, &root, &summary));
+                    let run = run_dir.clone();
+                    std::thread::spawn(move || serve(conn, st, &root, &run, &summary));
                 }
             });
         }
@@ -101,7 +105,9 @@ pub fn run(engine: &Engine<'_>, running_new_updater: bool) -> ! {
             s.busy = Some(if forced == Some(true) { "applying".into() } else { "checking".into() });
             forced
         };
+        let _ = meduza_np_runtime::fsutil::write_json_atomic(&activity, &json!({"busy":"checking"}), 0o644);
         let result = run_pass(engine, forced == Some(true));
+        let _ = meduza_np_runtime::fsutil::write_json_atomic(&activity, &json!({"busy":null}), 0o644);
         {
             let (lock, _) = &*state;
             let mut s = lock.lock().unwrap();
@@ -156,7 +162,7 @@ fn run_pass(engine: &Engine<'_>, forced: bool) -> Result<(Option<crate::resolve:
     engine.run_once(allow)
 }
 
-fn serve(conn: UnixStream, state: State, store_root: &std::path::Path, summary: &Value) {
+fn serve(conn: UnixStream, state: State, store_root: &std::path::Path, run_dir: &std::path::Path, summary: &Value) {
     let authorized = authorized(&conn);
     conn.set_read_timeout(Some(Duration::from_secs(60))).ok();
     let mut writer = match conn.try_clone() {
@@ -168,7 +174,7 @@ fn serve(conn: UnixStream, state: State, store_root: &std::path::Path, summary: 
         let Ok(line) = line else { break };
         let resp = match serde_json::from_str::<LocalRequest>(&line) {
             Err(e) => LocalResponse::err(0, "invalid-params", e.to_string()),
-            Ok(req) => dispatch(&req, authorized, &state, store_root, summary),
+            Ok(req) => dispatch(&req, authorized, &state, store_root, run_dir, summary),
         };
         let mut out = serde_json::to_vec(&resp).unwrap_or_default();
         out.push(b'\n');
@@ -194,7 +200,14 @@ fn read_json(path: std::path::PathBuf) -> Value {
     meduza_np_runtime::fsutil::read_json::<Value>(&path, 4 * 1024 * 1024).ok().flatten().unwrap_or(Value::Null)
 }
 
-fn dispatch(req: &LocalRequest, authorized: bool, state: &State, store_root: &std::path::Path, summary: &Value) -> LocalResponse {
+fn dispatch(
+    req: &LocalRequest,
+    authorized: bool,
+    state: &State,
+    store_root: &std::path::Path,
+    run_dir: &std::path::Path,
+    summary: &Value,
+) -> LocalResponse {
     let id = req.id;
     let Some(mutating) = method_is_mutating(UPDATER_METHODS, &req.method) else {
         return LocalResponse::err(id, "not-found", format!("unknown method {}", req.method));
@@ -225,6 +238,7 @@ fn dispatch(req: &LocalRequest, authorized: bool, state: &State, store_root: &st
                     "lastJournal": read_json(store_root.join("journal.last.json")),
                     "state": read_json(state_path.clone()),
                     "control": read_json(control_path.clone()),
+                    "progress": meduza_np_runtime::update::snapshot(store_root, run_dir),
                 }),
             )
         }

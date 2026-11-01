@@ -57,6 +57,7 @@ export interface Backoff {
 }
 
 export interface Report {
+  update?: import("@meduza-np/ui-kit/package-progress").InstallProgress | null;
   nodeId: string;
   bootId: string;
   observedAt: string;

@@ -9,6 +9,7 @@ import { errorText, get, post } from "../api.ts";
 import { isError, nodeSpec, problemsFor, reload, setNodeSpec, useConfig, type MihomoCatalog } from "../store.ts";
 import { ProblemList } from "../ApplyBar.tsx";
 import type { NodeDetail } from "./Node.tsx";
+import { packageInstallLabel } from "@meduza-np/ui-kit/package-progress";
 
 const SYNC_FIELDS = [
   ["heartbeatSeconds", msg("Heartbeat")],
@@ -337,6 +338,7 @@ function FeaturesEditor(props: {
         const present = cfg !== undefined;
         const p = pkgs.get(pkg);
         const installed = p?.registration === "registered";
+        const installation = packageInstallLabel(props.detail.report?.update, pkg);
         const isOpen = open[short] ?? false;
         const hasCollection = (c.ui!.collections ?? []).some((col) => col.path === `services.${short}.instances`);
         const access = short === "openvpn" ? ((cfg?.instances ?? []) as Array<Record<string, any>>).filter((i) => i.kind === "access").map((i) => String(i.id)) : [];
@@ -355,7 +357,7 @@ function FeaturesEditor(props: {
                 ) : p?.installed ? (
                   <Badge tone="bad" title={p.reason ?? ""}>{t("installed, not registered")}</Badge>
                 ) : (
-                  <Badge tone={present ? "warn" : "idle"}>{present ? (hasUpdater ? t("installed after apply") : t("install by hand")) : t("not installed")}</Badge>
+                  <Badge tone={installation && props.detail.report?.update?.phase === "failed" ? "bad" : present ? "warn" : "idle"} title={installation ? props.detail.report?.update?.error ?? "" : ""}>{present ? (hasUpdater ? installation ?? t("installed after apply") : t("install by hand")) : t("not installed")}</Badge>
                 )}
                 {count > 0 && <Badge tone="bad">{t("{count} problem(s)", { count })}</Badge>}
               </>
@@ -381,10 +383,11 @@ function FeaturesEditor(props: {
               )
             }
           >
+            {present && ["tinc", "wireguard", "openvpn"].includes(short) && <p class="small muted">{t("Tinc and external connections also install FRR routing support automatically.")}</p>}
             {!installed && (
-              <div class="callout info">
+              <div class={`callout ${installation && props.detail.report?.update?.error ? "bad" : "info"}`} style={{ overflowWrap: "anywhere" }}>
                 {hasUpdater
-                  ? t("{package} is not installed on this node yet; its updater installs it after you apply, then these settings take effect.", { package: pkg })
+                  ? installation ? `${installation}${props.detail.report?.update?.error ? ` · ${props.detail.report.update.error}` : ""}` : t("{package} is not installed on this node yet; its updater installs it after you apply, then these settings take effect.", { package: pkg })
                   : t("{package} is not installed on this node; install it by hand, then these settings take effect.", { package: pkg })}
               </div>
             )}

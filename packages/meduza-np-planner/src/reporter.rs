@@ -90,7 +90,10 @@ pub fn build(p: &Arc<Planner>) -> NodeReport {
         instances,
         resources: Some(resources),
         maintenance: st.maintenance.clone(),
-        update: None,
+        update: meduza_np_runtime::update::snapshot(
+            &std::env::var_os("MEDUZA_NP_DATA_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| p.paths.state.clone()).join("store"),
+            &p.paths.run,
+        ),
         system: Some(SystemInfo {
             arch: std::env::consts::ARCH.into(),
             os: std::env::consts::OS.into(),

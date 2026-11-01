@@ -6,7 +6,8 @@
   "description": "Shared Preact controls: forms, status tables, key widgets",
   "exports": {
     ".": "./src/index.tsx",
-    "./styles.css": "./src/styles.css"
+    "./styles.css": "./src/styles.css",
+    "./package-progress": "./src/package-progress.tsx"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p .",

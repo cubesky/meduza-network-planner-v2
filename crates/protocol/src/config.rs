@@ -38,6 +38,28 @@ pub struct NodeConfig {
     pub update_policy: Option<UpdatePolicy>,
 }
 
+/// Runtime package prerequisite for the mesh or active external connections, even before BGP is configured.
+pub fn needs_routing_package(services: &BTreeMap<String, Value>) -> bool {
+    let enabled = |v: &Value| v.is_object() && v.get("enabled").and_then(Value::as_bool) != Some(false);
+    if let Some(tinc) = services.get("tinc").filter(|v| enabled(v)) {
+        if let Some(list) = tinc.get("instances").and_then(Value::as_array) {
+            if list.iter().any(enabled) {
+                return true;
+            }
+        } else {
+            return true;
+        }
+    }
+    ["wireguard", "openvpn"].iter().any(|key| {
+        services
+            .get(*key)
+            .filter(|v| enabled(v))
+            .and_then(|v| v.get("instances"))
+            .and_then(Value::as_array)
+            .is_some_and(|list| list.iter().any(|v| enabled(v) && v.get("kind").and_then(Value::as_str) != Some("access")))
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum NodeBehavior {
@@ -337,6 +359,20 @@ pub fn valid_hostname(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn routing_package_follows_mesh_and_external_connections() {
+        let needs = |value: Value| needs_routing_package(&serde_json::from_value(value).unwrap());
+        assert!(needs(serde_json::json!({"tinc":{"enabled":true}})));
+        assert!(needs(serde_json::json!({"tinc":{"instances":[{"id":"mesh"}]}})));
+        assert!(needs(serde_json::json!({"wireguard":{"instances":[{"id":"external"}]}})));
+        assert!(needs(serde_json::json!({"openvpn":{"instances":[{"kind":"site2site"}]}})));
+        assert!(!needs(serde_json::json!({"tinc":{"enabled":false}})));
+        assert!(!needs(serde_json::json!({"tinc":{"instances":[{"enabled":false}]}})));
+        assert!(!needs(serde_json::json!({"wireguard":{"enabled":false,"instances":[{}]}})));
+        assert!(!needs(serde_json::json!({"wireguard":{"instances":[]}})));
+        assert!(!needs(serde_json::json!({"openvpn":{"instances":[{"kind":"access"}]}})));
+    }
     use serde_json::json;
 
     fn sample() -> Value {

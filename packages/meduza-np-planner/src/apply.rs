@@ -212,6 +212,11 @@ impl Engine {
         }
         let path = self.paths.wanted_components();
         let mut wanted: BTreeSet<String> = config.services.iter().filter(|(_, v)| service_enabled(v)).map(|(k, _)| k.clone()).collect();
+        // Tinc mesh and external links need the routing adapter as well as their transport. Installing it does
+        // not invent ASN/peers or start FRR: the manager still compiles its routing configuration separately.
+        if meduza_np_protocol::config::needs_routing_package(&config.services) {
+            wanted.insert("frr".into());
+        }
         if merge {
             let raw = std::fs::read(&path).unwrap_or_default();
             wanted.extend(serde_json::from_slice::<Vec<String>>(&raw).unwrap_or_default());

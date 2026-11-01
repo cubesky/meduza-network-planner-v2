@@ -77,6 +77,17 @@ impl Source {
 
     /// Downloads (or copies) `url` to `dest`, refusing more than `max_bytes`.
     pub fn fetch_to(&self, url: &str, dest: &Path, max_bytes: u64, timeout_seconds: u32) -> Result<(), MetaError> {
+        self.fetch_to_with_progress(url, dest, max_bytes, timeout_seconds, |_| {})
+    }
+
+    pub fn fetch_to_with_progress(
+        &self,
+        url: &str,
+        dest: &Path,
+        max_bytes: u64,
+        timeout_seconds: u32,
+        notify: impl FnMut(crate::retry::Attempt),
+    ) -> Result<(), MetaError> {
         if let Some(src) = Self::local_path(url) {
             let len = std::fs::metadata(&src).map_err(|e| MetaError::new("fetch-failed", format!("{}: {e}", src.display())))?.len();
             if len > max_bytes {
@@ -86,7 +97,13 @@ impl Source {
             return Ok(());
         }
         let opts = meduza_np_plugin_sdk::fetch::FetchOptions { timeout_seconds, max_bytes, proxy: None, header: None };
-        meduza_np_plugin_sdk::fetch::fetch_to_file(url, dest, &opts).map_err(|e| MetaError::new("fetch-failed", format!("{url}: {e}")))
+        crate::retry::download(
+            || {
+                meduza_np_plugin_sdk::fetch::fetch_to_file(url, dest, &opts)
+                    .map_err(|e| MetaError::new("fetch-failed", format!("{url}: {e}")))
+            },
+            notify,
+        )
     }
 
     pub fn fetch_bytes(&self, rel: &str, tmp_dir: &Path, max_bytes: u64) -> Result<Vec<u8>, MetaError> {
@@ -204,4 +221,44 @@ fn validate_manifest(m: &GroupManifest) -> Result<(), MetaError> {
         }
     }
     Ok(())
+}
+
+#[cfg(all(test, unix))]
+mod retry_tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+
+    #[test]
+    fn real_download_recovers_from_a_partial_body_and_http_503() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/package", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for number in 0..3 {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                        break;
+                    }
+                }
+                let response = match number {
+                    0 => "HTTP/1.1 200 OK\r\nContent-Length: 20\r\nConnection: close\r\n\r\nx",
+                    1 => "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    _ => "HTTP/1.1 200 OK\r\nContent-Length: 8\r\nConnection: close\r\n\r\ncomplete",
+                };
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        let dest = std::env::temp_dir().join(format!("mnp-real-retry-{}.tmp", std::process::id()));
+        let mut events = vec![];
+        Source::new("https://release.example").unwrap().fetch_to_with_progress(&url, &dest, 64, 10, |e| events.push(e)).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), b"complete");
+        assert_eq!(events.iter().filter(|e| e.retry_after.is_some()).count(), 2);
+        assert_eq!(events.last().unwrap().number, 3);
+        server.join().unwrap();
+        std::fs::remove_file(dest).unwrap();
+    }
 }

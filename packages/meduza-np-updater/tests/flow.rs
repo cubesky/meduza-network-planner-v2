@@ -212,6 +212,41 @@ fn current_file(cfg: &Config, rel: &str) -> Option<String> {
 const FAR: &str = "2099-01-01T00:00:00Z";
 
 #[test]
+fn retries_reuse_only_downloads_matching_signed_hashes() {
+    let env = Env::new("verified-download-cache");
+    let cfg = env.config(Some(vec!["meduza-np-wireguard"]));
+    let planner = FakePlanner { store: cfg.store_dir(), up: Cell::new(false), boot: Cell::new(1), calls: RefCell::new(vec![]) };
+    let now_fn = now;
+    let e = engine(&cfg, &planner, &now_fn);
+    env.publish(
+        "v0.1.0",
+        1,
+        vec![
+            env.package("meduza-np-planner", "0.1.0", false),
+            env.package("meduza-np-wireguard", "0.1.0", false),
+            env.package("meduza-np-updater", "0.1.0", false),
+        ],
+        FAR,
+    );
+    let group = e.check().unwrap();
+    let plan = e.plan(&group).unwrap();
+    for (index, action) in plan.actions.iter().filter(|a| a.downloads()).enumerate() {
+        let art = action.artifact.as_ref().unwrap();
+        let source = env.repo.join(&art.url);
+        let cached = e.store().staging().join(format!("{}_{}.{}", action.package, action.to.as_deref().unwrap(), art.format));
+        if index == 0 {
+            std::fs::copy(&source, &cached).unwrap();
+            std::fs::remove_file(&source).unwrap(); // Success now requires reusing the verified file.
+        } else {
+            std::fs::write(&cached, b"corrupt cache").unwrap(); // Must be replaced from the valid source.
+        }
+    }
+    assert_eq!(e.apply(&group, &plan, false).unwrap(), Outcome::Applied);
+    assert!(e.installed().unwrap().packages.contains_key("meduza-np-wireguard"));
+    let _ = std::fs::remove_dir_all(&env.root);
+}
+
+#[test]
 fn bootstrap_upgrade_rollback_and_attacks() {
     let env = Env::new("main");
     let cfg = env.config(Some(vec!["meduza-np-wireguard"]));
@@ -373,6 +408,11 @@ fn configured_features_install_without_a_new_group() {
         assert!(e.installed().unwrap().packages.contains_key(*name));
     }
     assert_eq!(e.installed().unwrap().group_version.as_deref(), Some("v0.1.0"));
+    let progress = meduza_np_runtime::update::snapshot(&cfg.store_dir(), &cfg.paths.run).unwrap();
+    assert_eq!(progress["phase"], "done");
+    assert_eq!(progress["downloadedBytes"], progress["bytesTotal"]);
+    assert!(progress["bytesTotal"].as_u64().unwrap() > 0);
+    assert!(progress["pendingPackages"].as_array().unwrap().is_empty());
     assert_eq!(e.run_once(true).unwrap().1, Some(Outcome::NoChange), "NoChange only after the requested packages are installed");
 
     // Planner can scan the old view before its socket starts accepting requests. An install during this gap

@@ -8,6 +8,7 @@ import { errorText, get, post } from "../api.ts";
 import { isError, problemsFor, useConfig } from "../store.ts";
 import { revisionBadge, syncCell, type NodeSummary } from "./Overview.tsx";
 import { NodeSettings } from "./NodeSettings.tsx";
+import { PackageProgress } from "@meduza-np/ui-kit/package-progress";
 
 type Role = "admin" | "operator" | "viewer";
 
@@ -89,6 +90,7 @@ export function NodePage(props: { id: string; tab?: string; role: Role }) {
                 active={tab}
                 onChange={go}
               />
+              <PackageProgress progress={n.report?.update} reportedAt={n.report?.observedAt} />
               {tab === "status" && <StatusTab n={n} services={services} canAct={canAct} restart={restart} />}
               {tab === "routing" && <RoutingTab items={routing} canAct={canAct} restart={restart} />}
               {tab === "connections" && <ConnectionsTab items={connections} canAct={canAct} restart={restart} />}

@@ -112,9 +112,30 @@ valid for 10 minutes.
 
 ## 4. Upgrade
 
+Manager node lists, node status/settings, and the dashboard overview/updates page show the updater's package
+installation progress: current package, verified download count, actual downloaded bytes, install/activation and
+registration phases, failure reason and next automatic check. Manager progress arrives with the node's normal
+reports; the dashboard updates page polls every 3 seconds. An applied configuration can still have packages
+waiting for installation. A 100% download is followed by installation, system dependency preparation and
+registration checks before packages are ready. Older updaters expose phases/errors without invented byte counts.
+
+Tinc mesh and active WireGuard/OpenVPN external connections automatically request `meduza-np-frr` in the planner's
+component list, without requiring a handwritten FRR service. OpenVPN Access-only instances and disabled connections
+do not add this routing prerequisite. The manager continues to derive FRR's actual routing configuration from the
+internal ASN, peers, external BGP and Anycast settings. The base image installs the Alpine `frr` dependency when the
+new adapter arrives; FRR still needs `SYS_ADMIN` in the planner container (fixed when creating the container).
+
 * The updater checks the channel on its own timer: 6 h by default, randomized, with backoff on failure. It verifies
   pointer and manifest signatures, the digest binding, expiry and sequence (no rollback to older metadata). Then it
   resolves only the installed or selected packages plus required dependencies.
+* Transient download errors (connection/DNS failures, TLS stream interruptions, timeouts, HTTP 408/425/429 and
+  5xx) retry the individual file automatically: at most four attempts, with 2/4/8-second exponential waits plus
+  up to 20% random jitter. The original timeout/size limit applies to each attempt. Metadata downloads use the
+  same policy. The progress panel shows the attempt number, failure reason and next retry time. After all attempts
+  fail, the daemon's longer automatic backoff still applies; a download failure does not blacklist the group.
+  Previously completed staging files are reused only after their size and SHA-256 match the signed manifest;
+  partial/unverified files are downloaded again. Invalid signatures/digests, certificate trust errors, local I/O
+  failures, oversized responses and permanent HTTP errors are not blindly retried within a pass.
 * A normal update never adds packages. A new version that needs a package which is not installed is reported as
   blocked (`meduza-np update plan`).
 * Apply: downloads are verified into staging without holding any lock. Then: planner maintenance lock → drain

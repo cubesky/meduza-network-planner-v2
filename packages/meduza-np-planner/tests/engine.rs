@@ -255,6 +255,11 @@ async fn apply_lifecycle() {
     env.engine.publish_wanted_components(&raw, false);
     let wanted = read_wanted();
     assert!(wanted.contains(&"mosdns".to_string()) && wanted.contains(&"avahi".to_string()), "{wanted:?}");
+    let mut with_mesh = raw.clone();
+    with_mesh["services"]["tinc"] = json!({"enabled":true});
+    env.engine.publish_wanted_components(&with_mesh, false);
+    assert!(read_wanted().contains(&"frr".to_string()), "mesh automatically requests the FRR package without a handwritten FRR service");
+    env.engine.publish_wanted_components(&raw, false);
     // D46: restoring an older configuration without mosdns merges, a newly received one replaces
     let (older, _) = config(&env, 4, json!([{"id": "a", "version": 2, "log": log_arg}]));
     env.engine.publish_wanted_components(&older, true);
