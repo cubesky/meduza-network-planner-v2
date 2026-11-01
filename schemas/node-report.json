@@ -535,7 +535,7 @@
           ]
         },
         "networkMode": {
-          "description": "Container network mode the deployment declared (`bridge` or `host`, `MEDUZA_NP_NETWORK_MODE`).",
+          "description": "Container network mode the deployment declared (`bridge`, `host` or `macvlan`, `MEDUZA_NP_NETWORK_MODE`).",
           "type": [
             "string",
             "null"
