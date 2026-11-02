@@ -4,7 +4,7 @@
 
 import { useState } from "preact/hooks";
 import { Badge, Button, Card, Checkbox, Field, ListInput, Loadable, Modal, Panel, Select, Tabs, TextInput, ToggleField, ask, msg, t, toast, useAsync } from "@meduza-np/ui-kit";
-import { DescriptorView, NestedList, childSchema, translator, type ActionRequest, type JsonSchema, type SecretOption, type SecretRequest, type UiDescriptor } from "@meduza-np/descriptor-renderer";
+import { DescriptorView, NestedList, childSchema, translator, type ActionRequest, type JsonSchema, type RuntimeInstance, type SecretOption, type SecretRequest, type UiDescriptor } from "@meduza-np/descriptor-renderer";
 import { errorText, get, post } from "../api.ts";
 import { isError, nodeSpec, problemsFor, reload, setNodeSpec, useConfig, type MihomoCatalog } from "../store.ts";
 import { ProblemList } from "../ApplyBar.tsx";
@@ -288,7 +288,7 @@ function FeaturesEditor(props: {
   const readOnly = props.role === "viewer";
   const pkgs = new Map(props.detail.packages.map((p) => [p.package, p]));
   const hasUpdater = !!pkgs.get("meduza-np-updater")?.installed;
-  const runtime = ((props.detail.report?.instances ?? []) as Array<{ id: string; kind: string; state: string }>).filter((i) => i && i.id);
+  const runtime = ((props.detail.report?.instances ?? []) as RuntimeInstance[]).filter((i) => i && i.id);
   // packages without settings of their own (FRR, compiled from the other features: D24) are not listed
   const configurable = props.catalog.filter((c) => c.ui && (c.ui.settings?.length || c.ui.collections?.length) && (c.manifest.role === "service-adapter" || c.manifest.role === "binary-provider"));
   const services = props.spec.services ?? {};
@@ -333,7 +333,7 @@ function FeaturesEditor(props: {
       {configurable.map((c) => {
         const pkg = c.manifest.package;
         const short = pkg.replace(/^meduza-np-/, "");
-        const staticProvider = c.manifest.role === "binary-provider" && c.manifest.providers?.some((p) => !p.requiresPreparation);
+        const binaryProvider = c.manifest.role === "binary-provider";
         const tx = translator(c.ui);
         const cfg = services[short];
         const present = cfg !== undefined;
@@ -341,7 +341,7 @@ function FeaturesEditor(props: {
         const installed = p?.registration === "registered";
         const installation = packageInstallLabel(props.detail.report?.update, pkg);
         const isOpen = open[short] ?? false;
-        const canOpen = present || (staticProvider && p?.installed);
+        const canOpen = present || (binaryProvider && p?.installed);
         const hasCollection = (c.ui!.collections ?? []).some((col) => col.path === `services.${short}.instances`);
         const access = short === "openvpn" ? ((cfg?.instances ?? []) as Array<Record<string, any>>).filter((i) => i.kind === "access").map((i) => String(i.id)) : [];
         // warnings (e.g. "not installed yet") are not problems of the feature's settings
@@ -362,28 +362,28 @@ function FeaturesEditor(props: {
                   <Badge tone={installation && props.detail.report?.update?.phase === "failed" ? "bad" : present ? "warn" : "idle"} title={installation ? props.detail.report?.update?.error ?? "" : ""}>{present ? (hasUpdater ? installation ?? t("installed after apply") : t("install by hand")) : t("not installed")}</Badge>
                 )}
                 {count > 0 && <Badge tone="bad">{t("{count} problem(s)", { count })}</Badge>}
-                {staticProvider && p?.installedVersion && <Badge>{p.installedVersion}</Badge>}
+                {binaryProvider && p?.installedVersion && <Badge>{p.installedVersion}</Badge>}
               </>
             }
             actions={
               !readOnly && (
                 <>
                   {access.length > 0 && props.role === "admin" && <Button small onClick={() => setProfileFor(access)}>{t("Client profile…")}</Button>}
-                  {present && <Checkbox label={staticProvider ? t("Request packaged binary") : t("Enabled")} checked={cfg.enabled !== false} onChange={(v) => props.onChange({ ...props.spec, services: { ...services, [short]: { ...cfg, enabled: v } } })} />}
+                  {present && <Checkbox label={binaryProvider ? t("Request packaged binary") : t("Enabled")} checked={cfg.enabled !== false} onChange={(v) => props.onChange({ ...props.spec, services: { ...services, [short]: { ...cfg, enabled: v } } })} />}
                   {!present ? (
                     <Button small variant="primary" onClick={() => {
                       props.onChange({ ...props.spec, services: { ...services, [short]: hasCollection ? { enabled: true, instances: [] } : { enabled: true } } });
                       setOpen((previous) => ({ ...previous, [short]: true }));
-                    }}>{staticProvider ? t("Install packaged binary") : t("Add")}</Button>
+                    }}>{binaryProvider ? t("Install packaged binary") : t("Add")}</Button>
                   ) : (
                     <Button small variant="danger" onClick={async () => {
-                      const message = staticProvider
+                      const message = binaryProvider
                         ? t("Stop requesting {package}? Installed or deployment-pinned binaries may remain; the provider status shows what is active.", { package: pkg })
                         : t("Remove all {feature} configuration from {node}? Its instances are stopped and cleaned up after publishing.", { feature: tx.text(c.ui!.title), node: props.node });
-                      if (!(await ask(message, { ok: staticProvider ? t("Stop requesting") : t("Remove"), danger: true }))) return;
+                      if (!(await ask(message, { ok: binaryProvider ? t("Stop requesting") : t("Remove"), danger: true }))) return;
                       const { [short]: _gone, ...rest } = services;
                       props.onChange({ ...props.spec, services: rest });
-                    }}>{staticProvider ? t("Stop requesting") : t("Remove")}</Button>
+                    }}>{binaryProvider ? t("Stop requesting") : t("Remove")}</Button>
                   )}
                 </>
               )
@@ -403,15 +403,19 @@ function FeaturesEditor(props: {
                 onRefresh={(v) => props.onChange({ ...props.spec, services: { ...services, [short]: { ...cfg, refreshSeconds: v } } })} />
             )}
             <DescriptorView
-              descriptor={staticProvider && !present ? { ...c.ui!, settings: [] } : c.ui!}
+              descriptor={binaryProvider && !present ? { ...c.ui!, settings: [], actions: [] } : c.ui!}
               schema={c.configSchema}
               value={props.spec}
               onChange={props.onChange}
-              runtime={runtime}
+              runtime={binaryProvider ? runtime.map((row) => row.id.startsWith(`${short}/`) ? {
+                ...row,
+                packageVersion: row.packageVersion ?? p?.installedVersion,
+                upstreamVersion: row.upstreamVersion ?? row.version,
+              } : row) : runtime}
               secrets={props.secrets}
               problems={props.problems}
               readOnly={readOnly}
-              onAction={(req) => void onAction(req, pkg)}
+              onAction={!binaryProvider || (installed && present && cfg.enabled !== false) ? (req) => void onAction(req, pkg) : undefined}
               secretAction={readOnly ? undefined : secretAction}
             />
           </Panel>

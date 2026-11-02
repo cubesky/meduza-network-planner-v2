@@ -170,10 +170,10 @@ function StatusTab(props: { n: NodeDetail; services: Inst[]; canAct: boolean; re
               label: "",
               render: (r) => {
                 const i = r as Inst;
-                const staticResource = i.kind === "mosdns-provider" || i.kind === "openvpn-provider";
+                const binaryResource = i.kind.endsWith("-provider");
                 const parts = i.id.split("/");
                 // a process restarts alone through its instance; a feature instance (pkg/inst) restarts as a whole
-                const target = staticResource ? undefined : i.kind === "process" ? (i.instance as string | undefined) : parts.length >= 2 ? `${parts[0]}/${parts[1]}` : undefined;
+                const target = binaryResource ? undefined : i.kind === "process" ? (i.instance as string | undefined) : parts.length >= 2 ? `${parts[0]}/${parts[1]}` : undefined;
                 const proc = i.kind === "process" ? parts.slice(0, -1).join("/") : undefined;
                 return (
                   <span class="row" style={{ justifyContent: "flex-end", flexWrap: "nowrap" }}>

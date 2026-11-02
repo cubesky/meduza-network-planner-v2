@@ -44,7 +44,7 @@
       "fields": {
         "enabled": "Request packaged binary",
         "packageVersion": "Package version",
-        "upstreamVersion": "Bundled binary version",
+        "upstreamVersion": "Binary version",
         "activeSource": "Active provider",
         "path": "Binary path"
       }
@@ -62,7 +62,7 @@
         "id": "ID",
         "state": "状态",
         "packageVersion": "组件包版本",
-        "upstreamVersion": "随包本体版本",
+        "upstreamVersion": "本体版本",
         "activeSource": "实际 provider",
         "path": "本体路径",
         "reason": "原因"
@@ -81,7 +81,7 @@
         "id": "ID",
         "state": "狀態",
         "packageVersion": "元件套件版本",
-        "upstreamVersion": "隨附本體版本",
+        "upstreamVersion": "本體版本",
         "activeSource": "實際 provider",
         "path": "本體路徑",
         "reason": "原因"

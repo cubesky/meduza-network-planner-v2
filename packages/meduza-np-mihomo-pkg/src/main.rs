@@ -99,6 +99,9 @@ impl Plugin for MihomoPkg {
         );
         detail.insert("dataDir".into(), Value::String(d.data_dir.to_string_lossy().into_owned()));
         detail.insert("adapterVersion".into(), Value::String(env!("CARGO_PKG_VERSION").into()));
+        detail.insert("packageVersion".into(), Value::String(env!("CARGO_PKG_VERSION").into()));
+        detail.insert("upstreamVersion".into(), json!(st.as_ref().and_then(|s| s.version.as_deref())));
+        detail.insert("activeSource".into(), json!(req.providers.get("mihomo.binary").map(|p| &p.source)));
         if let Some(s) = &st {
             for (k, v) in [
                 ("source", json!(s.source)),
@@ -213,4 +216,53 @@ fn main() {
         prepare(&args[2..]);
     }
     run(&MihomoPkg, env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use meduza_np_plugin_sdk::{test_request, ResolvedProvider};
+
+    #[test]
+    fn resource_probe_separates_package_binary_and_active_provider_versions() {
+        let root = std::env::temp_dir().join(format!("mnp-mihomo-resource-{}", std::process::id()));
+        let mut req = test_request("probe", json!({"services":{"mihomo-pkg":{"mode":"manual"}}}));
+        req.context.state_dir = root.to_string_lossy().into_owned();
+        let dirs = mp::Dirs::new(&req.context.state_dir, &mp::load(&req).unwrap());
+        let pending = MihomoPkg.probe(&req).unwrap().instances.remove(0);
+        assert_eq!(pending.state, ServiceState::Pending);
+        assert_eq!(pending.detail["packageVersion"], env!("CARGO_PKG_VERSION"));
+        assert!(pending.detail["upstreamVersion"].is_null());
+        assert!(pending.detail["activeSource"].is_null());
+        let mut state = mp::ProviderState {
+            state: "registered".into(),
+            mode: "manual".into(),
+            path: dirs.binary().to_string_lossy().into_owned(),
+            version: Some("v1.19.17".into()),
+            source: Some("user-provided".into()),
+            ..Default::default()
+        };
+        mp::save_state(&dirs, &state).unwrap();
+        let inactive = MihomoPkg.probe(&req).unwrap().instances.remove(0);
+        assert!(inactive.detail["activeSource"].is_null(), "prepared metadata alone does not prove registry selection");
+        req.providers.insert(
+            "mihomo.binary".into(),
+            ResolvedProvider { path: state.path.clone(), source: "user-provided".into(), version: state.version.clone() },
+        );
+        let active = MihomoPkg.probe(&req).unwrap().instances.remove(0);
+        assert_eq!(active.detail["packageVersion"], env!("CARGO_PKG_VERSION"));
+        assert_eq!(active.detail["upstreamVersion"], "v1.19.17");
+        assert_eq!(active.detail["activeSource"], "user-provided");
+        assert_eq!(active.detail["version"], "v1.19.17", "preserve the existing status contract");
+        req.providers.clear();
+        state.state = "download-failed".into();
+        state.last_error = Some("download interrupted".into());
+        state.download_stage = Some("fetching".into());
+        mp::save_state(&dirs, &state).unwrap();
+        let failed = MihomoPkg.probe(&req).unwrap().instances.remove(0);
+        assert_eq!(failed.state, ServiceState::Down);
+        assert_eq!(failed.detail["downloadStage"], "fetching");
+        assert_eq!(failed.reason.as_deref(), Some("download interrupted"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

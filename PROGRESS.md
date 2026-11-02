@@ -919,3 +919,13 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   reporter tests, strict planner Clippy, four Manager API/translation tests, production frontend builds and
   release/E2E shell syntax checks passed. Native Chrome verified four instance targets, row/header placement,
   viewer permissions and the legacy image badge. Source changes only; not released or deployed.
+- 2026-11-03 (per the user) Unify Mihomo/MosDNS/OpenVPN binary resources in Manager: classify all binary-provider
+  packages as resources, with shared installation-request controls, package version badges, expandable installed
+  status without configuration and matching status columns/labels. Separate Mihomo acquisition/preparation details
+  and preserve manual/download actions; hide preparation actions until registered and enabled. Report Mihomo's
+  package/binary versions and registry-selected source independently, with legacy report version compatibility.
+  Binary resource status rows have no service restart action; real preparer processes keep their restart control.
+  Five Mihomo adapter tests, four manifest tests, schema freshness, strict Clippy, four Manager catalog/i18n tests,
+  workspace typechecks/builds and native Chrome resource comparisons passed. Chrome covered all three resources,
+  unconfigured/configured/missing/viewer states, legacy versions, activation targeting and restart availability.
+  Source changes only; not released or deployed.

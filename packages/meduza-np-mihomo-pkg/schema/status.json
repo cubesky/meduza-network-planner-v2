@@ -34,6 +34,21 @@
         "string",
         "null"
       ]
+    },
+    "packageVersion": {
+      "type": "string"
+    },
+    "upstreamVersion": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "activeSource": {
+      "type": [
+        "string",
+        "null"
+      ]
     }
   }
 }

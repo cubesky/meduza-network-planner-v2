@@ -257,7 +257,18 @@ both directions of both selected protocols. Existing `excludePorts` keeps its de
 `excludeInterfaces` complements the automatic mesh/VPN device exclusions. Imported subscription DNS needs explicit
 configuration because the etcd export does not include the downloaded subscription's DNS settings.
 
-### Managing bundled MosDNS / OpenVPN binaries
+### Managing binary resources
+
+Node Settings → Features presents **Mihomo binary resource**, **MosDNS binary resource** and **OpenVPN binary
+resource** with the same installation-request controls, installed package version badge and resource status
+columns. The component package version and the upstream binary version are separate. Installed resources can
+be expanded even without Manager configuration; in that case the panel shows status without preparation actions.
+
+Mihomo keeps its manual-file / pinned-download source settings and check/activate/download actions. Its extra
+source, preparation, platform, verification and download-stage fields appear below the common status table.
+These actions are offered once its package is registered and its configuration is enabled. The package remains
+a lightweight acquisition adapter; it does not bundle Mihomo itself. Older reports' binary version fields remain
+readable; the actual active provider requires the updated adapter's report and is not guessed from source metadata.
 
 Node Settings → Features includes **MosDNS binary resource** and **OpenVPN binary resource**, independently of
 the service adapter settings. Add/enable the installation request and apply the working copy to let the updater
@@ -272,7 +283,8 @@ is reported as unavailable, rather than silently advertised as a healthy system 
 Stopping/removing the request stops asking the updater for that component. It does not forcibly uninstall a package
 retained by `MEDUZA_NP_COMPONENTS` or the updater's existing installed-set selection; change that deployment/selection
 when removing such a package. The reported active provider remains the source of truth. Runtime restarts belong to
-the MosDNS/OpenVPN service instances, not these binary resources.
+the Mihomo/MosDNS/OpenVPN service instances, not these binary resources. Mihomo's actual download-preparer
+process retains its process restart control.
 
 ### Navigating the topology
 
