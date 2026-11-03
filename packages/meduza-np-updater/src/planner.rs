@@ -21,7 +21,9 @@ impl PlannerApi for UdsPlanner {
         use std::io::{BufRead, BufReader, Write};
         use std::os::unix::net::UnixStream;
         let stream = UnixStream::connect(&self.socket).map_err(|e| format!("unavailable: {e}"))?;
-        stream.set_read_timeout(Some(self.timeout)).ok();
+        // Planner may be installing the native updater with its short-lived helper (bounded at 120 seconds).
+        let timeout = if method == "updater.activate" { self.timeout.max(Duration::from_secs(150)) } else { self.timeout };
+        stream.set_read_timeout(Some(timeout)).ok();
         stream.set_write_timeout(Some(self.timeout)).ok();
         let req = meduza_np_protocol::local::LocalRequest {
             protocol: meduza_np_protocol::local::LOCAL_PROTOCOL_VERSION,

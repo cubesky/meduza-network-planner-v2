@@ -39,7 +39,8 @@
       "type": "array"
     },
     "listenAddresses": {
-      "description": "Addresses clients query (the front end). Never 0.0.0.0 implicitly.",
+      "default": [],
+      "description": "Addresses clients query. Omitted or empty listens on all local IPv4/IPv6 interfaces.",
       "items": {
         "format": "ip",
         "type": "string"
@@ -73,9 +74,6 @@
       "default": "ordered"
     }
   },
-  "required": [
-    "listenAddresses"
-  ],
   "title": "dnsmasq",
   "type": "object"
 }

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds a fully static OpenVPN (musl + OpenSSL + libcap-ng) from the sources pinned in upstream.lock.json and
+# Builds a fully static OpenVPN (musl + OpenSSL + libcap-ng + LZO + LZ4) from upstream.lock.json and
 # installs the provider tree into OUT (§14.1). Runs inside the pinned Alpine builder for the *target* platform
 # (natively or under QEMU), so `./config` and `configure` detect the right architecture without a cross toolchain.
 #
@@ -19,7 +19,14 @@ fetch_tarball() {
 	sum=$(src "$name" sha256)
 	ver=$(src "$name" version)
 	file="$work/$name-$ver.tar.gz"
-	curl -fsSL --retry 3 -o "$file" "$url"
+	# Optional read-only build cache; cached bytes pass the same pinned digest gate before extraction.
+	cached="${SOURCE_CACHE_DIR:-/archives}/$name-$ver.tar.gz"
+	if [ -f "$cached" ]; then
+		cp "$cached" "$file"
+	else
+		curl --proto '=https' --proto-redir '=https' --http1.1 --connect-timeout 15 --max-time 600 \
+			--speed-limit 1 --speed-time 30 -fsSL --retry 3 -o "$file" "$url"
+	fi
 	echo "$sum  $file" | sha256sum -c -
 	tar -xzf "$file" -C "$work"
 }
@@ -29,12 +36,17 @@ fetch_git() {
 	repo=$(src "$name" git)
 	tag=$(src "$name" tag)
 	commit=$(src "$name" commit)
-	git -c advice.detachedHead=false clone --quiet --depth 1 --branch "$tag" "$repo" "$work/$name"
+	cached="${SOURCE_CACHE_DIR:-/archives}/$name.git"
+	if [ -d "$cached" ]; then
+		repo=$cached
+	fi
+	timeout 180 git -c http.version=HTTP/1.1 -c advice.detachedHead=false clone --quiet --no-hardlinks --depth 1 --branch "$tag" "$repo" "$work/$name"
 	actual=$(git -C "$work/$name" rev-parse HEAD)
 	if [ "$actual" != "$commit" ]; then
 		echo "FAIL $name: tag $tag is $actual, lock says $commit" >&2
 		exit 1
 	fi
+	git -C "$work/$name" fsck --full --no-dangling
 }
 
 copy_licenses() {
@@ -43,19 +55,23 @@ copy_licenses() {
 	dest="$out/usr/share/licenses/meduza-np-openvpn-pkg/$name"
 	mkdir -p "$dest"
 	for f in $(jq -r --arg n "$name" '.sources[] | select(.name == $n) | .licenseFiles[]' "$lock"); do
+		mkdir -p "$dest/$(dirname "$f")"
 		cp "$dir/$f" "$dest/$f"
 	done
 }
 
 deps=/opt/deps
-jobs=$(nproc)
+jobs=${BUILD_JOBS:-$(nproc)}
 
 fetch_tarball openvpn
 fetch_tarball openssl
 fetch_git libcap-ng
+fetch_tarball lzo
+fetch_git lz4
 
 openvpn_ver=$(src openvpn version)
 openssl_ver=$(src openssl version)
+lzo_ver=$(src lzo version)
 
 # libcap-ng: required by OpenVPN on Linux (capability retention after dropping privileges).
 cd "$work/libcap-ng"
@@ -72,12 +88,21 @@ cd "$work/openssl-$openssl_ver"
 make -j"$jobs" build_libs
 make install_dev
 
-# OpenVPN: no compression, no DCO (needs libnl + kernel module), no plugins (Access uses the via-file
+# Compression libraries stay inside the provider ELF; hosts and runtime images need no additional packages.
+cd "$work/lzo-$lzo_ver"
+./configure --prefix="$deps" --libdir="$deps/lib" --disable-shared --enable-static
+make -j"$jobs"
+make install
+cd "$work/lz4"
+make -C lib -j"$jobs" BUILD_SHARED=no BUILD_STATIC=yes PREFIX="$deps"
+make -C lib install BUILD_SHARED=no BUILD_STATIC=yes PREFIX="$deps" LIBDIR="$deps/lib"
+
+# OpenVPN: LZO/LZ4 enabled, no DCO (needs libnl + kernel module), no plugins (Access uses the via-file
 # auth-user-pass-verify hook, not a .so plugin), management interface kept for status (§9.3).
 cd "$work/openvpn-$openvpn_ver"
 PKG_CONFIG_PATH="$deps/lib/pkgconfig" PKG_CONFIG="pkg-config --static" \
 	./configure --prefix=/usr --sysconfdir=/etc \
-	--disable-lzo --disable-lz4 --disable-dco --disable-plugins --disable-plugin-auth-pam \
+	--enable-lzo --enable-lz4 --disable-dco --disable-plugins --disable-plugin-auth-pam \
 	--disable-plugin-down-root --disable-pkcs11 --disable-systemd --disable-selinux --disable-unit-tests \
 	--disable-dns-updown-by-default --enable-management --with-crypto-library=openssl \
 	LDFLAGS="-static"
@@ -105,12 +130,16 @@ echo "$version" | grep -q "OpenSSL $openssl_ver" || { echo "FAIL not linked agai
 # 2.7 no longer prints compile-time defines; the configure result is authoritative.
 cfg_h="$work/openvpn-$openvpn_ver/config.h"
 grep -q '^#define ENABLE_MANAGEMENT 1' "$cfg_h" || { echo "FAIL management interface missing" >&2; exit 1; }
-for off in ENABLE_DCO ENABLE_LZO ENABLE_LZ4 ENABLE_PLUGIN; do
+for on in ENABLE_LZO ENABLE_LZ4; do
+	grep -q "^#define $on 1" "$cfg_h" || { echo "FAIL $on is missing" >&2; exit 1; }
+done
+for off in ENABLE_DCO ENABLE_PLUGIN; do
 	if grep -q "^#define $off 1" "$cfg_h"; then
 		echo "FAIL $off is enabled" >&2
 		exit 1
 	fi
 done
+sh "$(dirname "$0")/smoke-compression.sh" "$bin" "$deps"
 # Functional: the management interface really binds (key-less smoke run: held before connecting, then stopped;
 # the static-crypto allowance only lets 2.7 start without TLS material, it is not used by generated configs).
 "$bin" --dev null --allow-deprecated-insecure-static-crypto --management 127.0.0.1 0 --management-hold --verb 3 >/tmp/ovpn-mgmt.log 2>&1 &
@@ -124,6 +153,8 @@ install -D -m 0755 "$bin" "$out/usr/lib/meduza-np/providers/openvpn/sbin/openvpn
 copy_licenses openvpn "$work/openvpn-$openvpn_ver"
 copy_licenses openssl "$work/openssl-$openssl_ver"
 copy_licenses libcap-ng "$work/libcap-ng"
+copy_licenses lzo "$work/lzo-$lzo_ver"
+copy_licenses lz4 "$work/lz4"
 
 meta="$out/usr/share/meduza-np/packages/meduza-np-openvpn-pkg"
 mkdir -p "$meta"
@@ -134,6 +165,7 @@ jq -n --slurpfile lock "$lock" \
 	--arg platform "${TARGETPLATFORM:-unknown}" \
 	--arg version "$(echo "$version" | head -n 1)" \
 	'{buildInfoVersion: 1, platform: $platform, elfMachine: $machine, static: true,
+	  features: {management: true, compression: {lzo: true, lz4: true}},
 	  binary: {path: "/usr/lib/meduza-np/providers/openvpn/sbin/openvpn", sha256: $sha, versionLine: $version},
 	  builder: $lock[0].builder.image,
 	  sources: [$lock[0].sources[] | {name, version, license, url, git, commit, sha256} | with_entries(select(.value != null))]}' \

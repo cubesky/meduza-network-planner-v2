@@ -1,7 +1,53 @@
 // Presentation shared by manager and dashboard; consumes node-reported progress without fetching or mutating it.
 import { Badge, Card, bytes, getLocale, t, type Tone } from "./index.tsx";
+import type { ComponentChildren } from "preact";
+
+export interface BinaryTransferProgress {
+  phase: string;
+  active: boolean;
+  targetVersion: string;
+  platform?: string;
+  downloadedBytes: number;
+  bytesTotal: number;
+  attempt: number;
+  retryAtUnix?: number | null;
+  error?: string | null;
+  updatedAt?: string;
+}
+
+const binaryPhases: Record<string, string> = {
+  waiting: "Waiting for binary", downloading: "Downloading binary", verifying: "Verifying binary checksum",
+  decompressing: "Extracting binary", validating: "Checking binary version and architecture", activating: "Activating binary",
+  done: "Binary ready", failed: "Binary download failed", retrying: "Waiting to retry binary download", interrupted: "Binary preparation interrupted",
+};
+
+/** Binary acquisition is independent of installing the adapter package and of applying network configuration. */
+export function BinaryProgress(props: { name: string; progress?: BinaryTransferProgress | null; providerState?: string; reason?: string; configurationError?: string }) {
+  const p = props.progress;
+  const phase = p?.phase ?? (props.providerState === "registered" ? "done" : "waiting");
+  const bad = ["failed", "interrupted"].includes(phase);
+  const total = p && p.bytesTotal > 0 ? p.bytesTotal : undefined;
+  const done = p && total ? Math.min(total, Math.max(0, p.downloadedBytes)) : undefined;
+  const percent = total && done != null ? Math.floor(done / total * 100) : null;
+  return <Card title={t("{name} binary download", { name: props.name })}>
+    <div class="row"><Badge tone={bad ? "bad" : phase === "done" ? "ok" : phase === "retrying" ? "warn" : "info"}>{t(binaryPhases[phase] ?? "Waiting for binary")}</Badge>
+      {p?.targetVersion && <span class="mono small">{p.targetVersion}</span>}{p?.platform && <span class="small muted">{p.platform}</span>}
+    </div>
+    {p && <div style={{ marginTop: "12px" }}>
+      <progress aria-label={t("Binary download progress")} value={done} max={total ?? 1} style={{ width: "100%" }} />
+      <p class="small muted">{percent != null ? `${percent}% · ${bytes(done!)} / ${bytes(total!)}` : t("Waiting for progress data")}</p>
+      {p.attempt > 0 && <p class="small muted">{t("Download attempt {attempt}", { attempt: p.attempt })}</p>}
+      {p.active && phase !== "downloading" && <p class="small muted">{t("Download completion is followed by checksum, extraction and executable checks.")}</p>}
+      {p.retryAtUnix != null && <p class="small muted">{t("Automatic download retry")}: {new Date(p.retryAtUnix * 1000).toLocaleString(getLocale())}</p>}
+    </div>}
+    {(!p?.active && phase !== "done") && (p?.error || props.reason) && <div class={`callout ${bad ? "bad" : "info"}`} style={{ overflowWrap: "anywhere", marginTop: "12px" }}>{p?.error ?? props.reason}</div>}
+    {phase !== "done" && props.configurationError && <div class="callout warn" style={{ overflowWrap: "anywhere", marginTop: "12px" }}>{t("Binary preparation is affected by a configuration application failure: {error}", { error: props.configurationError })}</div>}
+    {p?.updatedAt && <p class="small faint">{t("Last download update")}: {new Date(p.updatedAt).toLocaleString(getLocale())}</p>}
+  </Card>;
+}
 
 export interface InstallProgress {
+  remoteControl?: boolean;
   phase: string;
   active?: boolean;
   groupVersion?: string | null;
@@ -82,12 +128,13 @@ export function PackageUpdateSummary(props: { progress?: InstallProgress | null 
   </div>;
 }
 
-export function PackageProgress(props: { progress?: InstallProgress | null; reportedAt?: string }) {
+export function PackageProgress(props: { progress?: InstallProgress | null; reportedAt?: string; actions?: ComponentChildren; children?: ComponentChildren }) {
   const p = props.progress;
-  if (!p) return <Card title={t("Packages and updates")}>
+  if (!p) return <Card title={t("Packages and updates")} actions={props.actions}>
     <Badge tone="idle">{t("Update status unavailable")}</Badge>
     <p class="small muted">{t("Waiting for the node to report updater status. Check that updater is installed and running.")}</p>
     {props.reportedAt && <p class="small faint">{t("Last node report")}: {new Date(props.reportedAt).toLocaleString(getLocale())}</p>}
+    {props.children}
   </Card>;
   const total = p.bytesTotal != null && p.bytesTotal > 0 ? p.bytesTotal : undefined;
   const downloaded = total != null && p.downloadedBytes != null ? Math.min(total, Math.max(0, p.downloadedBytes)) : undefined;
@@ -96,7 +143,7 @@ export function PackageProgress(props: { progress?: InstallProgress | null; repo
   const packages = [...new Set([...(p.packages ?? []), ...pending])];
   const completedAt = p.phase === "done" ? (p.lastResult?.outcome === "done" ? p.lastResult.at : p.totalPackages ? p.updatedAt : null) : null;
   return (
-    <Card title={t("Packages and updates")}>
+    <Card title={t("Packages and updates")} actions={props.actions}>
       <div class="row"><Badge tone={tone(p)}>{progressLabel(p)}</Badge>{p.groupVersion && <span class="mono small">{p.groupVersion}</span>}</div>
       <div class="row small" style={{ gap: "20px", marginTop: "8px" }}>
         {(p.installedGroupVersion || !p.active && p.phase === "done" && p.groupVersion) && <span>{t("Installed group")}: <strong class="mono">{p.installedGroupVersion ?? p.groupVersion}</strong></span>}
@@ -123,6 +170,7 @@ export function PackageProgress(props: { progress?: InstallProgress | null; repo
       {!p.active && p.phase !== "paused" && p.nextCheckUnix != null && <p class="small muted">{t("Next automatic check")}: {new Date(p.nextCheckUnix * 1000).toLocaleString(getLocale())}</p>}
       {packages.length > 0 && <div class="row" style={{ marginTop: "12px" }}>{packages.map((pkg) => <Badge tone={pkg === p.currentPackage && p.active ? "info" : pending.includes(pkg) ? "warn" : "idle"} title={packageInstallLabel(p, pkg) ?? ""}>{pkg.replace(/^meduza-np-/, "")}{pkg === p.currentPackage && p.active ? ` · ${t("current")}` : ""}</Badge>)}</div>}
       {props.reportedAt && <p class="small faint">{t("Last node report")}: {new Date(props.reportedAt).toLocaleString(getLocale())}</p>}
+      {props.children}
     </Card>
   );
 }

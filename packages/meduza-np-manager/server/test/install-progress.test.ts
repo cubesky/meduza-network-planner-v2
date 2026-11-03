@@ -67,10 +67,22 @@ test("authenticated node reports carry live and completed upgrade state through 
         retryError: phase === "retrying" ? "TLS EOF" : null, error: phase === "failed" ? "registration failed" : null,
         lastCheck: "2026-11-03T09:02:47Z", lastResult: terminal ? { groupVersion: "v0.1.5", outcome: phase, at: "2026-11-03T06:57:20Z" } : null,
       };
+      const binaryProgress = { phase:"downloading", active:true, targetVersion:"v1.19.33", platform:"linux/amd64",
+        downloadedBytes:1048576, bytesTotal:4194304, attempt:2, retryAtUnix:null, error:null, updatedAt:"2026-11-03T09:02:47Z" };
+      const resources = { supervisedProcesses: 2, packages: [
+        { package:"meduza-np-openvpn",diskBytes:8192,dataBytes:4096,memoryRssBytes:32768,
+          diskObservedAt: "2026-11-03T09:02:00Z",memoryObservedAt:"2026-11-03T09:02:47Z",processes:[
+            { id:"openvpn/lemon",instance:"openvpn/lemon",pid:10,scope:"planner",memoryRssBytes:16384 },
+            { id:"openvpn/second",instance:"openvpn/second",pid:11,scope:"planner",memoryRssBytes:16384 },
+          ] },
+        { package:"meduza-np-updater",diskObservedAt:"2026-11-03T09:02:00Z",memoryObservedAt:"2026-11-03T09:02:47Z",
+          reason:"measurement-unavailable",processes:[] },
+      ] };
       const reported = await app.inject({ method: "POST", url: "/api/v1/nodes/self/reports", headers: nodeHeaders, payload: {
         reportVersion: 1, nodeId: "gw-a", bootId: "upgrade-boot", sequence: ++sequence, observedAt: new Date().toISOString(),
-        sync: { mode: "push", transport: "websocket", behavior: "static", state: "in-sync", backoff: { failureLevel: 0, windowSeconds: 0, probing: false } },
-        packages: [], features: [], instances: [], update,
+        sync: { mode: "push", transport: "websocket", behavior: "static", state: "in-sync", backoff: { failureLevel: 0, windowSeconds: 0, probing: false },
+          ...(phase === "failed" ? { lastError:"openvpn/lemon: compression unsupported", recoveryError:"rev-000003: dnsmasq: at least one listen address" } : {}) },
+        packages: [], features: [], instances: [{ id:"mihomo-pkg/provider", kind:"mihomo-provider", state:"starting", downloadProgress:binaryProgress }], update, resources,
       } });
       assert.equal(reported.statusCode, 200, reported.body);
       assert.equal(reported.json().accepted, true);
@@ -78,9 +90,19 @@ test("authenticated node reports carry live and completed upgrade state through 
       const nodes = (await app.inject({ method: "GET", url: "/api/v1/nodes", headers })).json();
       const overview = (await app.inject({ method: "GET", url: "/api/v1/overview", headers })).json();
       assert.deepEqual(detail.report.update, update, `${phase}: raw report`);
+      assert.deepEqual(detail.report.instances[0].downloadProgress, binaryProgress, "binary progress is independent of package-group installation progress");
       assert.deepEqual(detail.update, update, `${phase}: node detail`);
       assert.deepEqual(nodes[0].update, update, `${phase}: node list`);
       assert.deepEqual(overview.nodes[0].update, update, `${phase}: overview`);
+      assert.deepEqual(detail.report.resources, resources, "schema validation preserves per-instance resource measurements and unknown values");
+      assert.deepEqual(detail.resources, resources);
+      assert.deepEqual(nodes[0].resources, resources);
+      assert.deepEqual(overview.nodes[0].resources, resources);
+      if (phase === "failed") {
+        assert.equal(detail.report.sync.lastError, "openvpn/lemon: compression unsupported");
+        assert.equal(detail.report.sync.recoveryError, "rev-000003: dnsmasq: at least one listen address");
+        assert.ok(detail.problems.some((p: { id: string; reason: string }) => p.id === "configuration.recovery" && p.reason.startsWith("rev-000003:")));
+      }
     }
   } finally { await app.close(); }
 });

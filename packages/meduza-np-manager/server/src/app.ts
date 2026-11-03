@@ -375,7 +375,7 @@ export async function buildApp(s: Services): Promise<FastifyInstance> {
 
   app.post<{ Params: { id: string }; Body: { kind: string; package?: string; instance?: string; params?: unknown } }>("/api/v1/nodes/:id/jobs", async (req) => {
     const actor = requireRole(req, "operator");
-    const allowed = ["restart-instance", "stop-instance", "start-instance", "collect-diagnostics", "run-action", "generate-keypair", "sync-now"];
+    const allowed = ["restart-instance", "stop-instance", "start-instance", "collect-diagnostics", "run-action", "generate-keypair", "sync-now", "update-check", "update-apply"];
     if (!allowed.includes(req.body.kind)) throw new AuthError(400, "invalid-job", `job kind must be one of ${allowed.join(", ")}`);
     if (req.body.kind === "run-action") {
       // Only actions declared in a package UI descriptor can be triggered (§5.3).
@@ -387,7 +387,7 @@ export async function buildApp(s: Services): Promise<FastifyInstance> {
       if (!action) throw new AuthError(400, "unknown-action", "action is not declared by the package");
       if (!roleAtLeast(actor.role, action.role ?? "operator")) throw new AuthError(403, "forbidden", `action requires ${action.role}`);
     }
-    return { jobId: s.nodes.createJob({ nodeId: req.params.id, ...req.body }, actor.username) };
+    return { jobId: s.nodes.createJob({ nodeId: req.params.id, kind: req.body.kind, package: req.body.package, instance: req.body.instance, params: req.body.params }, actor.username) };
   });
 
   // ---- configuration -----------------------------------------------------------------------------------

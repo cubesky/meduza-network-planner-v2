@@ -409,7 +409,7 @@ function FeaturesEditor(props: {
               onChange={props.onChange}
               runtime={binaryProvider ? runtime.map((row) => row.id.startsWith(`${short}/`) ? {
                 ...row,
-                packageVersion: row.packageVersion ?? p?.installedVersion,
+                packageVersion: p?.installedVersion ?? row.packageVersion,
                 upstreamVersion: row.upstreamVersion ?? row.version,
               } : row) : runtime}
               secrets={props.secrets}

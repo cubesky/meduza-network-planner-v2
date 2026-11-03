@@ -104,6 +104,7 @@ fn main() {
         poll: Duration::from_secs(2),
     };
     match cmd {
+        "activate-updater" => engine.activate_updater().unwrap_or_else(|e| fail(e)),
         "check" => match engine.check() {
             Ok(g) => print(
                 &json!({"groupVersion": g.manifest.group_version, "sequence": g.manifest.sequence, "expiresAt": g.manifest.expires_at, "signedBy": g.signed_by}),

@@ -6,4 +6,5 @@ pub mod fsutil;
 pub mod jitter;
 pub mod journal;
 pub mod paths;
+pub mod resources;
 pub mod update;

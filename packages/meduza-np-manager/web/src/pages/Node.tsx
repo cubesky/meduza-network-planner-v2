@@ -8,7 +8,9 @@ import { errorText, get, post } from "../api.ts";
 import { isError, problemsFor, useConfig } from "../store.ts";
 import { revisionBadge, syncCell, type NodeSummary } from "./Overview.tsx";
 import { NodeSettings } from "./NodeSettings.tsx";
-import { PackageProgress } from "@meduza-np/ui-kit/package-progress";
+import { BinaryProgress, type BinaryTransferProgress } from "@meduza-np/ui-kit/package-progress";
+import { NodeUpdates } from "./NodeUpdates.tsx";
+import { PackageResourceCard } from "@meduza-np/ui-kit/package-resources";
 
 type Role = "admin" | "operator" | "viewer";
 
@@ -79,7 +81,12 @@ export function NodePage(props: { id: string; tab?: string; role: Role }) {
                 ].filter(Boolean).join(" · ")}
                 actions={canAct && <Button onClick={() => void job("sync-now", {}, t("Sync requested"))}>{t("Sync now")}</Button>}
               />
-              <PackageProgress progress={n.update ?? n.report?.update} reportedAt={n.report?.observedAt} />
+              <NodeUpdates key={n.id} node={n} canAct={canAct} reload={state.reload} />
+              {instances.filter((i) => i.kind === "mihomo-provider" && (i.mode === "auto-download" || i.downloadProgress)).map((i) => <BinaryProgress
+                name="Mihomo" progress={i.downloadProgress as BinaryTransferProgress | null | undefined}
+                providerState={i.providerState as string | undefined} reason={i.reason}
+                configurationError={n.sync?.state === "apply-failed" ? n.lastError ?? n.report?.sync?.lastError : undefined}
+              />)}
               <Tabs
                 tabs={[
                   { id: "status", label: t("Status") },
@@ -121,6 +128,7 @@ function StatusTab(props: { n: NodeDetail; services: Inst[]; canAct: boolean; re
         </div>
       </div>
       {n.failedRevision && n.failedRevision === n.desiredRevision && n.lastError && <div class="callout bad"><strong>{t("Last apply failed")}</strong> — {n.lastError}</div>}
+      {n.report?.sync?.recoveryError && <div class="callout warn"><strong>{t("Last-good recovery degraded")}</strong> — {String(n.report.sync.recoveryError)}</div>}
       {n.maintenance && <div class="callout warn">{t("Maintenance: {reason} until {until}", { reason: n.maintenance.reason, until: n.maintenance.until })}</div>}
       {!n.report && <div class="callout info">{t("The node has not reported yet")}</div>}
       {features.length > 0 && (
@@ -188,6 +196,7 @@ function StatusTab(props: { n: NodeDetail; services: Inst[]; canAct: boolean; re
           ]}
         />
       </Card>
+      <PackageResourceCard packages={n.report?.resources?.packages} reportedAt={n.report?.observedAt} />
     </>
   );
 }

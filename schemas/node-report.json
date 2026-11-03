@@ -186,6 +186,65 @@
       ],
       "type": "string"
     },
+    "PackageResources": {
+      "properties": {
+        "dataBytes": {
+          "description": "Separately measured persistent service/provider data; not included in diskBytes.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "diskBytes": {
+          "description": "Filesystem allocated bytes for package files, including retained store versions (not download archives).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "diskObservedAt": {
+          "type": "string"
+        },
+        "memoryObservedAt": {
+          "type": "string"
+        },
+        "memoryRssBytes": {
+          "description": "Unknown if any running process could not be measured. RSS may include shared pages.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "package": {
+          "type": "string"
+        },
+        "processes": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ProcessResources"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "package",
+        "diskObservedAt",
+        "memoryObservedAt"
+      ],
+      "type": "object"
+    },
     "PackageRole": {
       "oneOf": [
         {
@@ -262,6 +321,42 @@
       ],
       "type": "object"
     },
+    "ProcessResources": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "instance": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "memoryRssBytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "pid": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "scope": {
+          "description": "PID namespace in which this PID was measured (e.g. planner or updater).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "pid",
+        "scope"
+      ],
+      "type": "object"
+    },
     "RegistrationState": {
       "enum": [
         "registered",
@@ -297,6 +392,13 @@
             "integer",
             "null"
           ]
+        },
+        "packages": {
+          "description": "Measured package footprints. Absent on older nodes; unknown measurements are omitted, never zero-filled.",
+          "items": {
+            "$ref": "#/$defs/PackageResources"
+          },
+          "type": "array"
         },
         "plannerRssKib": {
           "format": "uint64",
@@ -474,6 +576,13 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "recoveryError": {
+          "description": "Failure while restoring the last successful revision, separate from the desired revision's apply error.",
+          "type": [
+            "string",
+            "null"
           ]
         },
         "state": {

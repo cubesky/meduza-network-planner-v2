@@ -71,7 +71,9 @@ pub async fn dispatch(p: &Arc<Planner>, req: LocalRequest, authorized: bool) -> 
         }
         "packages" => {
             let reg = p.registry();
-            ok(json!({"packages": crate::reporter::packages(p), "providers": reg.providers, "providerErrors": reg.provider_errors}))
+            let packages = crate::reporter::packages(p);
+            let resources = crate::resources::collect(p, &packages);
+            ok(json!({"packages": packages, "resources": resources, "providers": reg.providers, "providerErrors": reg.provider_errors}))
         }
         "instances" => {
             let applied = crate::state::AppliedState::load(&p.paths).unwrap_or_default();
@@ -238,6 +240,10 @@ pub async fn dispatch(p: &Arc<Planner>, req: LocalRequest, authorized: bool) -> 
                 Err(e) => LocalResponse::err(id, "unavailable", e.to_string()),
             }
         }
+        "updater.activate" => match crate::updater::activate(&p.paths).await {
+            Ok(()) => ok(json!({"activated": true})),
+            Err(e) => LocalResponse::err(id, "update-failed", e),
+        },
         "planner.restart" => {
             // Used by the updater after switching binaries. The service manager that started planner restarts
             // it (procd respawn, systemd Restart=on-failure, Podman restart policy); exit code 75 = EX_TEMPFAIL.

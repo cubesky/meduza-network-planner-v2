@@ -12,6 +12,7 @@
 //! verification and the last error; planner's registry reads it (§3.3.3).
 
 use std::io::Read;
+pub mod progress;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -352,6 +353,9 @@ pub fn check_local(d: &Dirs, cfg: &BinarySourceConfig, trusted: Option<&str>) ->
 
 /// Downloads, verifies and activates the pinned asset (auto mode). Never overwrites a user-provided file.
 pub fn download(d: &Dirs, cfg: &BinarySourceConfig, assets: &AssetManifest) -> Result<ProviderState, String> {
+    if cfg.mode != Mode::AutoDownload {
+        return Err("manual mode never downloads".into());
+    }
     let platform = host_platform().ok_or("unsupported host platform")?;
     let tag = cfg.target_version.clone().ok_or("no target version")?;
     let asset = assets
@@ -374,21 +378,47 @@ pub fn download(d: &Dirs, cfg: &BinarySourceConfig, assets: &AssetManifest) -> R
     }
     std::fs::create_dir_all(d.staging()).map_err(|e| e.to_string())?;
     let gz = d.staging().join(&asset.name);
+    let transfer = progress::Transfer::start(d, &gz, &tag, platform, asset.size)?;
+    let result = download_asset(d, cfg, asset, platform, &tag, &gz, &transfer).and_then(|st| {
+        save_state(d, &st)?;
+        Ok(st)
+    });
+    if let Err(e) = transfer.finish(result.as_ref().err().map(String::as_str)) {
+        eprintln!("cannot record final binary progress: {e}");
+    }
+    result
+}
+
+fn download_asset(
+    d: &Dirs,
+    cfg: &BinarySourceConfig,
+    asset: &Asset,
+    platform: &str,
+    tag: &str,
+    gz: &Path,
+    transfer: &progress::Transfer,
+) -> Result<ProviderState, String> {
     let opts = meduza_np_plugin_sdk::fetch::FetchOptions {
         timeout_seconds: 300,
         max_bytes: asset.size.clamp(1, MAX_DOWNLOAD),
         proxy: cfg.download_proxy.as_deref(),
         header: None,
     };
-    meduza_np_plugin_sdk::fetch::fetch_to_file(&asset.url, &gz, &opts)?;
-    let got = sha256_file(&gz)?;
+    meduza_np_plugin_sdk::fetch::fetch_to_file(&asset.url, gz, &opts)?;
+    transfer.stage("verifying")?;
+    let size = std::fs::metadata(gz).map_err(|e| e.to_string())?.len();
+    if size != asset.size {
+        return Err(format!("download size mismatch for {} (got {size}, expected {})", asset.name, asset.size));
+    }
+    let got = sha256_file(gz)?;
     if got != asset.sha256 {
-        let _ = std::fs::remove_file(&gz);
+        let _ = std::fs::remove_file(gz);
         return Err(format!("digest mismatch for {} (got {got}, expected {})", asset.name, asset.sha256));
     }
     let candidate = d.staging().join("mihomo.new");
+    transfer.stage("decompressing")?;
     {
-        let input = std::fs::File::open(&gz).map_err(|e| e.to_string())?;
+        let input = std::fs::File::open(gz).map_err(|e| e.to_string())?;
         let mut dec = flate2::read::GzDecoder::new(input).take(MAX_BINARY + 1);
         let mut out = std::fs::File::create(&candidate).map_err(|e| e.to_string())?;
         let n = std::io::copy(&mut dec, &mut out).map_err(|e| format!("decompress: {e}"))?;
@@ -397,12 +427,13 @@ pub fn download(d: &Dirs, cfg: &BinarySourceConfig, assets: &AssetManifest) -> R
             return Err("decompressed binary too large".into());
         }
     }
-    let _ = std::fs::remove_file(&gz);
+    let _ = std::fs::remove_file(gz);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&candidate, std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
     }
+    transfer.stage("validating")?;
     let (version, digest) = inspect(&candidate, platform).inspect_err(|_| {
         let _ = std::fs::remove_file(&candidate);
     })?;
@@ -411,6 +442,7 @@ pub fn download(d: &Dirs, cfg: &BinarySourceConfig, assets: &AssetManifest) -> R
         return Err(format!("binary reports {version}, expected {tag}"));
     }
     // Keep exactly one previous copy, then atomically replace (never write into the running binary).
+    transfer.stage("activating")?;
     if d.binary().exists() {
         std::fs::create_dir_all(d.previous()).map_err(|e| e.to_string())?;
         let _ = std::fs::rename(d.binary(), d.previous().join("mihomo"));
@@ -428,6 +460,89 @@ pub fn download(d: &Dirs, cfg: &BinarySourceConfig, assets: &AssetManifest) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn real_http_transfer_reports_bytes_and_preserves_previous_binary_on_validation_failure() {
+        use std::io::Write;
+        use std::net::TcpListener;
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&std::fs::read("/bin/true").unwrap()).unwrap();
+        let payload = encoder.finish().unwrap();
+        let size = payload.len() as u64;
+        let sha256 = hex::encode(Sha256::digest(&payload));
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}/asset.gz", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline => {
+                        std::thread::sleep(Duration::from_millis(10))
+                    }
+                    other => panic!("HTTP fixture did not receive a connection: {other:?}"),
+                }
+            };
+            stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            stream.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
+            let _ = stream.read(&mut [0u8; 4096]).unwrap();
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {size}\r\nConnection: close\r\n\r\n").unwrap();
+            for part in payload.chunks(payload.len().div_ceil(8)) {
+                stream.write_all(part).unwrap();
+                stream.flush().unwrap();
+                std::thread::sleep(Duration::from_millis(350));
+            }
+        });
+        let root = std::env::temp_dir().join(format!("mnp-binary-http-{}", std::process::id()));
+        let cfg = BinarySourceConfig {
+            mode: Mode::AutoDownload,
+            target_version: Some("v0.0.0-fixture".into()),
+            data_dir: None,
+            download_proxy: None,
+        };
+        let d = Dirs::new(root.to_str().unwrap(), &cfg);
+        std::fs::create_dir_all(&d.data_dir).unwrap();
+        std::fs::write(d.binary(), b"previous binary").unwrap();
+        save_state(
+            &d,
+            &ProviderState {
+                state: "registered".into(),
+                version: Some("v0.0.0-previous".into()),
+                installed_by: Some("meduza-np-mihomo-pkg".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let assets = AssetManifest {
+            format_version: 1,
+            upstream: url.clone(),
+            versions: vec![VersionAssets {
+                tag: cfg.target_version.clone().unwrap(),
+                assets: vec![Asset { platform: host_platform().unwrap().into(), name: "asset.gz".into(), url, sha256, size }],
+            }],
+        };
+        let (root2, cfg2) = (root.clone(), cfg.clone());
+        let task = std::thread::spawn(move || download(&Dirs::new(root2.to_str().unwrap(), &cfg2), &cfg2, &assets));
+        let mut partial = false;
+        while !task.is_finished() {
+            if let Some(p) = progress::load(&d) {
+                partial |= p.active && p.downloaded_bytes > 0 && p.downloaded_bytes < p.bytes_total;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(task.join().unwrap().is_err(), "the fixture is a real ELF but not Mihomo; version validation must reject it");
+        server.join().unwrap();
+        let p = progress::load(&d).unwrap();
+        assert!(partial, "the real transfer must report intermediate bytes, not only 0% and 100%");
+        assert_eq!(p.phase, "failed");
+        assert_eq!(p.downloaded_bytes, size);
+        assert!(p.error.is_some());
+        assert_eq!(std::fs::read(d.binary()).unwrap(), b"previous binary");
+        assert_eq!(load_state(&d).unwrap().version.as_deref(), Some("v0.0.0-previous"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn elf_checks() {
@@ -472,6 +587,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         let cfg = BinarySourceConfig { mode: Mode::Manual, target_version: None, data_dir: None, download_proxy: None };
         let d = Dirs::new(&root.to_string_lossy(), &cfg);
+        let manual_with_version = BinarySourceConfig { target_version: Some("v1.0.0".into()), ..cfg.clone() };
+        assert!(download(&d, &manual_with_version, &AssetManifest::default()).unwrap_err().contains("manual mode never downloads"));
+        assert!(!d.staging().exists());
         let st = check_local(&d, &cfg, None);
         assert_eq!(st.state, "waiting-binary");
         std::fs::create_dir_all(&d.data_dir).unwrap();

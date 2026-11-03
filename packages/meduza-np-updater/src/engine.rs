@@ -9,7 +9,8 @@
 //!
 //! Every phase is written to `journal.json` before it starts, so an interrupted run is completed or rolled back
 //! by [`Engine::recover`] on the next start. The updater never replaces itself in place: its own new version is
-//! activated last and taken over by its service manager after it exits with code 75.
+//! activated first by planner's short-lived helper and taken over by its service manager after exit 75. The new
+//! updater resumes the staged transaction immediately, then upgrades planner and the remaining packages.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -79,6 +80,9 @@ pub struct Journal {
     pub previous_installed: Option<InstalledSet>,
     #[serde(default)]
     pub new_installed: Option<InstalledSet>,
+    /// Intermediate generation: only updater changes. Absent in journals written by older releases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handoff: Option<crate::handoff::Handoff>,
     /// Packages whose bits change (install/upgrade/downgrade/reinstall/remove).
     #[serde(default)]
     pub changed: Vec<String>,
@@ -450,6 +454,7 @@ impl<'a> Engine<'a> {
             }
             return Ok(Outcome::NoChange);
         }
+        let self_update = plan.action("meduza-np-updater").is_some_and(|a| a.changes() && !a.from_image);
         let now = now_text((self.now)());
         let changed: Vec<String> = plan.actions.iter().filter(|a| a.changes()).map(|a| a.package.clone()).collect();
         let mut j = Journal {
@@ -462,6 +467,7 @@ impl<'a> Engine<'a> {
             new_view: None,
             previous_installed: Some(previous.clone()),
             new_installed: None,
+            handoff: None,
             changed: changed.clone(),
             planner_restart: needs_planner_restart(
                 &changed,
@@ -490,7 +496,7 @@ impl<'a> Engine<'a> {
         // 2. stage
         let mut next = InstalledSet {
             format_version: 1,
-            generation: previous.generation + 1,
+            generation: previous.generation + if self_update { 2 } else { 1 },
             group_version: Some(group.manifest.group_version.clone()),
             group_sequence: Some(group.manifest.sequence),
             channel: if self.cfg.group_version.is_some() { None } else { Some(self.cfg.channel.clone()) },
@@ -563,10 +569,85 @@ impl<'a> Engine<'a> {
         j.new_installed = Some(next.clone());
         self.save_journal(&mut j, Phase::Staged)?;
 
+        if self_update {
+            let result = self.start_handoff(&mut j, plan);
+            if let Err(e) = &result {
+                if j.phase == Phase::Staged {
+                    self.finish_journal(&mut j, Phase::Failed, Some(e.clone()));
+                }
+            }
+            return result;
+        }
+
+        self.activate_packages(&mut j, plan, &files, next)
+    }
+
+    fn start_handoff(&self, j: &mut Journal, plan: &Plan) -> Result<Outcome, String> {
+        let store = self.store();
+        let mut installed = j.previous_installed.clone().ok_or("missing previous installed set")?;
+        installed.generation += 1;
+        installed.packages.insert(
+            "meduza-np-updater".into(),
+            j.new_installed.as_ref().and_then(|s| s.packages.get("meduza-np-updater")).cloned().ok_or("missing new updater")?,
+        );
+        let view = if self.cfg.backend == Backend::Store {
+            let objects = installed.packages.iter().filter_map(|(n, p)| p.object.clone().map(|o| (n.clone(), o))).collect();
+            Some(store.build_view(installed.generation, &objects)?)
+        } else {
+            None
+        };
+        j.handoff = Some(crate::handoff::Handoff { installed, view, plan: plan.clone() });
+        // Persist BEFORE activation. Power loss on either side of the switch can be recovered by either updater.
+        self.save_journal(j, Phase::SelfRestart)?;
+        let result = if planner::boot_id(self.planner).is_some() {
+            match self.planner.call("updater.activate", Value::Null) {
+                Ok(v) if v["activated"] == true => Ok(()),
+                Ok(_) => Err("planner did not confirm updater activation".into()),
+                // Rolling compatibility: the last release's planner cannot implement this new method yet.
+                Err(e) if e.starts_with("not-found:") => {
+                    eprintln!("previous planner has no updater.activate; using the independent takeover helper");
+                    self.activate_updater()
+                }
+                Err(e) => Err(e),
+            }
+        } else {
+            // Bootstrap / broken planner must never prevent updater from repairing the node.
+            self.activate_updater()
+        };
+        if let Err(e) = result {
+            j.error = Some(e.clone());
+            return self.rollback(j, &[], e);
+        }
+        let h = j.handoff.as_ref().expect("handoff was staged");
+        let recorded = match store.load_installed() {
+            Ok(s) => s,
+            Err(e) => return self.rollback(j, &[], e),
+        };
+        if recorded.as_ref() != Some(&h.installed) || (self.cfg.backend == Backend::Store && store.current_view() != h.view) {
+            return self.rollback(j, &[], "planner did not activate the expected updater generation".into());
+        }
+        Ok(Outcome::AppliedRestartSelf)
+    }
+
+    /// Called only by planner's bounded activation helper (or bootstrap/old-planner compatibility path).
+    pub fn activate_updater(&self) -> Result<(), String> {
+        crate::handoff::activate(&self.store(), self.cfg.backend, self.runner, &self.cfg.paths.run)
+    }
+
+    fn activate_packages(
+        &self,
+        j: &mut Journal,
+        plan: &Plan,
+        files: &BTreeMap<String, PathBuf>,
+        mut next: InstalledSet,
+    ) -> Result<Outcome, String> {
+        let store = self.store();
+        let previous = j.previous_installed.clone().ok_or("missing previous installed set")?;
+
         // 3. maintenance lock + drain (only when planner runs)
         j.planner_boot_id = planner::boot_id(self.planner);
         j.planner_was_up = j.planner_boot_id.is_some();
-        let affected = self.affected_instances(&changed);
+        let affected = self.affected_instances(&j.changed);
         if j.planner_was_up {
             match self.planner.call("maintenance.lock", planner::lock_params(&format!("update to {}", plan.group_version))) {
                 Ok(_) => j.locked = true,
@@ -576,59 +657,28 @@ impl<'a> Engine<'a> {
                 let _ = self.planner.call("drain", json!({"instances": affected}));
             }
         }
-        self.save_journal(&mut j, Phase::Locked)?;
+        self.save_journal(j, Phase::Locked)?;
 
         // 4. switch / install
         let switched = match self.cfg.backend {
             Backend::Store => store.switch(j.new_view.as_deref().unwrap_or_default()).map(|_| ()).and_then(|_| store.save_installed(&next)),
-            _ => self.opkg_apply(plan, &files, &previous, &mut next),
+            _ => self.opkg_apply(plan, files, &previous, &mut next),
         };
         if let Err(e) = switched {
             j.error = Some(e.clone());
-            return self.rollback(&mut j, &affected, e);
+            return self.rollback(j, &affected, e);
         }
-        self.save_journal(&mut j, Phase::Switched)?;
+        self.save_journal(j, Phase::Switched)?;
 
         // 5. restart via owners + verify
-        self.save_journal(&mut j, Phase::Verifying)?;
-        if let Err(e) = self.restart_and_verify(&j, &next, &affected) {
+        self.save_journal(j, Phase::Verifying)?;
+        if let Err(e) = self.restart_and_verify(j, &next, &affected) {
             j.error = Some(e.clone());
-            return self.rollback(&mut j, &affected, e);
+            return self.rollback(j, &affected, e);
         }
-        self.unlock(&mut j);
-        let self_update = plan.action("meduza-np-updater").map(|a| a.changes() && !a.from_image).unwrap_or(false);
-        let native_self_install = self_update && self.cfg.backend != Backend::Store;
-        if !native_self_install {
-            self.gc(&j);
-        }
-        if self_update {
-            self.save_journal(&mut j, Phase::SelfRestart)?;
-            if native_self_install {
-                // Installed last, from staging (so the staging GC waits until after it). Our package scripts leave the
-                // restart to us while the marker exists; exit 75 then makes the launcher start the new binary.
-                if let Some(f) = files.get("meduza-np-updater") {
-                    let marker = openwrt::InstallMarker::hold(&self.cfg.paths.run);
-                    let (prog, args) = openwrt::install_args(self.cfg.backend, f);
-                    if let Err(e) = self.runner.run(prog, &args) {
-                        drop(marker);
-                        self.gc(&j);
-                        j.error = Some(e.clone());
-                        self.finish_journal(
-                            &mut j,
-                            Phase::Failed,
-                            Some(format!("updater self-install failed (previous updater kept): {e}")),
-                        );
-                        return Err(e);
-                    }
-                    if let Some(v) = plan.action("meduza-np-updater").and_then(|a| a.to.clone()) {
-                        let _ = std::fs::copy(f, openwrt::Cache::new(&self.store().root, self.cfg.backend).file("meduza-np-updater", &v));
-                    }
-                }
-                self.gc(&j);
-            }
-            return Ok(Outcome::AppliedRestartSelf);
-        }
-        self.finish_journal(&mut j, Phase::Done, None);
+        self.unlock(j);
+        self.gc(j);
+        self.finish_journal(j, Phase::Done, None);
         Ok(Outcome::Applied)
     }
 
@@ -640,7 +690,7 @@ impl<'a> Engine<'a> {
         out
     }
 
-    /// Installs changed packages with opkg/apk in plan order (updater excluded: installed last by `apply`).
+    /// Installs changed packages with opkg/apk in plan order (updater was already taken over).
     fn opkg_apply(
         &self,
         plan: &Plan,
@@ -677,7 +727,7 @@ impl<'a> Engine<'a> {
             store.save_installed(&partial)?;
         }
         if let Some(u) = previous.packages.get("meduza-np-updater") {
-            // until the self-install at the very end the old updater stays recorded
+            // The updater already running must stay recorded throughout the remaining native installation.
             next.packages.insert("meduza-np-updater".into(), u.clone());
         }
         store.save_installed(next)?;
@@ -797,7 +847,14 @@ impl<'a> Engine<'a> {
         let cache = openwrt::Cache::new(&self.store().root, self.cfg.backend);
         let _marker = openwrt::InstallMarker::hold(&self.cfg.paths.run);
         let mut problems = vec![];
-        for name in j.changed.iter().rev().filter(|p| *p != "meduza-np-updater") {
+        for name in j.changed.iter().rev().filter(|p| {
+            // Before takeover no other package was touched; reinstalling planner here would violate that boundary.
+            if j.handoff.is_some() {
+                *p == "meduza-np-updater"
+            } else {
+                *p != "meduza-np-updater"
+            }
+        }) {
             match prev.packages.get(name) {
                 Some(p) => match cache.find(name, &p.version) {
                     Some(f) => {
@@ -879,6 +936,9 @@ impl<'a> Engine<'a> {
                 }
             }
             Phase::SelfRestart => {
+                if running_new_updater && j.handoff.is_some() {
+                    return Some(self.resume_after_handoff(&mut j));
+                }
                 if running_new_updater {
                     if self.cfg.backend != Backend::Store {
                         // opkg/apk: the self-install ran after the installed set was saved and after planner's rescan
@@ -911,6 +971,31 @@ impl<'a> Engine<'a> {
             }
         };
         Some(msg)
+    }
+
+    fn resume_after_handoff(&self, j: &mut Journal) -> String {
+        let h = j.handoff.take().expect("handoff checked by caller");
+        // The verified new updater is now the recovery baseline. A failed planner upgrade must retain it.
+        j.previous_installed = Some(h.installed);
+        j.previous_view = h.view;
+        j.changed.retain(|p| p != "meduza-np-updater");
+        let result = (|| {
+            self.save_journal(j, Phase::Staged)?;
+            let next = j.new_installed.clone().ok_or("handoff has no staged target")?;
+            let files =
+                if self.cfg.backend == Backend::Store { BTreeMap::new() } else { crate::handoff::staged_files(&self.store(), &h.plan)? };
+            self.activate_packages(j, &h.plan, &files, next)
+        })();
+        match result {
+            Ok(Outcome::Applied) => format!("update to {} complete: new updater upgraded planner and packages", j.group_version),
+            Ok(Outcome::RolledBack(e)) => format!("update to {} rolled back after updater takeover: {e}", j.group_version),
+            Err(e) if self.load_journal().is_none() => e,
+            Err(e) => match self.rollback(j, &self.affected_instances(&j.changed), e) {
+                Ok(_) => format!("update to {} rolled back after updater takeover", j.group_version),
+                Err(e) => e,
+            },
+            Ok(other) => format!("unexpected handoff outcome: {other:?}"),
+        }
     }
 
     /// One scheduled pass: check, plan and (when allowed) apply.

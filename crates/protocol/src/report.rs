@@ -96,6 +96,9 @@ pub struct SyncStatus {
     pub apply_stage: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
+    /// Failure while restoring the last successful revision, separate from the desired revision's apply error.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_error: Option<String>,
     #[serde(default)]
     pub backoff: BackoffStatus,
 }
@@ -193,6 +196,9 @@ pub struct InstanceStatus {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ResourceSummary {
+    /// Measured package footprints. Absent on older nodes; unknown measurements are omitted, never zero-filled.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub packages: Vec<PackageResources>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub planner_rss_kib: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -205,6 +211,40 @@ pub struct ResourceSummary {
     pub load1_milli: Option<u64>,
     #[serde(default)]
     pub supervised_processes: u32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageResources {
+    pub package: String,
+    /// Filesystem allocated bytes for package files, including retained store versions (not download archives).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disk_bytes: Option<u64>,
+    /// Separately measured persistent service/provider data; not included in diskBytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_bytes: Option<u64>,
+    /// Unknown if any running process could not be measured. RSS may include shared pages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_rss_bytes: Option<u64>,
+    pub disk_observed_at: String,
+    pub memory_observed_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub processes: Vec<ProcessResources>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ProcessResources {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance: Option<String>,
+    pub pid: u32,
+    /// PID namespace in which this PID was measured (e.g. planner or updater).
+    pub scope: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_rss_bytes: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

@@ -692,6 +692,8 @@ test("DNS loops on a node are refused before publishing (front end, backends, up
   }), []);
   assert.deepEqual(problems((v) => (v.mihomo.dns.enabled = false, v.mihomo.dns.nameservers = ["10.62.0.12"])), [], "Mihomo DNS off");
   // a wildcard front end is reached over loopback too
+  assert.deepEqual(problems((v) => { v.dnsmasq.listenAddresses = []; v.mosdns.localUpstreams = ["udp://127.0.0.1:53"]; }), [at("mosdns/localUpstreams/0")], "empty listeners mean all local interfaces");
+  assert.deepEqual(problems((v) => { delete v.dnsmasq.listenAddresses; v.mosdns.localUpstreams = ["udp://127.0.0.1:53"]; }), [at("mosdns/localUpstreams/0")], "omitted listeners also mean all local interfaces");
   assert.deepEqual(
     problems((v) => ((v.dnsmasq.listenAddresses = ["0.0.0.0"]), (v.mosdns.localUpstreams = ["udp://127.0.0.1:53"]))),
     [at("mosdns/localUpstreams/0")],

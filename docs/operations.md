@@ -147,17 +147,48 @@ new adapter arrives; FRR still needs `SYS_ADMIN` in the planner container (fixed
   place**; a replaced directory is not visible to an already running updater container until it restarts.
 * Controls: `meduza-np update status|check|plan|apply|pause|resume`, `MEDUZA_NP_UPDATE_AUTO=0`,
   `MEDUZA_NP_UPDATE_WINDOW=02:00-05:00` (UTC), `MEDUZA_NP_GROUP_VERSION=vX` to pin a group.
+* In Manager, open a node's **Packages and updates** card and use **Check for updates** or **Upgrade now**.
+  Admin/operator sessions may submit requests; viewers see progress and request results. Check refreshes
+  available versions without installing, even if automatic updates are enabled. Upgrade now uses that node's
+  configured signed source/channel or pinned group, bypasses pause/window for this execution and allows a
+  previously failed group to be retried; it does not change automatic-update settings. Requests expire after
+  ten minutes if not received. Fixed nodes get the existing job notification; roaming nodes receive it on sync.
+  Pending/delivered/accepted/failed/expired request states appear in the card. Accepted means scheduled, not
+  installed: follow the separate node-reported progress for activation, updater takeover, completion or rollback.
+  Remote controls require a new planner reporting `update.remoteControl`; older nodes display a disabled control
+  with an upgrade explanation. Duplicate pending requests reuse the same job; node receipts survive planner
+  replacement to avoid repeating an acknowledged command after report delivery fails.
 * Manager node details show **Packages and updates** above the tabs; node lists and overview have an update
   column. Completed upgrades retain their group, download size/count and completion time. Missing updater
   reports are labelled unavailable rather than disappearing. Download 100% can still mean activation or
   registration checks are running; configuration application and tunnel health are shown separately. Current
   v0.1.5 node reports work with this display; newer nodes additionally report available versions and the last
   upgrade/check result. Dashboard uses the same progress presentation.
+  Configuration failure and recovery failure are distinct: `sync.lastError` retains the desired revision's
+  apply failure, while optional `sync.recoveryError` identifies the historical revision whose restore degraded.
+  Manager shows a separate recovery warning and Dashboard lists both; successful recovery clears the latter.
+* **Mihomo binary download** is a separate card in node details and Dashboard: it shows bytes, checksum/
+  extraction/executable checks, activation, attempts and retry time. Installing `mihomo-pkg` alone does not mean
+  its binary is ready. A failed configuration can stop its supervised preparer; the card labels interruption
+  and shows the configuration error. Fix/apply configuration to start preparation; Download now requests an
+  immediate retry of the applied preparer. Manual mode continues to avoid network acquisition.
+* dnsmasq `listenAddresses` may be omitted or empty to serve all local interfaces. Supply addresses to restrict
+  the listener. The default still detects port conflicts and local resolution loops; no DHCP is enabled.
 * OpenWrt: packages are installed one at a time with the native package manager. That is **not** an atomic switch.
   Packages without a cached previous file cannot be rolled back automatically; the plan says so.
-* Updater self-update: the new updater is activated last and started by its launcher (container entrypoint,
-  `updater-run` under systemd/procd). If it fails three times within a minute, the baseline copy starts and rolls the
-  generation back.
+* The OpenVPN provider builds LZO and LZ4 into its static executable. Compression/framing options such as
+  `lzo-asym` and `lzo-no` work with legacy peers without installing compression libraries on the host or changing
+  the base image. Per-connection policy still controls use: the pinned OpenVPN 2.7 accepts compressed traffic
+  asymmetrically and does not send compressed packets. Replacing an older compression-disabled provider needs
+  a newly released `meduza-np-openvpn-pkg`; rebuilding only the service adapter does not add binary capabilities.
+* Mutual updates: if updater changes, planner first invokes a short-lived helper that activates **only updater**.
+  Its independent launcher (container entrypoint or `updater-run` under systemd/procd) starts the new updater,
+  which immediately resumes the staged transaction and upgrades planner and the remaining packages. No second
+  channel check or download is needed. Until then the installed group remains the previous group and progress
+  says `self-restart`. If takeover fails, planner stays on its original version; if the subsequent planner/package
+  update fails, rollback preserves the successfully started new updater. An unavailable or previous-version
+  planner uses the independent bootstrap/compatibility helper. Unchanged package versions may be reused across
+  group tags: for example v0.1.7 explicitly reuses planner/updater 0.1.6, so that is not a missed upgrade.
 
 Verified on Podman (bridge): bootstrap, re-creation with state kept, a planner-only upgrade with restart, and a
 broken release rolled back (`tools/container-e2e.sh`). Verified in the multi-node lab (`tools/lab/`): fleet upgrades
@@ -315,6 +346,15 @@ without their own version record show **unknown version** in the installed colum
 required for this detection to reach Manager.
 
 ## 7. Checks to run after changes
+
+Manager's node **Status** page and Dashboard's overview/packages show **Package resource usage**. Package disk
+and persistent service/provider data are separate; disk measurements refresh every 60 seconds and include
+retained store versions. Expand each package's process section for OpenVPN instances, FRR daemons, child PIDs
+and RSS. Independent updater/Dashboard containers report their own samples through the shared runtime volume;
+upgrade these components as well as planner and Manager. A sample expires after 30 seconds without refresh.
+**Not measured** means unavailable, never zero. RSS includes shared pages; binary providers are not charged a
+second copy of their service's RSS. Instances share package files. Kernel memory, shared system dependencies,
+download archives and OCI layers are outside this per-package accounting. The base image shows an explanation.
 
 ```sh
 meduza-np status

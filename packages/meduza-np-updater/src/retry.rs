@@ -120,6 +120,7 @@ mod tests {
     fn exhaustion_is_finite_and_permanent_errors_do_not_retry() {
         for message in [
             "curl: (28) timeout",
+            "curl: (28) Operation too slow. Less than 1 bytes/sec transferred the last 30 seconds",
             "curl: (22) The requested URL returned error: 503",
             "curl: (22) The requested URL returned error: 429",
             "wget: server returned error: HTTP/1.1 503 Service Unavailable",

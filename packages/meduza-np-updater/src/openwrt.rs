@@ -1,5 +1,5 @@
 //! OpenWrt backend (§13.3, §14.2): the detected native package manager installs our verified `.ipk`/`.apk` files.
-//! This is *not* an atomic group switch: packages are installed one by one (planner first, updater last) and
+//! This is *not* an atomic group switch: updater is taken over first, then packages are installed one by one and
 //! a failure triggers a best-effort rollback by reinstalling the cached previous files. Every package this updater
 //! installed successfully is kept in `<store>/openwrt/cache/` so it can be reinstalled; packages that were
 //! installed by other means have no cached file, which the plan reports as "rollback unavailable".

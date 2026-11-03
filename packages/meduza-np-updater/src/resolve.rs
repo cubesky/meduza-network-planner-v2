@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use meduza_np_protocol::group::{Artifact, GroupManifest, InstalledSet};
 use meduza_np_protocol::manifest::packages_conflict;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub const FIXED: &[&str] = &["meduza-np-planner", "meduza-np-updater"];
 
@@ -18,7 +18,7 @@ pub enum Selection {
     Explicit(Vec<String>),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ActionKind {
     Install,
@@ -29,7 +29,7 @@ pub enum ActionKind {
     Remove,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Action {
     pub package: String,
@@ -41,7 +41,7 @@ pub struct Action {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifact: Option<Artifact>,
     /// Satisfied by the updater built into the base image (no download).
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub from_image: bool,
 }
 
@@ -54,7 +54,7 @@ impl Action {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Plan {
     pub group_version: String,
@@ -226,7 +226,7 @@ pub fn resolve(i: &ResolveInput<'_>) -> Plan {
             }
         }
     }
-    // planner first, updater last: dependencies before dependents, self-replacement at the very end.
+    // Updater has its own takeover phase; the new updater then installs planner, providers and services.
     actions.sort_by_key(|a| (order_rank(&a.package), a.package.clone()));
     blocked.sort();
     blocked.dedup();
@@ -243,9 +243,9 @@ pub fn resolve(i: &ResolveInput<'_>) -> Plan {
 
 fn order_rank(name: &str) -> u8 {
     match name {
-        "meduza-np-planner" => 0,
-        n if n.ends_with("-pkg") => 1,
-        "meduza-np-updater" => 9,
+        "meduza-np-updater" => 0,
+        "meduza-np-planner" => 1,
+        n if n.ends_with("-pkg") => 2,
         _ => 5,
     }
 }
@@ -384,10 +384,10 @@ pub(crate) mod tests {
         assert_eq!(
             kinds,
             vec![
+                ("meduza-np-updater", ActionKind::Keep, true),
                 ("meduza-np-planner", ActionKind::Keep, false),
                 ("meduza-np-dnsmasq", ActionKind::Install, false),
                 ("meduza-np-wireguard", ActionKind::Remove, false),
-                ("meduza-np-updater", ActionKind::Keep, true),
             ]
         );
     }

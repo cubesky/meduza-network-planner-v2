@@ -28,7 +28,8 @@ pub const SLOT: &str = "dnsmasq.binary";
 pub struct DnsmasqConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
-    /// Addresses clients query (the front end). Never 0.0.0.0 implicitly.
+    /// Addresses clients query. Omitted or empty listens on all local IPv4/IPv6 interfaces.
+    #[serde(default)]
     pub listen_addresses: Vec<IpAddr>,
     #[serde(default = "default_port")]
     pub port: u16,
@@ -306,15 +307,20 @@ pub fn validate(cfg: &DnsmasqConfig, req: &PluginRequest) -> Vec<ValidationError
     if !cfg.enabled {
         return Vec::new();
     }
-    v.check(!cfg.listen_addresses.is_empty(), "/listenAddresses", "at least one listen address");
     v.check(cfg.port != 0, "/port", "ports are 1-65535");
     v.check(!cfg.fallback_servers.is_empty(), "/fallbackServers", "explicit fallback servers are required (no /etc/resolv.conf)");
-    let listeners: BTreeSet<SocketAddr> = cfg.listen_addresses.iter().map(|a| SocketAddr::new(*a, cfg.port)).collect();
+    let listen_addresses = listener_addresses(cfg);
+    let listeners: BTreeSet<SocketAddr> = listen_addresses.iter().map(|a| SocketAddr::new(*a, cfg.port)).collect();
     for (i, s) in cfg.fallback_servers.iter().enumerate() {
         match parse_server(s) {
             None => v.error(format!("/fallbackServers/{i}"), "expected ip or ip#port"),
             // A fallback pointing at ourselves would loop.
-            Some(a) => v.check(!listeners.contains(&a), format!("/fallbackServers/{i}"), "fallback server points at this front end (loop)"),
+            Some(a) => v.check(
+                !listeners.contains(&a)
+                    && !(cfg.listen_addresses.is_empty() && a.port() == cfg.port && (a.ip().is_loopback() || a.ip().is_unspecified())),
+                format!("/fallbackServers/{i}"),
+                "fallback server points at this front end (loop)",
+            ),
         }
     }
     let mut ids = BTreeSet::new();
@@ -347,7 +353,7 @@ pub fn validate(cfg: &DnsmasqConfig, req: &PluginRequest) -> Vec<ValidationError
         v.check(req.has_capability("mdns.bridge"), "/mdnsForward", "requires meduza-np-avahi (mdns.bridge)");
     }
     if cfg!(target_os = "linux") {
-        if let Some(owner) = port_owner(cfg.port, "meduza-np", &cfg.listen_addresses) {
+        if let Some(owner) = port_owner(cfg.port, "meduza-np", &listen_addresses) {
             v.error(
                 "/port",
                 format!("port {} is already used by {owner}; choose another listen address or port or integrate with the existing DNS instead (it is never killed)", cfg.port),
@@ -370,6 +376,16 @@ fn mdns_bridge(req: &PluginRequest) -> Option<SocketAddr> {
 pub struct Rendered {
     pub conf: String,
     pub hosts: String,
+}
+
+/// Wildcards represent dnsmasq's unrestricted default for probes and local conflict checks. In the native
+/// configuration that default is expressed by omitting listen-address, not by binding a literal wildcard IP.
+pub fn listener_addresses(cfg: &DnsmasqConfig) -> Vec<IpAddr> {
+    if cfg.listen_addresses.is_empty() {
+        vec![Ipv4Addr::UNSPECIFIED.into(), Ipv6Addr::UNSPECIFIED.into()]
+    } else {
+        cfg.listen_addresses.clone()
+    }
 }
 
 pub fn render(cfg: &DnsmasqConfig, req: &PluginRequest) -> Rendered {
@@ -438,7 +454,7 @@ pub fn plan(cfg: &DnsmasqConfig, req: &PluginRequest) -> Result<Vec<GenerationPl
         fallback,
         backends: cfg.backends.iter().filter(|b| b.enabled).cloned().collect(),
         probe_name: cfg.probe_name.clone(),
-        listen: cfg.listen_addresses.iter().map(|a| SocketAddr::new(*a, cfg.port)).collect(),
+        listen: listener_addresses(cfg).iter().map(|a| SocketAddr::new(*a, cfg.port)).collect(),
     };
     let spec_json = serde_json::to_string(&spec).map_err(|e| PluginError::new("internal", e.to_string()))?;
     // Listener/cache/port changes → restart of the front end. Hosts and the wrapper spec (backend set, fallback,
@@ -505,6 +521,24 @@ mod tests {
             meduza_np_plugin_sdk::ResolvedProvider { path: "/usr/sbin/dnsmasq".into(), source: "system".into(), version: None },
         );
         r
+    }
+
+    #[test]
+    fn omitted_and_empty_listeners_open_all_local_interfaces() {
+        for value in [json!({"port":55353}), json!({"listenAddresses":[],"port":55353})] {
+            let request = req(value, &[]);
+            let cfg = load(&request).unwrap().unwrap();
+            assert!(validate(&cfg, &request).is_empty(), "{:?}", validate(&cfg, &request));
+            let rendered = render(&cfg, &request);
+            assert!(!rendered.conf.contains("listen-address="), "native dnsmasq default accepts every local interface");
+            let plan = plan(&cfg, &request).unwrap();
+            let spec: FrontendSpec = serde_json::from_str(&plan[0].files.iter().find(|f| f.path == SPEC_FILE).unwrap().content).unwrap();
+            assert_eq!(spec.listen, vec!["0.0.0.0:55353".parse::<SocketAddr>().unwrap(), "[::]:55353".parse().unwrap()]);
+            assert!(bind_conflicts("127.0.0.53".parse().unwrap(), &listener_addresses(&cfg)));
+        }
+        let request = req(json!({"port":55353,"fallbackServers":["127.0.0.1#55353","::1#55353"]}), &[]);
+        let cfg = load(&request).unwrap().unwrap();
+        assert_eq!(validate(&cfg, &request).iter().filter(|e| e.path.starts_with("/fallbackServers/")).count(), 2);
     }
 
     #[test]

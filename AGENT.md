@@ -347,7 +347,7 @@ SQLite 保存节点、拓扑、配置 revision、发布记录、秘密引用、m
 | 连接与路由 | OpenVPN 客户端/隧道、WireGuard Peer 握手、Tinc Peer、BGP/BFD/Anycast OSPF 邻居状态 |
 | 密钥与 PKI | 生成/导入/派生/安全导出、证书有效期、CSR/签发、撤销/CRL、WireGuard PSK、Tinc 公钥 |
 | DNS 与代理 | 后端就绪、fallback 状态、规则下载进度/失败、订阅刷新、TPROXY 安装/排除范围 |
-| 升级 | 包组、单包版本、架构、复用来源、预检、维护窗口、当前步骤、失败/回滚结果 |
+| 升级 | 包组、单包版本、架构、复用来源、预检、维护窗口、当前步骤、失败/回滚结果；节点详情支持检查更新、立即升级及请求投递/接受/失败状态；operator/admin 可执行，viewer 只读 |
 | 身份与权限 | manager Passkey 登记/命名/撤销、账号与角色；Access 的 OpenLDAP 连接、搜索/组映射测试与授权策略 |
 | 诊断 | 有界日志、依赖/端口/内核检查、配置生成错误、脱敏支持导出 |
 
@@ -578,7 +578,7 @@ manager 应配套限制全局握手/订阅/短请求并发和逐节点速率，�
 | 类别 | 配置字段/能力 |
 | --- | --- |
 | 身份与运行 | id、name、enabled、device、tun/tap、client/server、proto、local、port、多个 remote |
-| 链路 | ifconfig、keepalive、persist-key/tun、MTU/MSS、verb、受控压缩选项 |
+| 链路 | ifconfig、keepalive、persist-key/tun、MTU/MSS、verb、受控压缩选项；openvpn-pkg 本体静态包含 LZO/LZ4，支持旧对端压缩兼容及现有 lzo-asym 配置 |
 | 加密 | auth、cipher、data-ciphers、CA/cert/key、DH/CRL、secret、tls-auth/tls-crypt、key-direction |
 | TLS | client/server 校验策略、remote-cert-tls、证书用途和有效期 |
 | 路由 | pull 与 route-nopull、明确的允许推送策略，不让 VPN 暗中接管系统默认路由 |
@@ -719,7 +719,7 @@ Mihomo DNS 支持接到已安装并启用的 `meduza-np-dnsmasq` 前置之后：
 
 dnsmasq 同时是 MosDNS 和 Mihomo 所提供 DNS 的可选前置，不局限于 MosDNS。沿用先提供基础 DNS、再接入就绪后端的流程：在后端尚未启动、订阅/规则下载、重启和故障恢复期间，通过显式配置的 fallback 上游继续提供解析。该包独立安装、独立开关，依赖系统 dnsmasq，不启用 DHCP，不接管现有系统实例；未安装/未启用时，不因启用 MosDNS 或 Mihomo 自动安装或启动它。
 
-配置至少有监听地址/端口、显式 fallback DNS、hosts、本地 TTL、所选后端及其优先级/fallback 策略。只引用已安装且支持 DNS 的后端；允许 dnsmasq 单独使用 fallback、仅前置 MosDNS、仅前置 Mihomo DNS，或同时前置两者，不为组合强制安装另一后端。
+配置至少有监听地址/端口、显式 fallback DNS、hosts、本地 TTL、所选后端及其优先级/fallback 策略。监听地址省略或为空时默认开放所有本地 IPv4/IPv6 接口；填写具体地址时按列表收窄，空列表不能导致整组配置失败。只引用已安装且支持 DNS 的后端；允许 dnsmasq 单独使用 fallback、仅前置 MosDNS、仅前置 Mihomo DNS，或同时前置两者，不为组合强制安装另一后端。
 
 同时启用前置与后端时，planner 先启动 dnsmasq 并进行有界的 fallback 查询验证，再安排后端启动和订阅/规则下载，不让基础 DNS 等待后端就绪。fallback 验证失败时报告降级，仍允许可独立启动的后端尝试恢复解析，不无限等待或阻塞其他模块。MosDNS/Mihomo DNS 必须分别通过实际查询探测才加入上游；单个后端故障/禁用时立即移除它，保留其他健康后端；没有健康后端时恢复 fallback，不随任一后端停止而停止 dnsmasq。后端恢复后经探测重新接入。界面分别显示前端状态、当前上游、fallback 使用状态和各后端就绪/失败原因。
 
@@ -941,8 +941,8 @@ OpenWrt 上 planner 与 updater 分别由 procd 启动；VPN 实例只能有一�
 
 | 功能 | 必须显示 |
 | --- | --- |
-| 同步 | 固定/漫游声明、push/poll 模式、WebSocket/HTTP2/HTTPS 通道、连接/降级原因、事件游标、revision/应用阶段、退避级别/窗口/下次重试、服务端冷却与恢复状态 |
-| 包/provider | 安装和注册版本、实际软件版本/路径/摘要、可执行来源、能力、依赖/冲突；Mihomo 额外区分 GitHub 下载/手工文件模式与准备状态 |
+| 同步 | 固定/漫游声明、push/poll 模式、WebSocket/HTTP2/HTTPS 通道、连接/降级原因、事件游标、revision/应用阶段、退避级别/窗口/下次重试、服务端冷却与恢复状态；当前目标应用错误与历史成功配置恢复错误分别上报并标明对应 revision，后者不能覆盖前者 |
+| 包/provider | 安装和注册版本、实际软件版本/路径/摘要、可执行来源、能力、依赖/冲突；各包文件与持久数据磁盘占用、进程 RSS；OpenVPN 等外部程序按实例细分内存并纳入子进程；Mihomo 额外区分 GitHub 下载/手工文件模式与准备状态 |
 | OpenVPN | 进程/设备/会话分层；Site2Site 对端；Access 在线客户端、流量、鉴权失败摘要 |
 | WireGuard | 每 Peer 握手、实际 endpoint、rx/tx、过期/未知 |
 | Tinc | 本地实例、远端 Peer 可达/直连等实际可探测项 |
@@ -1009,6 +1009,8 @@ check signed channel metadata
 OpenWrt 使用检测到的原生包管理/打包格式，不假设整个系统支持任意事务回滚。必须说明包安装中断、配置迁移、自更新和失败恢复的实现；不能把简单 `opkg/apk upgrade` 描述为原子包组切换。只更新本项目包，不顺手升级内核、固件或全部系统依赖。
 
 updater 自更新需要系统 supervisor 或短命 helper 完成接替，不能依赖旧进程杀死自己后还能继续执行。相关协议/数据保持跨至少相邻发布兼容，且经过故障注入。
+
+planner 与 updater 相互协调升级。两者都有更新时，先由 planner 通过短命 helper 仅激活 updater，独立运行入口接替到新 updater 后，再由新 updater 立即继续已校验、已暂存的计划，升级 planner 及其余包；不能等待下一次周期检查或提前将整个包组标为完成。updater 接替失败时保持原 planner；planner 后续升级失败时恢复原 planner 与业务包并保留已经成功接替的 updater。planner 不可用或上一发布尚不支持接替协议时，updater 必须保留独立引导/修复能力。
 
 Podman 模式下，容器内独立 updater 可校验、暂存和切换持久化包目录中的 planner、插件及自身版本，通过维护协议协调健康检查和进程接替。基础镜像更新或必须重建容器时，由受控的宿主部署 helper/Podman 管理入口执行，容器内 updater 提交经过验证的更新计划；不要求宿主另装一份 updater，也不能依赖 planner 替换自身容器。宿主入口只允许操作预先登记的本项目容器、卷和已验证镜像 digest，不默认暴露整个宿主容器 socket 给节点服务。具体部署与故障恢复见第 14.3 节。
 

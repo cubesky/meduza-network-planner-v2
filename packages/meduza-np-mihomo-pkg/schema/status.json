@@ -49,6 +49,72 @@
         "string",
         "null"
       ]
+    },
+    "downloadStage": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "preparerProcess": {
+      "type": "string"
+    },
+    "downloadProgress": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "required": [
+        "phase",
+        "active",
+        "targetVersion",
+        "downloadedBytes",
+        "bytesTotal",
+        "attempt"
+      ],
+      "properties": {
+        "phase": {
+          "type": "string"
+        },
+        "active": {
+          "type": "boolean"
+        },
+        "targetVersion": {
+          "type": "string"
+        },
+        "platform": {
+          "type": "string"
+        },
+        "downloadedBytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "bytesTotal": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "retryAtUnix": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
     }
   }
 }

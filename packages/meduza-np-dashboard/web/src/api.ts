@@ -75,12 +75,13 @@ export interface Report {
     degradedReason?: string;
     applyStage?: string;
     lastError?: string;
+    recoveryError?: string;
     backoff: Backoff;
   };
   features: Feature[];
-  instances: Array<{ id: string; state: string; kind?: string; reason?: string }>;
+  instances: Array<{ id: string; state: string; kind?: string; reason?: string; mode?: string; providerState?: string; downloadProgress?: import("@meduza-np/ui-kit/package-progress").BinaryTransferProgress | null }>;
   maintenance?: { active: boolean; reason: string; by: string; until: string; applyPaused: boolean } | null;
-  resources?: Record<string, number | undefined> | null;
+  resources?: { packages?: import("@meduza-np/ui-kit/package-resources").PackageResources[]; plannerRssKib?: number; memAvailableKib?: number; memTotalKib?: number; stateDiskFreeKib?: number; load1Milli?: number; supervisedProcesses?: number } | null;
   system?: Record<string, unknown> | null;
 }
 

@@ -497,7 +497,32 @@ async fn restore_drops_held_back_feature_rejected_later() {
     let (raw, digest) = config(&env, 2, json!([{"version": 1}]));
     let lg = meduza_np_planner::state::LastGood { config: serde_json::from_value(raw.clone()).unwrap(), raw, digest, held_back: vec![] };
     assert!(env.engine.prepare_last_good(&lg, &reg, &plat).await.is_err());
-    env.engine.supervisor.stop_all().await;
+
+    // A desired revision can fail for an unrelated reason before compensation rejects an older held-back
+    // feature. The historical error must never replace the primary failure in the node/Manager report.
+    let p = meduza_np_planner::sync::Planner::new(env.paths.clone(), plat.clone(), env.engine, registry::scan(&env.paths.packages, &plat));
+    let primary = "openvpn/lemon: compression unsupported by the installed binary";
+    {
+        let mut st = p.status.lock().unwrap();
+        st.state = meduza_np_protocol::report::SyncState::ApplyFailed;
+        st.last_error = Some(primary.into());
+        st.failed = Some(("rev-000010".into(), "digest".into()));
+    }
+    p.restore_last_good(&reg).await;
+    let report = meduza_np_planner::reporter::build(&p);
+    assert_eq!(report.sync.last_error.as_deref(), Some(primary));
+    let recovery = report.sync.recovery_error.unwrap();
+    assert!(
+        recovery.contains("rev-000001") && recovery.contains("services.avahi"),
+        "historical revision and validation failure must be identified: {recovery}"
+    );
+    std::fs::rename(&avahi, &parked).unwrap();
+    let absent = registry::scan(&env.paths.packages, &plat);
+    p.restore_last_good(&absent).await;
+    let report = meduza_np_planner::reporter::build(&p);
+    assert_eq!(report.sync.last_error.as_deref(), Some(primary), "successful compensation does not erase the desired revision's failure");
+    assert!(report.sync.recovery_error.is_none(), "recovered errors must not remain stale");
+    p.engine.supervisor.stop_all().await;
     let _ = std::fs::remove_dir_all(env.paths.etc.parent().unwrap());
 }
 

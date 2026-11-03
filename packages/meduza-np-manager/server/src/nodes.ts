@@ -290,10 +290,25 @@ export class NodeService {
   createJob(input: { nodeId: string; kind: string; package?: string; instance?: string; params?: unknown; ttlSeconds?: number }, actor: string): string {
     const node = this.get(input.nodeId);
     if (!node || node.revoked_at) throw new NodeApiError(404, "not-found", "node not found");
+    const update = input.kind === "update-check" || input.kind === "update-apply";
+    if (update) {
+      if (input.package !== undefined || input.instance !== undefined || (input.params != null &&
+        (typeof input.params !== "object" || Array.isArray(input.params) || Object.keys(input.params).length !== 0))) {
+        throw new NodeApiError(400, "invalid-params", "update requests use the node's configured signed source and accept no package, instance or parameters");
+      }
+      const progress = this.latestReport(input.nodeId)?.report.update as { remoteControl?: boolean } | undefined;
+      if (progress?.remoteControl !== true) throw new NodeApiError(409, "update-unsupported", "update planner and run updater on this node to enable remote upgrade control");
+      const queued = this.db.get<{ id: string; kind: string }>(
+        "SELECT id, kind FROM jobs WHERE node_id = ? AND kind IN ('update-check','update-apply') AND status IN ('pending','delivered') AND expires_at > ? ORDER BY created_at LIMIT 1", input.nodeId, nowIso());
+      if (queued) {
+        if (queued.kind === input.kind) return queued.id;
+        throw new NodeApiError(409, "update-pending", "another update request is waiting for the node");
+      }
+    }
     const id = randomId("job");
     this.db.run(
       "INSERT INTO jobs (id, node_id, kind, package, instance, params, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-      id, input.nodeId, input.kind, input.package ?? null, input.instance ?? null, JSON.stringify(input.params ?? {}), actor, nowIso(), isoIn(input.ttlSeconds ?? 3600),
+      id, input.nodeId, input.kind, input.package ?? null, input.instance ?? null, JSON.stringify(input.params ?? {}), actor, nowIso(), isoIn(input.ttlSeconds ?? (update ? 600 : 3600)),
     );
     const seq = this.config.appendEvent(input.nodeId, "job.available", null, null, id);
     this.audit.record(actor, "job.create", id, { node: input.nodeId, kind: input.kind, package: input.package, instance: input.instance });

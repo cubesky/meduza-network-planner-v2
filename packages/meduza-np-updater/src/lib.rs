@@ -4,6 +4,7 @@
 
 pub mod config;
 pub mod engine;
+pub mod handoff;
 pub mod image;
 pub mod meta;
 pub mod openwrt;

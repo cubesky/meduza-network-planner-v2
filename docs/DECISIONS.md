@@ -140,9 +140,10 @@ without RTC):
   builder image by digest, SPDX license + license file names) and `build/{Containerfile,build.sh}`. Release tooling
   runs `podman build --platform <oci platform> -f build/Containerfile --output type=local,dest=<dir> .` per platform
   and packages the exported tree (`/usr/lib/meduza-np/providers/<name>/…`, licenses, `build-info.json`).
-- openvpn-pkg: OpenVPN 2.7.8 + OpenSSL 3.5.9 (static libs, no modules/engines/legacy) + libcap-ng 0.9.6, built
-  natively on the target platform (QEMU for foreign arches) in Alpine/musl with `-all-static`. Disabled: LZO/LZ4,
-  DCO, .so plugins (PAM, down-root), PKCS#11, systemd. Kept: management interface and script hooks (Access uses
+- openvpn-pkg: OpenVPN 2.7.8 + OpenSSL 3.5.9 (static libs, no modules/engines/legacy) + libcap-ng 0.9.6 + LZO 2.10
+  + LZ4 1.10.0 (D65), built natively on the target platform (QEMU for foreign arches) in Alpine/musl with
+  `-all-static`. Disabled: DCO, .so plugins (PAM, down-root), PKCS#11, systemd. Kept: compression compatibility,
+  management interface and script hooks (Access uses
   `auth-user-pass-verify … via-file`). The build fails unless the ELF has no interpreter/NEEDED entries and
   `--version` reports the pinned OpenVPN/OpenSSL versions and `enable_management=yes`.
 - mosdns-pkg: MosDNS v5.3.4 at a pinned commit, Go 1.26.10 (pinned archive), `CGO_ENABLED=0 -trimpath`, modules
@@ -164,8 +165,8 @@ without RTC):
   import. Downloads use curl/wget through `plugin-sdk::fetch` (streamed to staging, bounded); verification is Rust.
 - Resolve: `Selection::Installed` (native: update what is installed, a new required dependency *blocks*) or
   `Selection::Explicit` (`MEDUZA_NP_COMPONENTS`: fixed planner+updater + selection + requires closure, removals for
-  deselected packages). Conflicts, missing platform artifact, unsupported platform block. Order: planner, `-pkg`,
-  plugins, updater last. Same version + same sha256 = keep (unchanged packages are not downloaded); OpenWrt packages
+  deselected packages). Conflicts, missing platform artifact, unsupported platform block. D62 replaces the original
+  planner-first/updater-last order: updater takeover precedes planner, `-pkg` and plugin activation. Same version + same sha256 = keep (unchanged packages are not downloaded); OpenWrt packages
   found installed by other means (`system`) at the same version are kept.
 - Store backend (base-container, generic Linux): `objects/<pkg>/<ver>-<sha12>/usr/…` (archives may only contain
   regular files/dirs under `usr/`; the package's own manifest must match name+version), `views/g<N>` symlink farm
@@ -1387,3 +1388,139 @@ WireGuard already applies local interface/configuration independently of handsha
 when traffic or a configured persistent keepalive needs the peer. Missing/stale handshakes stay in peer health,
 while failed local link/configuration operations still reject apply. Tinc and BGP retain their native reconnect
 loops; peer health is not an application gate.
+
+## D61 — Default front-end listeners and observable binary acquisition
+
+At the user's request, omitted or empty dnsmasq `listenAddresses` means all available local interfaces. Native
+configuration omits `listen-address`; probes and conflict/loop checks use effective IPv4/IPv6 wildcard listeners.
+Explicit addresses still restrict listening. The Manager schema/compiler and node validation use the same
+default, so a legacy empty list cannot reject a whole revision or its last-good restore. Existing port owners
+and local DNS loops are still rejected; fallback and dynamic upstream health behavior are unchanged.
+
+Mihomo adapter installation and Mihomo binary acquisition are separate operations. The provider reports
+`downloadProgress` independently of the usable `provider.json`: target version/platform, real compressed-file
+bytes, phase, attempt, retry time, error and observation time. A short-lived thread samples only while acquiring
+the binary. Kernel file locks exclude duplicate transfer writers and identify a terminated preparer, including
+one stopped during retry backoff, without a stale PID or misleading live status. Failed preparation keeps the previous usable provider. File bytes
+reaching 100% does not mean checksum, decompression, executable inspection or activation finished. Final progress
+logging cannot turn successful activation into a failed installation.
+
+Manager and Dashboard show a dedicated binary card, including configuration failure/interruption reasons, rather
+than treating package-group progress as binary progress. The existing Download now action restarts the supervised
+preparer through the planner; it does not block a plugin job for a long download or launch another controller.
+The preparer reports its bounded exponential retry schedule. Curl downloads also have connection and low-speed
+timeouts, so a stalled transfer reaches automatic retry instead of waiting for the full artifact timeout.
+
+## D62 ? Planner/updater mutual upgrades with updater-first takeover
+
+When updater changes, resolve/download/preflight still cover the complete signed target subset. Before planner
+or services change, planner handles the authorized `updater.activate` local method and invokes a short-lived
+activation helper. For store installs it executes the staged updater inside its validated object directory;
+for native installs the installed updater helper uses the detected package manager. The helper reads the pending
+journal, accepts no arbitrary command/path parameters, and activates only updater. It is bounded at 120 seconds;
+timeout kills its process group, including a native installer. The daemon's independent launcher remains the
+owner and starts the new updater after exit 75. Planner does not supervise an updater daemon.
+
+The optional `handoff` journal checkpoint is persisted before activation. Its intermediate installed set changes
+only updater, retains the previous group identity, and has its own store view; the final target is fully staged
+separately. The new updater proves its running object (or native installed package), then immediately continues
+the saved plan, acquires maintenance, switches/installs planner and remaining packages, and verifies them. It
+never waits for a new scheduled check, refetches a moving channel, or marks the whole group done at takeover.
+If new updater startup fails, the old set is restored without restarting planner. After successful takeover,
+planner/package rollback retains the new updater and restores the previous planner and business packages.
+Native rollback still depends on cached previous archives and is not atomic.
+
+Old `self-restart` journals without a handoff keep their existing completion behavior. When planner is down or
+its previous release lacks this method, the independent updater helper preserves bootstrap/repair capability.
+The first transition initiated by an older updater necessarily uses that updater's existing ordering; subsequent
+transactions use D62 once the new updater is installed. Group versions and package versions remain independent:
+on 2026-11-03 the v0.1.7 signed manifest and remote process/install records confirmed both planner and updater were
+intentionally reused from v0.1.6, rather than skipped during upgrade.
+
+## D63 ? Manager-triggered node upgrades
+
+The node detail's Packages and updates card exposes Check for updates and Upgrade now to operator/admin users.
+Both use the existing authenticated, CSRF-protected, audited node job channel (`update-check` / `update-apply`)
+and its push notification or roaming sync. Planner advertises `update.remoteControl` and relays only these two
+fixed methods to the independent updater socket with a ten-second timeout and bounded response. No caller may
+supply a package, instance, command, version or source override. Old planners are labelled unsupported. Pending
+requests deduplicate by node and kind, conflicting pending requests reject, and undelivered requests expire in
+ten minutes. A bounded persistent receipt cache on planner preserves accepted/error results across replacement
+and HTTP-acknowledgement retries; socket errors and updater busy responses are shown instead of false success.
+
+Explicit update.check is strictly read-only, including when automatic apply or component-selection changes would
+otherwise authorize installation. Explicit update.apply retains the updater's existing manual semantics: use
+the node's configured channel/pin, bypass pause/window once, and allow a failed group retry. It follows D62's
+updater-first takeover whenever updater changes. A queued apply cannot be overwritten by a later check before
+the worker starts. Request acknowledgement is displayed as acceptance for scheduling, never as installation
+completion. The existing package progress remains authoritative for actual checks, downloads, verification,
+activation, takeover and rollback. Viewer pages retain read-only request status and older-node progress.
+
+## D64 ? Preserve the desired revision's failure when last-good recovery also degrades
+
+On 2026-11-03, the authenticated configuration endpoint for xuzhou-b1 returned rev-000010 with dnsmasq
+listenAddresses ["0.0.0.0"]. A temporary dnsmasq on port 55353 in its network namespace answered a test record
+on both 127.0.0.1 and 10.42.10.12 with that explicit wildcard. The apparent empty-list rejection came from
+restoring rev-000003, whose exact saved configuration still contains []; the node's dnsmasq is reused 0.1.6.
+The primary rev-000010 failure is local OpenVPN preflight: lemon requests lzo-asym but the packaged provider
+is built with compression disabled. Recovery dropped the rejected held-back services and overwrote lastError,
+misattributing an old DNS validation error to the corrected current configuration.
+
+Keep sync.lastError for the desired apply error and report optional sync.recoveryError separately, including
+the historical revision. Include held-back validation, restore commit/prepare and unreadable last-good errors;
+clear recoveryError on the next recovery or new application attempt, leaving the primary failure intact until
+successful desired application. Manager shows a separate historical recovery warning/problem; Dashboard
+lists it independently. The optional field is backward compatible and node-report schema is regenerated.
+Cached configurations remain exact for digest verification: do not rewrite old snapshots as a diagnostic fix.
+The native compression incompatibility remains an actual local blocker; no production peer configuration or
+provider binary was changed during this diagnosis.
+
+## D65 — OpenVPN provider includes compression libraries
+
+At the user's request, openvpn-pkg statically links pinned LZO 2.10 and LZ4 1.10.0 alongside its existing OpenSSL
+and libcap-ng inputs. Explicit --enable-lzo/--enable-lz4 replace the old disable flags; the static ELF gates and
+management/script-hook support remain. No runtime system compression package or base image change is required.
+LZO's tarball was checked against the upstream-published SHA-1 and Alpine aports SHA-512 before pinning SHA-256.
+LZ4's official v1.10.0 tag is pinned to a full verified commit. Both licenses ship with the provider, including
+LZ4's nested lib/LICENSE. OpenVPN's official GitHub release tarball matches the existing signed-source SHA-256
+and replaces an unreachable swupdate redirect. Source downloads use bounded HTTPS/HTTP1.1 retries.
+
+Each target build checks both compile-time compression capabilities, runs actual LZO/LZ4 compressed round trips,
+and runs OpenVPN's local crypto/options preflight for none, lzo-no, lzo-asym, lz4, lz4-v2, stub, stub-v2 and migrate.
+The executable still must have no interpreter or DT_NEEDED libraries. build-info.json records the compression
+capabilities and all pinned library inputs. Build tools are cached separately from source compilation; BUILD_JOBS
+can bound validation concurrency without changing default CI architecture selection. An optional read-only
+/archives cache supplies tarballs and bare Git repositories; cached tarballs still pass the locked SHA-256 gate,
+and fresh Git checkouts must match the locked commit and pass full object integrity checking before use.
+
+This provides compatibility with configured compressed peers and existing lzo-asym settings. It retains the
+pinned OpenVPN 2.7 upstream semantics: compressed incoming traffic is supported, while outgoing traffic remains
+uncompressed. Per-connection compression policy is unchanged. See the upstream
+[configure options](https://github.com/OpenVPN/openvpn/blob/v2.7.8/configure.ac) and
+[compression option handling](https://github.com/OpenVPN/openvpn/blob/v2.7.8/src/openvpn/options.c).
+
+## D66 — Package disk and instance memory accounting
+
+Manager node status and Dashboard overview/packages share a resource table from optional resources.packages
+in the node report. Each installed package reports allocated package-file bytes, separate known persistent
+service/provider data, RSS, measurement times and owned processes with instance IDs and PID namespace labels.
+OpenVPN instances and multi-process FRR instances aggregate their own processes/descendants. Running daemon
+memory belongs to its service adapter, not again to the binary-provider package; instances share binary files.
+No process is attributed from its command-line arguments. Idle plugin/provider packages have zero process RSS;
+kernel allocations (notably WireGuard), shared libraries, download archives and OCI layer sizes are excluded.
+The base container is explicitly shared/unmeasured instead of claiming the entire root filesystem or zero bytes.
+
+Disk walks use filesystem blocks, deduplicate inodes/hardlinks/overlapping roots, and never follow symlinks.
+Store package files include all retained object versions, excluding symlink views. Native opkg/APK inventories
+identify owned files without walking shared system directories. Known service state, provider state and custom
+active/preparation/previous binaries are measured separately. Permission/scan failures remain unknown. Per-planner
+disk snapshots cache for 60 seconds and invalidate when the installed set or resolved providers change; each
+tree has entry/time bounds and a report has a bounded disk sampling budget. Process scans have PID/time bounds.
+RSS is sampled from procfs VmRSS, includes shared pages, and is not a PSS/unique-physical-memory estimate.
+
+Independent updater and Dashboard processes publish small atomic namespace-local samples every ten seconds
+in the shared runtime volume. Planner prefers visible local processes and otherwise accepts only matching
+package/host-boot samples no older than 30 seconds. Stale, missing, unreadable or incomplete measurements are
+unknown, not zero. Report time and disk/memory sample times remain visible. Older reports parse unchanged and
+the UI explains when upgrading planner is needed. Source-only delivery requires updated planner, updater,
+Dashboard and Manager artifacts; no production package/configuration is replaced by this change.

@@ -9,7 +9,7 @@
     {
       "name": "openvpn",
       "version": "2.7.8",
-      "url": "https://swupdate.openvpn.org/community/releases/openvpn-2.7.8.tar.gz",
+      "url": "https://github.com/OpenVPN/openvpn/releases/download/v2.7.8/openvpn-2.7.8.tar.gz",
       "sha256": "c070d1d2440b5a6fca6c2c68645c98cd492116ac36ef4f0946177115532c8e36",
       "signature": {
         "url": "https://swupdate.openvpn.org/community/releases/openvpn-2.7.8.tar.gz.asc",
@@ -28,6 +28,23 @@
       "licenseFiles": ["LICENSE.txt"]
     },
     {
+      "name": "lzo",
+      "version": "2.10",
+      "url": "https://www.oberhumer.com/opensource/lzo/download/lzo-2.10.tar.gz",
+      "sha256": "c0f892943208266f9b6543b3ae308fab6284c5c90e627931446fb49b4221a072",
+      "license": "GPL-2.0-or-later",
+      "licenseFiles": ["COPYING"]
+    },
+    {
+      "name": "lz4",
+      "version": "1.10.0",
+      "git": "https://github.com/lz4/lz4.git",
+      "tag": "v1.10.0",
+      "commit": "ebb370ca83af193212df4dcbadcc5d87bc0de2f0",
+      "license": "BSD-2-Clause",
+      "licenseFiles": ["lib/LICENSE"]
+    },
+    {
       "name": "libcap-ng",
       "version": "0.9.6",
       "git": "https://github.com/stevegrubb/libcap-ng.git",
@@ -37,10 +54,12 @@
       "licenseFiles": ["COPYING.LIB"]
     }
   ],
-  "verifiedAt": "2026-10-22",
+  "verifiedAt": "2026-11-04",
   "verificationNotes": [
     "openssl sha256 equals the upstream-published openssl-3.5.9.tar.gz.sha256.",
-    "openvpn tarball signature verified with gpg against subkey 33DA8C9E...96D04874 of primary key F554A368...2F2B01E7 (OpenVPN security key).",
-    "libcap-ng is pinned by commit; the build refuses a checkout whose HEAD differs."
+    "openvpn tarball signature verified with gpg against subkey 33DA8C9E...96D04874 of primary key F554A368...2F2B01E7 (OpenVPN security key). The official GitHub release asset was independently downloaded on 2026-11-04 and matches the same pinned SHA-256; use it instead of the swupdate redirect, which is unreachable in the validation network.",
+    "libcap-ng is pinned by commit; the build refuses a checkout whose HEAD differs.",
+    "lzo 2.10 tarball SHA-256 computed after matching upstream's published SHA-1 4924676a9bae5db58ef129dc1cebce3baa3c4b5d and Alpine aports SHA-512 a3dae5e4a6b93b1f5bf7435e8ab114a9be57252e9efc5dd444947d7a2d031b0819f34bcaeb35f60b5629a01b1238d738735a64db8f672be9690d3c80094511a4.",
+    "lz4 v1.10.0 tag resolved through the official Git repository to ebb370ca83af193212df4dcbadcc5d87bc0de2f0; the build verifies HEAD and ships the library's BSD-2-Clause license."
   ]
 }

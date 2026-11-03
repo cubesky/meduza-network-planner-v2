@@ -7,10 +7,12 @@
 # The FROM digest must equal upstream.lock.json `builder.image` (checked by crates/protocol/tests/provider_recipes.rs).
 FROM docker.io/library/alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a AS build
 ARG TARGETPLATFORM
-COPY upstream.lock.json build/build.sh /recipe/
+ARG BUILD_JOBS
+COPY upstream.lock.json /recipe/
 RUN apk add --no-cache jq && \
-    apk add --no-cache $(jq -r '.builder.apk | join(" ")' /recipe/upstream.lock.json) && \
-    sh /recipe/build.sh /recipe/upstream.lock.json /out
+    apk add --no-cache $(jq -r '.builder.apk | join(" ")' /recipe/upstream.lock.json)
+COPY build/build.sh build/smoke-compression.sh /recipe/
+RUN BUILD_JOBS="$BUILD_JOBS" sh /recipe/build.sh /recipe/upstream.lock.json /out
 
 FROM scratch
 COPY --from=build /out/ /

@@ -43,6 +43,7 @@ pub struct RuntimeStatus {
     pub event_cursor: Option<String>,
     pub apply_stage: Option<String>,
     pub last_error: Option<String>,
+    pub recovery_error: Option<String>,
     pub failed: Option<(String, String)>,
     pub maintenance: Option<MaintenanceStatus>,
     pub maintenance_until: Option<Instant>,
@@ -63,6 +64,7 @@ impl Default for RuntimeStatus {
             event_cursor: None,
             apply_stage: None,
             last_error: None,
+            recovery_error: None,
             failed: None,
             maintenance: None,
             maintenance_until: None,
@@ -90,6 +92,7 @@ pub struct Planner {
     jitter: Mutex<OsJitter>,
     /// Access auth decisions handed to OpenVPN's connect hook (D38).
     pub access_sessions: Mutex<crate::access::Sessions>,
+    pub resource_cache: Mutex<crate::resources::Cache>,
 }
 
 const MAX_QUEUED_ACKS: usize = 16;
@@ -126,6 +129,7 @@ impl Planner {
             acks: Mutex::new(VecDeque::new()),
             jitter: Mutex::new(OsJitter::new()),
             access_sessions: Mutex::new(Default::default()),
+            resource_cache: Mutex::new(Default::default()),
         })
     }
 
@@ -277,6 +281,7 @@ impl Planner {
                 }
             }
             st.state = SyncState::Applying;
+            st.recovery_error = None;
             st.apply_stage = Some("validating".into());
         }
         self.ack(&revision, &digest, AckStage::Received, None, vec![]);
@@ -320,6 +325,7 @@ impl Planner {
                     st.state = SyncState::InSync;
                     st.apply_stage = None;
                     st.last_error = None;
+                    st.recovery_error = None;
                     st.failed = None;
                     st.behavior = behavior;
                 }
@@ -355,6 +361,7 @@ impl Planner {
     }
 
     pub async fn restore_last_good(&self, registry: &Registry) {
+        self.status.lock().unwrap().recovery_error = None;
         match load_last_good(&self.paths) {
             Ok(Some(lg)) => {
                 let revision = lg.config.revision.to_string();
@@ -380,22 +387,31 @@ impl Planner {
                             st.behavior = lg.config.node.behavior;
                             st.apply_stage = held_back_rejected.as_ref().map(|_| "degraded: held-back-rejected".to_string());
                             if let Some(r) = held_back_rejected {
-                                st.last_error = Some(format!("{}: {}", lg.held_back.join(", "), r.summary()));
+                                st.recovery_error = Some(format!("{revision}: {}: {}", lg.held_back.join(", "), r.summary()));
                             }
                         }
                         Err(f) => {
                             error!("restoring {revision} failed: {} — running with partial state, see diagnostics", f.message);
-                            self.status.lock().unwrap().apply_stage = Some(format!("degraded: {}", f.code));
+                            let mut st = self.status.lock().unwrap();
+                            st.apply_stage = Some(format!("degraded: {}", f.code));
+                            st.recovery_error = Some(format!("{revision}: {}", f.message));
                         }
                     },
                     Err(r) => {
                         error!("last good configuration {revision} no longer valid here: {}", r.summary());
-                        self.status.lock().unwrap().apply_stage = Some(format!("degraded: {}", r.code));
+                        let mut st = self.status.lock().unwrap();
+                        st.apply_stage = Some(format!("degraded: {}", r.code));
+                        st.recovery_error = Some(format!("{revision}: {}", r.summary()));
                     }
                 }
             }
             Ok(None) => {}
-            Err(e) => error!("cannot read last good configuration: {e}"),
+            Err(e) => {
+                error!("cannot read last good configuration: {e}");
+                let mut st = self.status.lock().unwrap();
+                st.apply_stage = Some("degraded: restore-error".into());
+                st.recovery_error = Some(format!("cannot read last good configuration: {e}"));
+            }
         }
     }
 

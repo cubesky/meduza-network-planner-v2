@@ -67,6 +67,8 @@ pub fn build(p: &Arc<Planner>) -> NodeReport {
     let mut resources = crate::platform::resources();
     resources.supervised_processes = p.engine.supervisor.ids().len() as u32;
     resources.state_disk_free_kib = meduza_np_runtime::fsutil::free_space(&p.paths.state).ok().map(|b| b / 1024);
+    let packages = packages(p);
+    resources.packages = crate::resources::collect(p, &packages);
 
     NodeReport {
         report_version: REPORT_VERSION,
@@ -84,9 +86,10 @@ pub fn build(p: &Arc<Planner>) -> NodeReport {
             event_cursor: st.event_cursor.clone(),
             apply_stage: st.apply_stage.clone(),
             last_error: st.last_error.clone(),
+            recovery_error: st.recovery_error.clone(),
             backoff,
         },
-        packages: packages(p),
+        packages,
         features,
         instances,
         resources: Some(resources),
@@ -94,7 +97,12 @@ pub fn build(p: &Arc<Planner>) -> NodeReport {
         update: meduza_np_runtime::update::snapshot(
             &std::env::var_os("MEDUZA_NP_DATA_DIR").map(std::path::PathBuf::from).unwrap_or_else(|| p.paths.state.clone()).join("store"),
             &p.paths.run,
-        ),
+        )
+        .map(|mut value| {
+            // This planner can relay authenticated Manager update jobs to the independent updater socket.
+            value["remoteControl"] = Value::Bool(true);
+            value
+        }),
         system: Some(SystemInfo {
             arch: std::env::consts::ARCH.into(),
             os: std::env::consts::OS.into(),

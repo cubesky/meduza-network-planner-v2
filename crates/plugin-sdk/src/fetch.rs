@@ -23,8 +23,25 @@ pub fn fetch_to_file(url: &str, dest: &Path, opts: &FetchOptions<'_>) -> Result<
     let dest_s = dest.to_string_lossy().into_owned();
     let curl = ["/usr/bin/curl", "/bin/curl", "/usr/local/bin/curl"].into_iter().find(|p| Path::new(p).exists());
     let out = if let Some(curl) = curl {
-        let mut args: Vec<&str> =
-            vec!["-fsSL", "--max-time", &t, "--max-filesize", &max, "--proto", "=http,https", "--proto-redir", "=https", "-o", &dest_s];
+        let mut args: Vec<&str> = vec![
+            "-fsSL",
+            "--max-time",
+            &t,
+            "--connect-timeout",
+            "10",
+            "--speed-limit",
+            "1",
+            "--speed-time",
+            "30",
+            "--max-filesize",
+            &max,
+            "--proto",
+            "=http,https",
+            "--proto-redir",
+            "=https",
+            "-o",
+            &dest_s,
+        ];
         if let Some(p) = opts.proxy {
             args.extend(["-x", p]);
         }

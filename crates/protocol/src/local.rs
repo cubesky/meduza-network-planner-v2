@@ -87,6 +87,8 @@ pub const PLANNER_METHODS: &[(&str, bool)] = &[
     ("registry.rescan", true),
     // Graceful exit with code 75 so the owning service manager (procd/systemd/Podman) starts the new binary.
     ("planner.restart", true),
+    // Activate only the staged updater via a bounded helper; its independent owner starts the new daemon.
+    ("updater.activate", true),
     // meduza-np-dashboard sign-in relay to the manager
     ("dashboard.login", true),
     ("dashboard.exchange", true),

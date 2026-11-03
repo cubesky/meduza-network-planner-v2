@@ -18,12 +18,14 @@ pub mod platform;
 pub mod plugins;
 pub mod registry;
 pub mod reporter;
+pub mod resources;
 pub mod settings;
 pub mod state;
 pub mod supervisor;
 pub mod support;
 pub mod sync;
 pub mod transport;
+pub mod updater;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

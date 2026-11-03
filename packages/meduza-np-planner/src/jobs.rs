@@ -63,6 +63,7 @@ pub async fn run_pending(p: &Arc<Planner>, client: &Arc<ManagerClient>) -> Resul
 async fn execute(p: &Arc<Planner>, job: &Job) -> Result<Value, (String, String)> {
     let err = |c: &str, m: String| (c.to_string(), m);
     match job.kind.as_str() {
+        "update-check" | "update-apply" => crate::updater::request(&p.paths, job).await,
         "restart-instance" | "start-instance" | "stop-instance" => {
             let instance = job.instance.clone().ok_or_else(|| err("invalid-params", "instance required".into()))?;
             let applied = crate::state::AppliedState::load(&p.paths).map_err(|e| err("internal", e.to_string()))?;

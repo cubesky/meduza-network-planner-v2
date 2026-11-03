@@ -66,6 +66,7 @@ async fn run() {
         sessions: Mutex::new(auth::Sessions::default()),
     });
     let listener = tokio::net::TcpListener::bind(listen).await.unwrap_or_else(|e| fail(format!("bind {listen}: {e}")));
+    meduza_np_runtime::resources::publish_daemon(paths.run.clone(), "meduza-np-dashboard");
     eprintln!("meduza-np-dashboard listening on {}://{listen}", if tls.is_some() { "https" } else { "http" });
     serve(listener, app, tls, shutdown_signal()).await;
 }

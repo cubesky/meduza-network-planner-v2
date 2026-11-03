@@ -37,7 +37,7 @@ impl Plugin for Dnsmasq {
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or(Value::Null);
-        let listen: Vec<SocketAddr> = cfg.listen_addresses.iter().map(|a| SocketAddr::new(*a, cfg.port)).collect();
+        let listen: Vec<SocketAddr> = dm::listener_addresses(&cfg).iter().map(|a| SocketAddr::new(*a, cfg.port)).collect();
         let front = dm::frontend::frontend_answers(&listen, &cfg.probe_name);
         let ts = meduza_np_plugin_sdk::now_rfc3339();
         let mut detail = BTreeMap::new();

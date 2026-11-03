@@ -51,7 +51,8 @@ function reaches(a: Addr, l: Addr): boolean {
 export function dnsLoopProblems(nodeId: string, services: Rec): Problem[] {
   const front = enabled(services.dnsmasq) ? services.dnsmasq : undefined;
   const port = typeof front?.port === "number" ? front.port : 53;
-  const listeners = strings(front?.listenAddresses).map((ip) => ({ ip: ip.toLowerCase(), port }));
+  const configured = strings(front?.listenAddresses);
+  const listeners = (front && !configured.length ? ["0.0.0.0", "::"] : configured).map((ip) => ({ ip: ip.toLowerCase(), port }));
   const problems: Problem[] = [];
   const base = `/nodes/${nodeId}/services`;
   const check = (path: string, target: string | Addr | null, message: string) => {

@@ -3,6 +3,7 @@
 //! (rollback, tampering, expiry, untrusted key) and recovery of an interrupted switch.
 
 use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -182,6 +183,15 @@ impl PlannerApi for FakePlanner {
                 self.boot.set(self.boot.get() + 1);
                 Ok(json!({"restarting": true}))
             }
+            "updater.activate" => {
+                meduza_np_updater::handoff::activate(
+                    &meduza_np_updater::store::Store::new(self.store.clone()),
+                    Backend::Store,
+                    &NoRunner,
+                    &self.store.join("run"),
+                )?;
+                Ok(json!({"activated": true}))
+            }
             "packages" => Ok(self.packages()),
             "instances" => Ok(json!({"processes": [], "applied": {"wireguard/wg0": {"package": "meduza-np-wireguard", "processes": []}}})),
             _ => Ok(json!({})),
@@ -210,6 +220,323 @@ fn current_file(cfg: &Config, rel: &str) -> Option<String> {
 }
 
 const FAR: &str = "2099-01-01T00:00:00Z";
+
+#[test]
+fn manager_check_is_read_only_and_upgrade_now_overrides_pause() {
+    let env = Env::new("manager-update-controls");
+    let cfg = env.config(Some(vec![]));
+    let planner = FakePlanner { store: cfg.store_dir(), up: Cell::new(false), boot: Cell::new(1), calls: RefCell::new(vec![]) };
+    let now_fn = now;
+    let e = engine(&cfg, &planner, &now_fn);
+    let updater = env.package("meduza-np-updater", "0.1.0", false);
+    env.publish("v0.1.0", 1, vec![env.package("meduza-np-planner", "0.1.0", false), updater.clone()], FAR);
+    e.run_once(true).unwrap();
+    planner.up.set(true);
+    env.publish("v0.2.0", 2, vec![env.package("meduza-np-planner", "0.2.0", false), updater], FAR);
+    let (plan, outcome) = meduza_np_updater::daemon::run_pass(&e, Some(false)).unwrap();
+    assert!(plan.unwrap().changed());
+    assert!(outcome.is_none());
+    assert_eq!(
+        e.installed().unwrap().packages["meduza-np-planner"].version,
+        "0.1.0",
+        "checking must not apply even with autoApply enabled"
+    );
+    meduza_np_runtime::fsutil::write_json_atomic(&e.store().root.join("control.json"), &json!({"paused":true}), 0o644).unwrap();
+    assert!(meduza_np_updater::daemon::run_pass(&e, None).unwrap().1.is_none());
+    assert_eq!(meduza_np_updater::daemon::run_pass(&e, Some(true)).unwrap().1, Some(Outcome::Applied));
+    assert_eq!(e.installed().unwrap().packages["meduza-np-planner"].version, "0.2.0");
+    assert!(e.load_control().paused, "one-shot manual upgrade does not change the automatic-update policy");
+    std::fs::remove_dir_all(env.root).unwrap();
+}
+
+#[test]
+fn planner_activates_updater_then_new_updater_upgrades_planner_without_network() {
+    struct ExecutableHelperPlanner<'a> {
+        planner: &'a FakePlanner,
+        cfg: &'a Config,
+    }
+    impl PlannerApi for ExecutableHelperPlanner<'_> {
+        fn call(&self, method: &str, params: Value) -> Result<Value, String> {
+            if method != "updater.activate" {
+                return self.planner.call(method, params);
+            }
+            self.planner.calls.borrow_mut().push(method.into());
+            let out = std::process::Command::new(env!("CARGO_BIN_EXE_meduza-np-updater"))
+                .arg("activate-updater")
+                .env("MEDUZA_NP_DATA_DIR", &self.cfg.data_dir)
+                .env("MEDUZA_NP_ETC_DIR", &self.cfg.paths.etc)
+                .env("MEDUZA_NP_RUN_DIR", &self.cfg.paths.run)
+                .env("MEDUZA_NP_UPDATE_BACKEND", "store")
+                .env("MEDUZA_NP_PLATFORM", "linux/amd64")
+                .output()
+                .map_err(|e| e.to_string())?;
+            if !out.status.success() {
+                return Err(String::from_utf8_lossy(&out.stderr).into_owned());
+            }
+            Ok(json!({"activated": true}))
+        }
+    }
+    let env = Env::new("updater-first");
+    let cfg = env.config(Some(vec!["meduza-np-wireguard"]));
+    let planner = FakePlanner { store: cfg.store_dir(), up: Cell::new(false), boot: Cell::new(1), calls: RefCell::new(vec![]) };
+    let rpc = ExecutableHelperPlanner { planner: &planner, cfg: &cfg };
+    let now_fn = now;
+    let e = engine(&cfg, &rpc, &now_fn);
+    let names = ["meduza-np-planner", "meduza-np-updater", "meduza-np-wireguard"];
+    env.publish("v0.1.0", 1, names.iter().map(|n| env.package(n, "0.1.0", false)).collect(), FAR);
+    assert_eq!(e.run_once(true).unwrap().1, Some(Outcome::Applied));
+    planner.up.set(true);
+    planner.calls.borrow_mut().clear();
+    env.publish("v0.2.0", 2, names.iter().map(|n| env.package(n, "0.2.0", false)).collect(), FAR);
+    assert_eq!(e.run_once(true).unwrap().1, Some(Outcome::AppliedRestartSelf));
+    let halfway = e.installed().unwrap();
+    assert_eq!(halfway.group_version.as_deref(), Some("v0.1.0"), "the group is not complete just because updater was activated");
+    assert_eq!(halfway.packages["meduza-np-updater"].version, "0.2.0");
+    assert_eq!(halfway.packages["meduza-np-planner"].version, "0.1.0");
+    assert_eq!(halfway.packages["meduza-np-wireguard"].version, "0.1.0");
+    assert!(planner.calls.borrow().iter().any(|m| m == "updater.activate"));
+    assert!(!planner.calls.borrow().iter().any(|m| matches!(m.as_str(), "planner.restart" | "registry.rescan" | "drain")));
+    assert_eq!(e.load_journal().unwrap().phase, Phase::SelfRestart);
+    assert_eq!(meduza_np_runtime::update::snapshot(&cfg.store_dir(), &cfg.paths.run).unwrap()["phase"], "self-restart");
+
+    // The new updater continues the original, fully verified transaction even if the channel is now unreachable.
+    std::fs::remove_dir_all(&env.repo).unwrap();
+    assert!(e.recover(true).unwrap().contains("new updater upgraded planner"));
+    let completed = e.installed().unwrap();
+    assert_eq!(completed.group_version.as_deref(), Some("v0.2.0"));
+    for name in names {
+        assert_eq!(completed.packages[name].version, "0.2.0");
+    }
+    assert!(planner.calls.borrow().iter().any(|m| m == "planner.restart"));
+    assert!(e.load_journal().is_none());
+    assert_eq!(e.load_state().last_result.unwrap().outcome, "done");
+    std::fs::remove_dir_all(env.root).unwrap();
+}
+
+#[test]
+fn failed_takeover_and_failed_planner_have_distinct_recovery_baselines() {
+    for (tag, new_updater_starts) in
+        [("takeover-fails", false), ("before-activation", false), ("before-record", true), ("planner-fails", true)]
+    {
+        let env = Env::new(tag);
+        let cfg = env.config(Some(vec![]));
+        let planner = FakePlanner { store: cfg.store_dir(), up: Cell::new(false), boot: Cell::new(1), calls: RefCell::new(vec![]) };
+        let now_fn = now;
+        let e = engine(&cfg, &planner, &now_fn);
+        env.publish(
+            "v0.1.0",
+            1,
+            vec![env.package("meduza-np-planner", "0.1.0", false), env.package("meduza-np-updater", "0.1.0", false)],
+            FAR,
+        );
+        e.run_once(true).unwrap();
+        planner.up.set(true);
+        planner.calls.borrow_mut().clear();
+        env.publish(
+            "v0.2.0",
+            2,
+            vec![env.package("meduza-np-planner", "0.2.0", true), env.package("meduza-np-updater", "0.2.0", false)],
+            FAR,
+        );
+        assert_eq!(e.run_once(true).unwrap().1, Some(Outcome::AppliedRestartSelf));
+        if tag == "before-activation" || tag == "before-record" {
+            let j = e.load_journal().unwrap();
+            if tag == "before-activation" {
+                // Crash after journaling but before the helper switched the updater view.
+                e.store().switch(j.previous_view.as_deref().unwrap()).unwrap();
+            }
+            // Crash after switch but before installed.json was persisted is also recoverable.
+            e.store().save_installed(j.previous_installed.as_ref().unwrap()).unwrap();
+        }
+        let msg = e.recover(new_updater_starts).unwrap();
+        assert!(msg.contains("rolled back"), "{msg}");
+        let installed = e.installed().unwrap();
+        assert_eq!(installed.group_version.as_deref(), Some("v0.1.0"));
+        assert_eq!(installed.packages["meduza-np-planner"].version, "0.1.0");
+        assert_eq!(installed.packages["meduza-np-updater"].version, if new_updater_starts { "0.2.0" } else { "0.1.0" });
+        assert!(e.load_journal().is_none());
+        assert!(e.load_state().failed_groups.contains(&"v0.2.0".into()));
+        if !new_updater_starts {
+            assert!(!planner.calls.borrow().iter().any(|m| m == "planner.restart"), "failed updater must never touch planner");
+        }
+        std::fs::remove_dir_all(env.root).unwrap();
+    }
+}
+
+#[test]
+fn updater_first_bootstrap_and_previous_planner_protocol_are_supported() {
+    struct PreviousPlanner<'a>(&'a FakePlanner);
+    impl PlannerApi for PreviousPlanner<'_> {
+        fn call(&self, method: &str, params: Value) -> Result<Value, String> {
+            if method == "updater.activate" {
+                Err("not-found: unknown method".into())
+            } else {
+                self.0.call(method, params)
+            }
+        }
+    }
+    for bootstrap in [false, true] {
+        let env = Env::new(if bootstrap { "bootstrap-self-first" } else { "previous-planner" });
+        let cfg = env.config(Some(vec![]));
+        let planner = FakePlanner { store: cfg.store_dir(), up: Cell::new(false), boot: Cell::new(1), calls: RefCell::new(vec![]) };
+        let compat = PreviousPlanner(&planner);
+        let now_fn = now;
+        let e = engine(&cfg, &compat, &now_fn);
+        if !bootstrap {
+            env.publish(
+                "v0.1.0",
+                1,
+                vec![env.package("meduza-np-planner", "0.1.0", false), env.package("meduza-np-updater", "0.1.0", false)],
+                FAR,
+            );
+            assert_eq!(e.run_once(true).unwrap().1, Some(Outcome::Applied));
+            planner.up.set(true);
+        }
+        env.publish(
+            "v0.2.0",
+            2,
+            vec![env.package("meduza-np-planner", "0.2.0", false), env.package("meduza-np-updater", "0.2.0", false)],
+            FAR,
+        );
+        assert_eq!(e.run_once(true).unwrap().1, Some(Outcome::AppliedRestartSelf));
+        assert_eq!(
+            e.installed().unwrap().packages.get("meduza-np-planner").map(|p| p.version.as_str()),
+            if bootstrap { None } else { Some("0.1.0") }
+        );
+        assert!(e.recover(true).unwrap().contains("complete"));
+        assert_eq!(e.installed().unwrap().packages["meduza-np-planner"].version, "0.2.0");
+        std::fs::remove_dir_all(env.root).unwrap();
+    }
+}
+
+#[test]
+fn native_opkg_and_apk_install_updater_before_planner() {
+    struct PackageManager {
+        backend: Backend,
+        installed: RefCell<BTreeMap<String, String>>,
+        installs: RefCell<Vec<String>>,
+    }
+    impl Runner for PackageManager {
+        fn run(&self, program: &str, args: &[String]) -> Result<String, String> {
+            assert_eq!(program, self.backend.name());
+            if args[0] == "list-installed" || args[0] == "list" {
+                return Ok(self
+                    .installed
+                    .borrow()
+                    .iter()
+                    .map(|(name, version)| {
+                        if self.backend == Backend::Opkg {
+                            format!("{name} - {version}\n")
+                        } else {
+                            format!("{name}-{version}-r1 aarch64 {{{name}}} [installed]\n")
+                        }
+                    })
+                    .collect());
+            }
+            assert!(matches!(args[0].as_str(), "add" | "install"));
+            let file = PathBuf::from(args.last().unwrap());
+            let name = file.file_name().unwrap().to_str().unwrap().split('_').next().unwrap().to_string();
+            if name == "meduza-np-planner" {
+                assert_eq!(self.installed.borrow()["meduza-np-updater"], "0.2.0", "native planner install must run under the new updater");
+            }
+            self.installed.borrow_mut().insert(name.clone(), "0.2.0".into());
+            self.installs.borrow_mut().push(name);
+            Ok(String::new())
+        }
+    }
+    struct NativePlanner<'a> {
+        pm: &'a PackageManager,
+        store: PathBuf,
+        boot: Cell<u32>,
+        calls: RefCell<Vec<String>>,
+    }
+    impl PlannerApi for NativePlanner<'_> {
+        fn call(&self, method: &str, _: Value) -> Result<Value, String> {
+            self.calls.borrow_mut().push(method.into());
+            match method {
+                "status" => Ok(json!({"bootId":self.boot.get().to_string()})),
+                "updater.activate" => {
+                    meduza_np_updater::handoff::activate(
+                        &meduza_np_updater::store::Store::new(self.store.clone()),
+                        self.pm.backend,
+                        self.pm,
+                        &self.store.join("run"),
+                    )?;
+                    Ok(json!({"activated":true}))
+                }
+                "planner.restart" => {
+                    self.boot.set(self.boot.get() + 1);
+                    Ok(json!({}))
+                }
+                "packages" => Ok(
+                    json!({"packages": self.pm.installed.borrow().iter().map(|(n,v)| json!({"name":n,"version":v,"registration":"registered"})).collect::<Vec<_>>()}),
+                ),
+                _ => Ok(json!({})),
+            }
+        }
+    }
+    for backend in [Backend::Opkg, Backend::Apk] {
+        let env = Env::new(backend.name());
+        let mut cfg = env.config(None);
+        cfg.backend = backend;
+        cfg.image_updater_version = None;
+        let names = ["meduza-np-planner", "meduza-np-updater", "meduza-np-cli"];
+        let pm = PackageManager {
+            backend,
+            installed: RefCell::new(names.iter().map(|n| (n.to_string(), "0.1.0".into())).collect()),
+            installs: RefCell::new(vec![]),
+        };
+        let planner = NativePlanner { pm: &pm, store: cfg.store_dir(), boot: Cell::new(1), calls: RefCell::new(vec![]) };
+        let packages = names
+            .iter()
+            .map(|n| {
+                let mut p = env.package(n, "0.2.0", false);
+                p.artifacts[0].format = if backend == Backend::Opkg { "ipk" } else { "apk" }.into();
+                p
+            })
+            .collect();
+        env.publish("v0.2.0", 2, packages, FAR);
+        let e = Engine {
+            cfg: &cfg,
+            planner: &planner,
+            runner: &pm,
+            now: &now,
+            planner_timeout: Duration::from_millis(500),
+            poll: Duration::from_millis(10),
+        };
+        assert_eq!(e.run_once(true).unwrap().1, Some(Outcome::AppliedRestartSelf));
+        assert_eq!(*pm.installs.borrow(), ["meduza-np-updater"]);
+        assert_eq!(pm.installed.borrow()["meduza-np-planner"], "0.1.0");
+        assert!(!planner.calls.borrow().iter().any(|m| m == "planner.restart"));
+        let msg = e.recover(true).unwrap();
+        assert!(msg.contains("complete"), "{msg}");
+        assert_eq!(*pm.installs.borrow(), ["meduza-np-updater", "meduza-np-planner", "meduza-np-cli"]);
+        assert!(planner.calls.borrow().iter().any(|m| m == "planner.restart"));
+        assert_eq!(e.installed().unwrap().group_version.as_deref(), Some("v0.2.0"));
+        assert!(e.load_journal().is_none());
+        std::fs::remove_dir_all(env.root).unwrap();
+    }
+}
+
+#[test]
+fn updater_only_upgrade_does_not_restart_planner() {
+    let env = Env::new("updater-only");
+    let cfg = env.config(Some(vec![]));
+    let planner = FakePlanner { store: cfg.store_dir(), up: Cell::new(false), boot: Cell::new(1), calls: RefCell::new(vec![]) };
+    let now_fn = now;
+    let e = engine(&cfg, &planner, &now_fn);
+    let p = env.package("meduza-np-planner", "0.1.0", false);
+    env.publish("v0.1.0", 1, vec![p.clone(), env.package("meduza-np-updater", "0.1.0", false)], FAR);
+    e.run_once(true).unwrap();
+    planner.up.set(true);
+    planner.calls.borrow_mut().clear();
+    env.publish("v0.2.0", 2, vec![p, env.package("meduza-np-updater", "0.2.0", false)], FAR);
+    assert_eq!(e.run_once(true).unwrap().1, Some(Outcome::AppliedRestartSelf));
+    assert!(e.recover(true).unwrap().contains("complete"));
+    assert!(!planner.calls.borrow().iter().any(|m| m == "planner.restart"));
+    assert_eq!(e.installed().unwrap().packages["meduza-np-planner"].version, "0.1.0");
+    std::fs::remove_dir_all(env.root).unwrap();
+}
 
 #[test]
 fn retries_reuse_only_downloads_matching_signed_hashes() {

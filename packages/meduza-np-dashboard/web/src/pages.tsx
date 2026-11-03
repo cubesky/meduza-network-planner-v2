@@ -1,5 +1,6 @@
 import { useState } from "preact/hooks";
-import { PackageProgress, progressFromStatus } from "@meduza-np/ui-kit/package-progress";
+import { BinaryProgress, PackageProgress, progressFromStatus } from "@meduza-np/ui-kit/package-progress";
+import { PackageResourceCard, type PackageResources } from "@meduza-np/ui-kit/package-resources";
 import { Badge, Button, Card, Field, Loadable, StateBadge, Table, TextInput, NumberInput, Checkbox, bytes, relativeTime, toast, useAsync } from "@meduza-np/ui-kit";
 import { errorText, get, post, roleAtLeast, type Feature, type PackageStatus, type Report, type Session } from "./api.ts";
 
@@ -36,6 +37,7 @@ export function OverviewPage(props: { session: Session }) {
               {r.sync.applyStage && (<><dt>应用阶段</dt><dd>{r.sync.applyStage}</dd></>)}
               {r.sync.degradedReason && (<><dt>降级原因</dt><dd><Badge tone="warn">{r.sync.degradedReason}</Badge></dd></>)}
               {r.sync.lastError && (<><dt>最近错误</dt><dd class="bad">{r.sync.lastError}</dd></>)}
+              {r.sync.recoveryError && (<><dt>恢复历史配置</dt><dd class="bad">{r.sync.recoveryError}</dd></>)}
             </dl>
             {r.sync.backoff.failureLevel > 0 && (
               <p class="small">
@@ -49,6 +51,10 @@ export function OverviewPage(props: { session: Session }) {
           </Card>
           <MaintenanceCard report={r} session={props.session} />
           <PackageProgress progress={r.update} reportedAt={r.observedAt} />
+          {r.instances.filter((i) => i.kind === "mihomo-provider" && (i.mode === "auto-download" || i.downloadProgress)).map((i) => <BinaryProgress
+            name="Mihomo" progress={i.downloadProgress} providerState={i.providerState} reason={i.reason}
+            configurationError={r.sync.state === "apply-failed" ? r.sync.lastError : undefined}
+          />)}
           <Card title="资源">
             <dl class="kv">
               <dt>planner RSS</dt><dd>{kib(r.resources?.plannerRssKib)}</dd>
@@ -60,6 +66,7 @@ export function OverviewPage(props: { session: Session }) {
               <dt>上报时间</dt><dd>{relativeTime(r.observedAt)}</dd>
             </dl>
           </Card>
+          <PackageResourceCard packages={r.resources?.packages} reportedAt={r.observedAt} />
         </div>
       )}
     </Loadable>
@@ -138,7 +145,7 @@ function featureLabel(f: Feature): string {
 }
 
 export function PackagesPage() {
-  const st = useAsync(() => get<{ packages: PackageStatus[]; providers?: Record<string, { path: string; source: string; version?: string }>; providerErrors?: Record<string, string> }>("/api/packages"), [], 15000);
+  const st = useAsync(() => get<{ packages: PackageStatus[]; resources?: PackageResources[]; providers?: Record<string, { path: string; source: string; version?: string }>; providerErrors?: Record<string, string> }>("/api/packages"), [], 15000);
   return (
     <Loadable state={st}>
       {(p) => (
@@ -166,6 +173,7 @@ export function PackagesPage() {
               ))}
             </dl>
           </Card>
+          <PackageResourceCard packages={p.resources} />
         </div>
       )}
     </Loadable>

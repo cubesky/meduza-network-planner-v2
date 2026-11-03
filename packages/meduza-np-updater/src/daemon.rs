@@ -28,6 +28,7 @@ fn now() -> u64 {
 }
 
 pub fn run(engine: &Engine<'_>, running_new_updater: bool) -> ! {
+    meduza_np_runtime::resources::publish_daemon(engine.cfg.paths.run.clone(), "meduza-np-updater");
     if let Err(e) = engine.store().init() {
         eprintln!("store: {e}");
     }
@@ -106,7 +107,7 @@ pub fn run(engine: &Engine<'_>, running_new_updater: bool) -> ! {
             forced
         };
         let _ = meduza_np_runtime::fsutil::write_json_atomic(&activity, &json!({"busy":"checking"}), 0o644);
-        let result = run_pass(engine, forced == Some(true));
+        let result = run_pass(engine, forced);
         let _ = meduza_np_runtime::fsutil::write_json_atomic(&activity, &json!({"busy":null}), 0o644);
         {
             let (lock, _) = &*state;
@@ -142,7 +143,12 @@ pub fn run(engine: &Engine<'_>, running_new_updater: bool) -> ! {
     }
 }
 
-fn run_pass(engine: &Engine<'_>, forced: bool) -> Result<(Option<crate::resolve::Plan>, Option<Outcome>), String> {
+/// None = scheduled policy, Some(false) = explicit read-only check, Some(true) = explicit immediate upgrade.
+pub fn run_pass(engine: &Engine<'_>, request: Option<bool>) -> Result<(Option<crate::resolve::Plan>, Option<Outcome>), String> {
+    if request == Some(false) {
+        return engine.run_once(false);
+    }
+    let forced = request == Some(true);
     let control = engine.load_control();
     let n = now();
     let deferred = control.defer_until.map(|t| n < t).unwrap_or(false);
@@ -245,8 +251,8 @@ fn dispatch(
         "update.plan" => LocalResponse::ok(id, lock.lock().unwrap().last_plan.clone().unwrap_or(Value::Null)),
         "update.check" | "update.apply" => {
             let mut s = lock.lock().unwrap();
-            if let Some(b) = &s.busy {
-                return LocalResponse::err(id, "busy", format!("already {b}"));
+            if s.busy.is_some() || s.request.is_some() {
+                return LocalResponse::err(id, "busy", format!("already {}", s.busy.as_deref().unwrap_or("scheduled")));
             }
             s.request = Some(req.method == "update.apply");
             cv.notify_all();
@@ -268,5 +274,23 @@ fn dispatch(
             }
         }
         other => LocalResponse::err(id, "not-found", format!("unhandled method {other}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_queued_upgrade_cannot_be_overwritten_by_a_check_and_requires_authorization() {
+        let state: State = Arc::new((Mutex::new(Shared::default()), Condvar::new()));
+        let mut req = LocalRequest { protocol: 1, id: 1, method: "update.apply".into(), params: json!({}) };
+        let dir = std::env::temp_dir();
+        assert_eq!(dispatch(&req, false, &state, &dir, &dir, &Value::Null).error.unwrap().code, "forbidden");
+        assert!(state.0.lock().unwrap().request.is_none());
+        assert!(dispatch(&req, true, &state, &dir, &dir, &Value::Null).ok);
+        req.method = "update.check".into();
+        assert_eq!(dispatch(&req, true, &state, &dir, &dir, &Value::Null).error.unwrap().code, "busy");
+        assert_eq!(state.0.lock().unwrap().request, Some(true));
     }
 }

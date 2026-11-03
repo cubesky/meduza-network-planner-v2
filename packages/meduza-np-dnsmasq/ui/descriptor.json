@@ -94,7 +94,8 @@
         "监听": "监听",
         "重启前端": "重启前端",
         "重启期间客户端解析会短暂中断。": "重启期间客户端解析会短暂中断。",
-        "Client-facing DNS. Upstreams follow enabled MosDNS / Mihomo DNS services and their actual listeners automatically; real DNS probes add healthy backends and remove failed ones. Default fallback: 119.29.29.29, 1.0.0.1. No DHCP; /etc/resolv.conf is not changed.": "面向客户端的 DNS。自动跟随已启用的 MosDNS / Mihomo DNS 及其实际监听地址，无需填写后端列表；真实 DNS 查询成功后加入上游，故障时移除。默认 fallback：119.29.29.29、1.0.0.1。不提供 DHCP；不修改 /etc/resolv.conf。"
+        "Client-facing DNS. Upstreams follow enabled MosDNS / Mihomo DNS services and their actual listeners automatically; real DNS probes add healthy backends and remove failed ones. Default fallback: 119.29.29.29, 1.0.0.1. No DHCP; /etc/resolv.conf is not changed.": "面向客户端的 DNS。自动跟随已启用的 MosDNS / Mihomo DNS 及其实际监听地址，无需填写后端列表；真实 DNS 查询成功后加入上游，故障时移除。默认 fallback：119.29.29.29、1.0.0.1。不提供 DHCP；不修改 /etc/resolv.conf。",
+        "Addresses clients query. Omitted or empty listens on all local IPv4/IPv6 interfaces.": "??????????????????????? IPv4/IPv6 ????????????????"
       },
       "fields": {
         "address": "地址",
@@ -129,7 +130,8 @@
         "监听": "監聽",
         "重启前端": "重新啟動前端",
         "重启期间客户端解析会短暂中断。": "重新啟動期間用戶端解析會短暫中斷。",
-        "Client-facing DNS. Upstreams follow enabled MosDNS / Mihomo DNS services and their actual listeners automatically; real DNS probes add healthy backends and remove failed ones. Default fallback: 119.29.29.29, 1.0.0.1. No DHCP; /etc/resolv.conf is not changed.": "面向用戶端的 DNS。自動跟隨已啟用的 MosDNS / Mihomo DNS 及其實際監聽位址，無需填寫後端清單；實際 DNS 查詢成功後加入上游，故障時移除。預設 fallback：119.29.29.29、1.0.0.1。不提供 DHCP；不修改 /etc/resolv.conf。"
+        "Client-facing DNS. Upstreams follow enabled MosDNS / Mihomo DNS services and their actual listeners automatically; real DNS probes add healthy backends and remove failed ones. Default fallback: 119.29.29.29, 1.0.0.1. No DHCP; /etc/resolv.conf is not changed.": "面向用戶端的 DNS。自動跟隨已啟用的 MosDNS / Mihomo DNS 及其實際監聽位址，無需填寫後端清單；實際 DNS 查詢成功後加入上游，故障時移除。預設 fallback：119.29.29.29、1.0.0.1。不提供 DHCP；不修改 /etc/resolv.conf。",
+        "Addresses clients query. Omitted or empty listens on all local IPv4/IPv6 interfaces.": "??????????????????????? IPv4/IPv6 ?????????????????"
       },
       "fields": {
         "address": "位址",

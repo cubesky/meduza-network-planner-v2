@@ -1022,3 +1022,106 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   self-test does not fully validate key bytes on every provider, documented accordingly. These additional fixes
   are source-only and require a subsequent release; v0.1.6 upgrade itself is complete. Authoritative Manager
   configuration and published artifacts were not modified.
+- 2026-11-03 (per the user) Fix default-open dnsmasq listeners and expose Mihomo binary preparation progress.
+  Omitted/empty listenAddresses now use dnsmasq's native all-interface behavior; effective IPv4/IPv6 wildcard
+  addresses still participate in listener ownership, loop prevention and probes. Manager DNS compilation uses
+  the same defaults. Updated config schema/UI help and the specification; explicit address lists remain scoped.
+  Remote diagnosis found revision 9 rejected by the old empty-list validation and the rollback stopping
+  mihomo-pkg/prepare before its binary became ready. Provider download telemetry is now independent of its usable
+  binary record: measured archive bytes, target/platform, attempt, validation/activation stage, retry time/error
+  and update time. Exclusive kernel locks protect the transfer and preparer lifetime, detect termination even
+  during retry backoff, prevent competing downloads from truncating an active file and preserve manual mode's
+  no-network behavior. Download-now restarts the applied preparer through bounded planner IPC instead of doing
+  a long transfer inside the action timeout. Failed validation preserves the previous binary/provider; successful
+  activation is not invalidated by a final telemetry write failure. Curl has connect and low-speed deadlines.
+  Manager and Dashboard show a separate binary-progress card; 100% downloaded does not imply binary readiness.
+  Verified focused Rust tests (dnsmasq, Mihomo provider, shared fetch, updater retry and protocol schema/manifests),
+  strict Clippy, 22 Manager API/compiler/localization/provider tests, UI-kit type checking and both production UI
+  builds. Full-page Chrome tests cover transfer, retry, interruption, verification, completion and missing
+  telemetry; preview target/manager-binary-progress.png. A temporary native dnsmasq in the remote planner network
+  namespace answered the same test record over both 127.0.0.1 and 10.42.10.12 with no explicit listen address.
+  Test daemon was stopped; production configuration and released artifacts were not changed. These fixes are
+  source-only and require new node components plus the Manager UI to be released/deployed.
+- 2026-11-03 (per the user) Implement updater-first mutual upgrades (D62). Read-only inspection of
+  10.42.10.9 confirmed installed group v0.1.7/generation 8, with planner and updater 0.1.6; the public v0.1.7
+  manifest explicitly reuses both from v0.1.6, and /proc confirmed planner runs the corresponding store object.
+  The old implementation really did activate planner before updater, independently of that expected reuse.
+  New updater plans now stage the complete verified target, journal a separate updater-only generation and ask
+  planner's authorized updater.activate method to invoke a bounded activation helper. The independent owner
+  starts the new updater after exit 75; it immediately resumes the saved transaction without another channel
+  check/download and only then upgrades planner and remaining packages. The old group stays installed until
+  completion. Failed takeover leaves planner untouched; subsequent planner/package rollback retains the new
+  updater. Store, opkg and apk use the same boundary; native rollback still requires cached previous archives.
+  Helper execution is constrained to the staged updater object (or the native updater), accepts no arbitrary
+  request paths/commands, and kills its process group on timeout. Old journals and previous planner protocols
+  remain supported; planner-down bootstrap/repair does not depend on a working planner.
+  Verified all 33 updater tests, including real executable helper activation, simultaneous/one-sided upgrades,
+  offline continuation, failures before activation/installed-record persistence, failed takeover, planner rollback,
+  previous planner compatibility, bootstrap and native opkg/apk command ordering. Planner helper execution/path
+  rejection test and strict planner/updater/runtime/protocol Clippy pass. Full planner (36 unit + 6 integration),
+  protocol (34) and runtime (18) regressions also passed during this change. Final updater tests ran serially:
+  WSL1 parallel runs intermittently rejected directory renames, including an unchanged store test, with EACCES;
+  the same renames succeeded afterward. Logs: target/check-mutual-upgrade{,-final}.log. Updated specification,
+  decisions and operations. Source-only: production artifacts/configuration were not replaced. The first
+  transition initiated by an older updater still follows that older code until the new updater is installed.
+- 2026-11-03 (per the user) Add Manager-triggered node upgrades (D63). The node detail's Packages and
+  updates card now offers Check for updates and Upgrade now to operator/admin, with read-only status for viewer.
+  The existing authenticated/CSRF-protected/audited job channel delivers update-check/update-apply to planner,
+  which forwards only fixed updater socket methods and reports scheduling acceptance or the actual failure.
+  Planner advertises update.remoteControl; previous nodes show disabled controls with an upgrade explanation.
+  Pending requests deduplicate, conflicting requests reject, delivery expires after ten minutes, and bounded
+  planner receipts survive replacement/HTTP-acknowledgement replay. Request acceptance is distinct from package
+  completion; queued/delivered/accepted/failed/expired states sit alongside the existing real upgrade progress.
+  Fixed an existing updater issue: explicit checks now remain read-only even with autoApply enabled; explicit
+  apply bypasses pause/window once and can retry failed groups while preserving configured automatic policy.
+  A check cannot overwrite an already queued apply. Requests accept no package/instance/source/command overrides.
+  Verified 37 Rust tests (35 updater and 2 planner helper/relay tests), strict planner/updater Clippy, 27 Manager
+  API/sync/Access/translation tests, Manager/UI-kit type checks, Manager and Dashboard production builds.
+  Full-page Chrome tests click both controls, check request payloads, enforce viewer/unsupported/pending/active
+  restrictions, show errors and distinguish accepted requests from completion through updater takeover. Preview:
+  target/manager-update-progress.png. Updated specification/operations/decisions. Source-only: release/deploy
+  Manager, planner and updater to enable these controls; no production node or Manager artifacts were replaced.
+- 2026-11-03 (per the user) Diagnose the repeated dnsmasq empty-list error after explicit wildcard publish.
+  Authenticated read-only inspection of 10.42.10.9 / xuzhou-b1 confirms Manager's desired rev-000010 has
+  listenAddresses ["0.0.0.0"], port 53. A temporary native dnsmasq on isolated test port 55353 answered the
+  same record on loopback and 10.42.10.12; it was stopped and its test PID file removed. The last-good
+  rev-000003 still contains [] and the installed dnsmasq is reused 0.1.6 within group v0.1.7. Logs show
+  rev-000010 first fails OpenVPN lemon preflight: configured lzo-asym is rejected by the compression-disabled
+  provider. Last-good recovery then rejects the old DNS list and overwrites the original apply error.
+  Source fix adds optional sync.recoveryError with the historical revision, preserving sync.lastError for
+  the desired apply failure and clearing recovery diagnostics on a fresh successful restore/application.
+  Manager and Dashboard display both separately; node overview exposes a recovery problem. Regenerated
+  schemas/node-report.json. Executable-backed last-good recovery regression, 27 protocol unit tests, schema
+  test, strict planner/protocol/Dashboard Clippy, 6 Manager API/i18n tests, full-page Chrome assertions,
+  Manager type check and both production UI builds pass. Native credentials remained on the server; only
+  non-secret configuration fields were printed. No production configuration/binary/snapshot was modified;
+  OpenVPN compression compatibility remains unresolved, and the source diagnostic fix needs a release.
+- 2026-11-04 (per the user) Add compression support to openvpn-pkg (D65). The provider now statically
+  includes pinned LZO 2.10 and LZ4 1.10.0, ships their licenses and records both capabilities in build-info.
+  Target builds verify static linkage, run real library compression/decompression round trips, and exercise
+  OpenVPN crypto/options preflight for none, lzo-no, lzo-asym, lz4, lz4-v2, stub, stub-v2 and migrate.
+  The pinned OpenVPN 2.7 retains incoming compression compatibility and sends uncompressed outgoing traffic;
+  existing per-connection policy is preserved. No runtime compression libraries or base image changes are needed.
+  Native linux/amd64 Podman build on 10.42.10.9 passed with two CPUs/1 GiB limits, all eight preflights,
+  management binding, no ELF interpreter/DT_NEEDED entries, and the complete exported metadata/license tree.
+  Validation artifacts: /var/standalone/meduza/validation/openvpn-compression-20261104/{build-final.log,out}.
+  Provider recipe/manifests checks (6), OpenVPN tests (9), strict OpenVPN Clippy and shell syntax checks pass.
+  Other architectures remain subject to the existing CI target matrix. Source-only: no production provider,
+  configuration or service was replaced; release and upgrade openvpn-pkg to resolve the deployed lzo-asym error.
+- 2026-11-04 (per the user) Add per-package disk/RSS reporting to Manager and Dashboard (D66).
+  Optional resources.packages reports allocated package-file bytes, separate persistent service/provider data,
+  RSS, sample times and per-instance/process details. Store measurements include retained versions; native
+  opkg/APK inventories avoid scanning shared system directories. Walks deduplicate hard links and overlapping
+  roots, do not follow symlinks, are bounded and cache for 60 seconds. OpenVPN and FRR process/child memory
+  belongs to its service instance without duplicating it in the binary provider. Independent updater and
+  Dashboard daemons publish namespace-local ten-second samples; planner rejects stale/wrong-boot samples.
+  Unknown values, idle process RSS and shared base-image layers remain distinct in the UI. Regenerated the
+  node-report schema and documented kernel/shared-layer accounting limits. Verified seven new Rust regressions
+  (including two live supervised external instances), schema consistency, strict runtime/protocol/planner/
+  updater/Dashboard Clippy, six Manager API/i18n tests with authenticated resource-report ingestion, all affected
+  frontend type checks and both production UI builds. Full Manager and Dashboard pages pass desktop/mobile
+  Chrome checks for instance totals, provider disk, independent updater PID namespaces, zero/unknown/legacy
+  states and expandable details. Screenshot: target/package-resources.png. Source-only: release updated planner,
+  updater, Dashboard and Manager artifacts; production node binaries/configuration were not replaced.
+  Final protocol/runtime/planner regression passed all 102 tests (including six executable-backed engine cases),
+  followed by strict Clippy for all five affected Rust packages. Log: target/check-package-resources-full.log.
