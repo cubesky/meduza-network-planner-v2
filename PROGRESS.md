@@ -929,3 +929,25 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   workspace typechecks/builds and native Chrome resource comparisons passed. Chrome covered all three resources,
   unconfigured/configured/missing/viewer states, legacy versions, activation targeting and restart availability.
   Source changes only; not released or deployed.
+- 2026-11-03 (per the user) Investigate the node at 10.42.10.9: updater is enabled/unpaused but still pinned to
+  v0.1.1 and the bootstrap file:// import source. The online stable feed advertises v0.1.3; a verified upgrade plan
+  using the online source has no blockers. The running default gateway/DNS are already 10.42.10.1/119.29.29.29.
+  Separately, add updater DHCP macvlan deployment support while keeping planner on its static network, and restore
+  both explicit gateway/DNS after lease renewals without changing lease addresses. Add an optional DHCP Quadlet
+  network, interval compatibility and idempotent route checks. All 19 network/deployment tests passed; real remote
+  network/mount namespace validation retained a changed lease IP while restoring the gateway and mounted resolver.
+  The user requested waiting for v0.1.4 and supervising that upgrade. Release run 41491203924 failed at archive URL
+  validation after publishing the GitHub Release; OCI verification passed but Pages was not updated (stable remains
+  v0.1.3). GitHub CLI keyring credentials are invalid and anonymous job-log downloads are denied; requested the
+  final error lines or restored authentication. Deployment config/status backups are in the remote private directory
+  /var/standalone/meduza/backups/pre-v0.1.4-20261102T180035Z. No upgrade applied; containers remain on v0.1.1.
+  Baseline planner configuration is already apply-failed because the requested MosDNS binary package has not
+  downloaded successfully. DHCP changes are source-only; the remote static/shared network deployment is unchanged.
+- 2026-11-03 (per the user) v0.1.4 publish URL-check failure: the reported Dashboard 0.1.3 archive is present in
+  the v0.1.4 Release at the expected 864001-byte size; reusing that component version/name is correct. The workflow
+  used one silent HEAD request and incorrectly labelled every transport/HTTP failure as a missing file. Add bounded
+  retries for all curl failures, connection/transfer/retry time limits and visible underlying errors for archive and
+  SBOM URL checks. Both checks still fail publication after persistent errors. All 23 release Python tests passed,
+  including real HTTP temporary-404/503/disconnect and permanent-missing cases for both workflow loops; actionlint
+  and whitespace checks passed. Inline workflow logic also works for workflow_dispatch of an existing immutable
+  source tag after the default-branch workflow is updated. Source fix only; remote upgrade remains pending release.

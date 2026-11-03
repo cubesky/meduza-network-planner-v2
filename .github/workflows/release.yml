@@ -534,13 +534,16 @@ jobs:
             target/release/meduza-np-release oci-check --manifest "$M" --ref "$ref" --raw /tmp/index.json
           done
           gh release edit "$TAG" --draft=false
-          jq -r '.packages[].artifacts[] | select(.format != "oci") | .url' "$M" | while read -r u; do curl -fsIL "$u" >/dev/null || { echo "missing $u"; exit 1; }; done
+          # Newly published assets and their redirects can be temporarily unavailable. Keep the real curl error
+          # visible; a single network failure does not prove that an immutable/reused archive is missing.
+          jq -r '.packages[].artifacts[] | select(.format != "oci") | .url' "$M" |
+            while IFS= read -r u; do curl --retry 5 --retry-all-errors --retry-delay 2 --retry-max-time 180 --connect-timeout 15 --max-time 60 -fsSIL "$u" >/dev/null || { echo "::error::Release asset URL verification failed after retries: $u"; exit 1; }; done
       - name: Pages release inventory (downloads, images, SBOMs and package metadata; no GitHub API)
         run: |
           python3 tools/pages-api.py release --site site --group-version "$TAG" \
             --repository "$GITHUB_REPOSITORY" --base-url "$PAGES_URL" --artifacts dist --sbom sbom
           jq -r '.assets[] | select(.kind == "sbom") | .url' "site/releases/$TAG/catalog.json" |
-            while read -r u; do curl --retry 3 -fsIL "$u" >/dev/null || { echo "missing $u"; exit 1; }; done
+            while IFS= read -r u; do curl --retry 5 --retry-all-errors --retry-delay 2 --retry-max-time 180 --connect-timeout 15 --max-time 60 -fsSIL "$u" >/dev/null || { echo "::error::Release asset URL verification failed after retries: $u"; exit 1; }; done
       - uses: actions/upload-artifact@v4
         with: { name: site-new, path: site/ }
 

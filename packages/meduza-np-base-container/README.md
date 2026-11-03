@@ -70,8 +70,8 @@ as its upstream gateway and independent system DNS. This bootstrap path works be
 and while the client-facing DNS/proxy services are stopped. Remote configuration still controls the LAN-facing
 services and routes; Mihomo's TPROXY rules act on incoming LAN traffic, not the node's own outbound connections.
 
-Use rootful Podman and a macvlan network with static IPAM. Reserve two free LAN addresses outside the main router's
-DHCP pool: one for planner (the side router), another for the independent updater. Both containers connect directly
+Use rootful Podman and a macvlan network. Reserve a fixed LAN address outside the main router's DHCP pool for
+planner (the side router); updater can use another fixed address or its own DHCP lease, as described below. Both containers connect directly
 to the main router, so updater does not depend on planner or host routing to fetch the first packages. Edit the NIC,
 subnet and addresses below for your LAN:
 
@@ -86,7 +86,7 @@ In `/etc/meduza-np/node.env`, set the main router's LAN IP and independent DNS s
 MEDUZA_NP_DEFAULT_GW=192.168.1.1
 MEDUZA_NP_DEFAULT_GW_DEV=eth0
 MEDUZA_NP_DNS_NAMESERVERS=223.5.5.5,119.29.29.29
-MEDUZA_NP_DNS_MONITOR_INTERVAL=5
+MEDUZA_NP_NETWORK_MONITOR_INTERVAL=5
 ```
 
 The gateway and DNS may use different addresses. `DEFAULT_GW_DEV` names the interface **inside** each container,
@@ -108,12 +108,34 @@ For Quadlet, edit `deploy/podman/macvlan/meduza-np-lan.network` (parent, subnet,
 macvlan `.container` files. Install these three files instead of the bridge network/container files, together with
 the usual volume files, and use the same `node.env`. Pin the image digest in both container files as usual.
 
+For a DHCP updater, leave planner on its static network and create a second macvlan network on the same parent
+interface. Podman/Netavark obtains and renews the address; the image overrides the upstream gateway and DNS from
+`node.env`, before the updater starts and again if lease renewal changes those settings:
+
+```sh
+systemctl enable --now netavark-dhcp-proxy.socket
+podman network create --driver macvlan --opt parent=eth0 --ipam-driver dhcp meduza-np-updater-dhcp
+deploy/podman/run.sh --env-file /etc/meduza-np/node.env --network macvlan \
+  --macvlan-network meduza-np-lan --ip 192.168.1.2 \
+  --updater-macvlan-network meduza-np-updater-dhcp --updater-ip dhcp
+```
+
+This requires Netavark with DHCP proxy support. The script checks the updater network's DHCP IPAM driver before
+replacing containers, and `--again` retains both network choices. For Quadlet, install the optional
+`macvlan/meduza-np-updater-dhcp.network`, edit its parent, change the updater's `Network=` to
+`meduza-np-updater-dhcp.network` and remove its `IP=` line. Keep planner's static network and `IP=`.
+With Compose, attach updater to that external DHCP network without `ipv4_address`; planner keeps its own static
+network/address. Separate their network namespaces first if the deployment uses `network_mode: service:updater`,
+otherwise moving updater to DHCP also moves the side-router IP used by LAN clients. Keep `NET_ADMIN` and the
+gateway/DNS environment variables on updater. The image does not start a second DHCP client or change lease IPs.
+
 | Environment variable | Behavior |
 | --- | --- |
 | `MEDUZA_NP_DEFAULT_GW` | IPv4 default gateway, applied to both roles before any download/dependency setup; requires declared `macvlan` mode and `NET_ADMIN` |
 | `MEDUZA_NP_DEFAULT_GW_DEV` | Optional container interface for that gateway |
 | `MEDUZA_NP_DNS_NAMESERVERS` | Comma/whitespace-separated IPv4/IPv6 system resolver addresses; applied to both roles in any mode |
-| `MEDUZA_NP_DNS_MONITOR_INTERVAL` | Positive integer seconds between DNS restoration checks; default 5 |
+| `MEDUZA_NP_NETWORK_MONITOR_INTERVAL` | Positive integer seconds between gateway/DNS restoration checks; default 5 |
+| `MEDUZA_NP_DNS_MONITOR_INTERVAL` | Legacy interval fallback when `MEDUZA_NP_NETWORK_MONITOR_INTERVAL` is unset |
 
 Old-image names remain supported: `DEFAULT_GW`, `DEFAULT_GW_DEV`, `DNS_NAMESERVERS` (or `DNS_NAMESERVER`),
 `DNS_MONITOR_INTERVAL`. The corresponding `MEDUZA_NP_*` variable takes precedence, including an explicit empty
@@ -122,10 +144,11 @@ forced by default. Invalid values or an unsuccessful initial route/DNS write sto
 it starts. DNS preserves resolver search/options and writes through the runtime's mounted `resolv.conf`; it is
 restored if another process overwrites its nameserver list. The monitor stops with its role.
 
-The supplied deployment uses static IPAM, so it does not acquire or renew a DHCP gateway/DNS lease. The startup
-gateway override replaces the metric-zero default route (and takes precedence over defaults with higher metrics).
-It is not a DHCP client or a watcher that competes with runtime DHCP renewals. Both macvlan units grant updater
-`NET_ADMIN` only to apply this explicit route; updater remains without network administration privileges in the
+The gateway override replaces the metric-zero default route (and takes precedence over defaults with higher
+metrics). The monitor restores this explicit route and DNS within the configured interval after a runtime/DHCP
+overwrite, preserving leased addresses, connected routes and resolver search/options. A gateway-only override
+also starts the monitor. Steady-state checks do not rewrite the route or resolver. Both macvlan units grant updater
+`NET_ADMIN` only to maintain this explicit route; updater remains without network administration privileges in the
 bridge/host deployment. A gateway override in bridge/host mode is rejected, so it cannot change the host default
 route by accident. Host mode continues to use planner's remotely configured host networking.
 
@@ -210,6 +233,12 @@ running updater container until it restarts).
 | Uninstall | stop units, remove the unit files; `podman volume rm meduza-np-store meduza-np-ipc` (keep `meduza-np-node` if the identity should survive) |
 
 ## Base image replacement
+
+If a node does not follow new group releases, inspect `updater-cli status` for `source`, `pinnedGroupVersion`,
+`autoApply`, `control.paused` and `state.lastResult`. An offline `file://` source only sees the imported metadata;
+`MEDUZA_NP_GROUP_VERSION` pins an exact group even when auto-apply is enabled. To resume channel updates, unset
+that variable, set `MEDUZA_NP_UPDATE_BASE_URL` to the live release site and re-create the containers so they read
+the changed environment. Changing the env file followed by `podman restart` does not reload container environment.
 
 Package updates never need a new base image: the updater replaces planner, plugins and itself inside the store
 volume. A new base image (Alpine fixes, a new baseline updater, entrypoint changes) is deployed by the host helper

@@ -13,7 +13,7 @@ load_network_config() {
 	network_gateway=${MEDUZA_NP_DEFAULT_GW-${DEFAULT_GW:-}}
 	network_device=${MEDUZA_NP_DEFAULT_GW_DEV-${DEFAULT_GW_DEV:-}}
 	network_dns=${MEDUZA_NP_DNS_NAMESERVERS-${DNS_NAMESERVERS:-${DNS_NAMESERVER:-}}}
-	network_interval=${MEDUZA_NP_DNS_MONITOR_INTERVAL-${DNS_MONITOR_INTERVAL:-5}}
+	network_interval=${MEDUZA_NP_NETWORK_MONITOR_INTERVAL-${MEDUZA_NP_DNS_MONITOR_INTERVAL-${DNS_MONITOR_INTERVAL:-5}}}
 	if [ -n "$network_gateway" ]; then
 		# Never accidentally change the host's default route or send a bridge container to a LAN-only gateway.
 		[ "${MEDUZA_NP_NETWORK_MODE:-}" = macvlan ] ||
@@ -26,10 +26,11 @@ load_network_config() {
 	case "$network_device" in *[!a-zA-Z0-9_.:-]*) network_error "invalid DEFAULT_GW_DEV"; return 1 ;; esac
 	[ -z "$network_device" ] || [ -n "$network_gateway" ] ||
 		{ network_error "DEFAULT_GW_DEV requires DEFAULT_GW"; return 1; }
-	[ -n "$network_dns" ] || return 0
-	case "$network_interval" in '' | *[!0-9]*) network_error "DNS_MONITOR_INTERVAL must be a positive integer"; return 1 ;; esac
+	[ -n "$network_gateway$network_dns" ] || return 0
+	case "$network_interval" in '' | *[!0-9]*) network_error "NETWORK_MONITOR_INTERVAL must be a positive integer"; return 1 ;; esac
 	[ "$network_interval" -gt 0 ] 2>/dev/null ||
-		{ network_error "DNS_MONITOR_INTERVAL must be a positive integer"; return 1; }
+		{ network_error "NETWORK_MONITOR_INTERVAL must be a positive integer"; return 1; }
+	[ -n "$network_dns" ] || return 0
 	# Check characters before word splitting, so shell patterns and resolver hostnames cannot be expanded/resolved.
 	case "$network_dns" in *[!0-9a-fA-F:.,[:space:]]*) network_error "DNS_NAMESERVERS must contain IP addresses"; return 1 ;; esac
 	network_dns=$(printf '%s' "$network_dns" | tr ',\t\r\n' '    ')
@@ -52,6 +53,21 @@ load_network_config() {
 
 apply_gateway() {
 	[ -n "$network_gateway" ] || return 0
+	# DHCP owns the address and connected routes. Keep only our explicit upstream default stable on renewals.
+	# Avoid needless netlink writes/logs when the desired metric-zero route is already present.
+	defaults=$(ip -4 route show default) || { network_error "cannot read default routes"; return 1; }
+	if printf '%s\n' "$defaults" | awk -v gw="$network_gateway" -v device="$network_device" '
+		$1 == "default" {
+			via=""; dev=""; metric=0; multipath=0
+			for (i=2; i<=NF; i++) {
+				if ($i == "via") via=$(i+1)
+				if ($i == "dev") dev=$(i+1)
+				if ($i == "metric") metric=$(i+1)
+				if ($i == "nexthop") multipath=1
+			}
+			if (via == gw && (device == "" || dev == device) && metric == 0 && !multipath) found=1
+		}
+		END { exit !found }'; then return 0; fi
 	set -- ip -4 route replace default via "$network_gateway"
 	[ -z "$network_device" ] || set -- "$@" dev "$network_device"
 	"$@" || { network_error "cannot set default gateway to $network_gateway"; return 1; }
@@ -84,6 +100,7 @@ apply_dns() {
 }
 
 dns_monitor_loop() {
+	# Keep the existing entrypoint's monitor lifecycle; it now restores both independent bootstrap settings.
 	dns_sleep_pid=""
 	trap '[ -z "$dns_sleep_pid" ] || kill "$dns_sleep_pid" 2>/dev/null || true; exit 0' TERM INT
 	while :; do
@@ -91,6 +108,7 @@ dns_monitor_loop() {
 		dns_sleep_pid=$!
 		wait "$dns_sleep_pid" || return 0
 		dns_sleep_pid=""
+		apply_gateway || log network "gateway restore failed; retrying in ${network_interval}s"
 		apply_dns || log network "DNS restore failed; retrying in ${network_interval}s"
 	done
 }
@@ -106,7 +124,7 @@ start_network() {
 	load_network_config
 	apply_gateway
 	apply_dns
-	if [ -n "$network_dns" ]; then
+	if [ -n "$network_gateway$network_dns" ]; then
 		dns_monitor_loop &
 		dns_monitor_pid=$!
 	fi

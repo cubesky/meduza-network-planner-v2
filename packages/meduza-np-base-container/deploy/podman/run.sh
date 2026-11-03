@@ -4,6 +4,8 @@
 #
 #   ./run.sh [--env-file FILE] [--image REF] [--network bridge|host|macvlan] [--publish PORT/PROTO]... [--import DIR]
 #   ./run.sh --network macvlan --macvlan-network NAME --ip PLANNER_IP --updater-ip UPDATER_IP [other options]
+#   ./run.sh --network macvlan --macvlan-network STATIC_NAME --ip PLANNER_IP \
+#            --updater-macvlan-network DHCP_NAME --updater-ip dhcp [other options]
 #            (--publish PORT/PROTO uses the same host port; HOST:PORT/PROTO or IP:HOST:PORT/PROTO are passed as given)
 #   ./run.sh --again [--image REF]   repeat the last deployment's options (base-image.sh uses this to re-create the
 #                                    containers from another image)
@@ -35,6 +37,7 @@ ENV_FILE=/etc/meduza-np/node.env
 IMAGE=ghcr.io/meduza-np/meduza-np-base-container:stable
 NETMODE=bridge
 MACVLAN_NETWORK=meduza-np-lan
+UPDATER_MACVLAN_NETWORK=""
 PLANNER_IP=""
 UPDATER_IP=""
 PUBLISH=""
@@ -47,6 +50,7 @@ while [ $# -gt 0 ]; do
 	--image) IMAGE=$2; shift 2 ;;
 	--network) NETMODE=$2; save_arg "$1"; save_arg "$2"; shift 2 ;;
 	--macvlan-network) MACVLAN_NETWORK=$2; save_arg "$1"; save_arg "$2"; shift 2 ;;
+	--updater-macvlan-network) UPDATER_MACVLAN_NETWORK=$2; save_arg "$1"; save_arg "$2"; shift 2 ;;
 	--ip) PLANNER_IP=$2; save_arg "$1"; save_arg "$2"; shift 2 ;;
 	--updater-ip) UPDATER_IP=$2; save_arg "$1"; save_arg "$2"; shift 2 ;;
 	--publish)
@@ -96,21 +100,34 @@ updater_caps=CHOWN,DAC_OVERRIDE,FOWNER,SETUID,SETGID
 if [ "$NETMODE" = macvlan ]; then
 	[ "$(id -u)" = 0 ] || { echo "macvlan requires rootful Podman" >&2; exit 2; }
 	[ -n "$PLANNER_IP" ] && [ -n "$UPDATER_IP" ] && [ "$PLANNER_IP" != "$UPDATER_IP" ] ||
-		{ echo "macvlan requires distinct --ip and --updater-ip LAN addresses" >&2; exit 2; }
-	case "$MACVLAN_NETWORK" in '' | *[!a-zA-Z0-9_.-]*) echo "invalid --macvlan-network name" >&2; exit 2 ;; esac
+		{ echo "macvlan requires --ip and a distinct --updater-ip (IPv4 or dhcp)" >&2; exit 2; }
+	UPDATER_MACVLAN_NETWORK=${UPDATER_MACVLAN_NETWORK:-$MACVLAN_NETWORK}
+	for network in "$MACVLAN_NETWORK" "$UPDATER_MACVLAN_NETWORK"; do
+		case "$network" in '' | *[!a-zA-Z0-9_.-]*) echo "invalid macvlan network name" >&2; exit 2 ;; esac
+		[ "$(podman network inspect --format '{{.Driver}}' "$network")" = macvlan ] ||
+			{ echo "create the macvlan network $network first (see README)" >&2; exit 2; }
+	done
+	[ "$PLANNER_IP" != dhcp ] || { echo "planner requires a fixed IPv4 --ip" >&2; exit 2; }
 	for address in "$PLANNER_IP" "$UPDATER_IP"; do
+		[ "$address" != dhcp ] || continue
 		# Full address/subnet validation is done by Podman; reject option/network-spec injection here.
 		printf '%s\n' "$address" | awk -F. 'NF != 4 { exit 1 } { for (i=1; i<=4; i++) if ($i !~ /^[0-9]+$/ || $i ~ /^0[0-9]/ || $i+0 > 255) exit 1 }' ||
 			{ echo "macvlan addresses must be IPv4 literals: $address" >&2; exit 2; }
 	done
-	[ "$(podman network inspect --format '{{.Driver}}' "$MACVLAN_NETWORK")" = macvlan ] ||
-		{ echo "create the macvlan network $MACVLAN_NETWORK first (see README)" >&2; exit 2; }
-	updater_net="$MACVLAN_NETWORK:ip=$UPDATER_IP"
+	if [ "$UPDATER_IP" = dhcp ]; then
+		[ "$UPDATER_MACVLAN_NETWORK" != "$MACVLAN_NETWORK" ] ||
+			{ echo "DHCP updater requires a separate network from the static planner" >&2; exit 2; }
+		[ "$(podman network inspect --format '{{index .IPAMOptions "driver"}}' "$UPDATER_MACVLAN_NETWORK")" = dhcp ] ||
+			{ echo "--updater-ip dhcp requires a macvlan network with --ipam-driver dhcp" >&2; exit 2; }
+		updater_net="$UPDATER_MACVLAN_NETWORK"
+	else
+		updater_net="$UPDATER_MACVLAN_NETWORK:ip=$UPDATER_IP"
+	fi
 	updater_mode=macvlan
 	# Only for this mode: the entrypoint applies the explicitly configured upstream gateway in its own namespace.
 	updater_caps="$updater_caps,NET_ADMIN"
-elif [ -n "$PLANNER_IP$UPDATER_IP" ] || [ "$MACVLAN_NETWORK" != meduza-np-lan ]; then
-	echo "--ip, --updater-ip and --macvlan-network require --network macvlan" >&2
+elif [ -n "$PLANNER_IP$UPDATER_IP$UPDATER_MACVLAN_NETWORK" ] || [ "$MACVLAN_NETWORK" != meduza-np-lan ]; then
+	echo "--ip, --updater-ip and macvlan network options require --network macvlan" >&2
 	exit 2
 fi
 

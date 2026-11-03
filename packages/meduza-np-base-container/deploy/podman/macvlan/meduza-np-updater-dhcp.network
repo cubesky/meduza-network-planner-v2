@@ -1,0 +1,12 @@
+# Optional rootful updater-only DHCP network. EDIT parent for the LAN interface.
+# Keep planner on meduza-np-lan.network with a fixed, reserved side-router IP.
+[Unit]
+Requires=netavark-dhcp-proxy.socket
+After=netavark-dhcp-proxy.socket
+
+[Network]
+NetworkName=meduza-np-updater-dhcp
+Driver=macvlan
+Options=parent=eth0
+IPAMDriver=dhcp
+IPv6=false
