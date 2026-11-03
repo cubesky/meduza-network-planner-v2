@@ -1360,21 +1360,28 @@ proxied. The OpenWrt adapter (OpenClash) keeps OpenClash's own TPROXY rules.
 ## D60 — Applying external connections does not wait for a reachable peer
 
 An unavailable external peer must not fail a configuration revision or roll back unrelated DNS, routing or mesh
-services. Generation plans explicitly mark reconnecting clients with process `startup: connection` and
+services. Generation plans explicitly mark external connection processes with `startup: connection` and
 `restart: always`; planner does not infer this from process names. After files, provider resolution, required
-checks and local network operations succeed, a successful exec is enough to commit such a client. Local spawn
+checks and local network operations succeed, a successful exec is enough to commit such a connection. Local spawn
 errors still fail apply. Normal local daemons retain stable-start verification and the five-quick-failure limit.
 The default startup field is omitted from serialized plans and process identities, preserving unchanged legacy
 daemon hashes/adoption.
 
-OpenVPN outgoing Site2Site clients opt in; Access and Site2Site listeners remain local daemons. Client DNS
-resolution retries indefinitely and native connection waits grow up to 60 seconds. If a client exits (including
+OpenVPN Site2Site instances opt in in both client and server roles; Access listeners retain stable-start checks.
+Client DNS resolution retries indefinitely and native connection waits grow up to 60 seconds. If a connection exits (including
 exit 0), supervisor retries indefinitely with exponential waits capped at 60 seconds and random jitter. A
-client must run at least 60 seconds before its supervisor backoff resets. Runtime failure/backoff, exit reason,
+connection must run at least 60 seconds before its supervisor backoff resets. Runtime failure/backoff, exit reason,
 restart counts and actual tunnel/session health remain visible in node reports; applied does not mean connected.
 No manual restart or republish is needed when the peer returns. Native `--config … --show-ciphers` parses staged
 OpenVPN options without contacting the peer or opening a TUN device; it is a syntax check, not a full certificate
-or connection test. Typed plugin validation continues to check required configuration and secret references.
+or connection test. Static-key instances instead run a required `--test-crypto` self-test without a peer or TUN,
+checking crypto options and the staged key path (overridden in argv while `current` still names the old
+generation). This does not fully validate supplied key contents on every provider. Typed validation continues
+to check configuration and secret references.
+Static-key generation uses `cipher` (TLS uses `data-ciphers-fallback`) and opts into the explicitly configured
+legacy mode with `allow-deprecated-insecure-static-crypto`, required by OpenVPN 2.7. A narrowly scoped
+`ignore-unknown-option` keeps that same configuration usable with earlier providers; TLS configurations never
+carry this compatibility opt-in. See the [OpenVPN manual](https://openvpn.net/community-docs/community-articles/openvpn-2-7-manual/).
 
 WireGuard already applies local interface/configuration independently of handshakes; kernel handshakes retry
 when traffic or a configured persistent keepalive needs the peer. Missing/stale handshakes stay in peer health,

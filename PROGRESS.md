@@ -1002,3 +1002,23 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   report, downloading, automatic refresh to completion, retry details, verification, errors, rollback, optional
   metadata and absent status. Screenshot: target/manager-update-progress.png. Source fix only; the production
   Manager has not been redeployed.
+- 2026-11-03 (per the user) Supervised the v0.1.6 rollout on 10.42.10.9. Verified stable sequence 4,
+  source ab623052378afe8d612541a2b5422b8e49c52089, both signatures and the manifest SHA-256. Original curl stalled
+  at 250610 bytes; stopped updater before switching, made a consistent store backup, and prefetched the 13 signed
+  artifacts with bounded HTTP/1.1 transport. Updater independently verified and activated them; installed generation
+  6 at 11:30:16Z, self-update takeover completed at 11:30:22Z, journal clear, 13/13 and 7144914 bytes complete.
+  Automatic updates remain enabled/unpaused. Both containers healthy; Dashboard HTTPS 200; effective default
+  gateway/DNS remain 10.42.10.1/119.29.29.29, updater DHCP address 10.42.10.209. Base image stays 0.1.5 (software
+  groups update independently). Manager serves the tested new index-4MA-S11o.js; node reports the enriched status.
+  Backup: /var/standalone/meduza/backups/pre-v0.1.6-20261103T112049Z, including store-v0.1.5.tgz. Remote audit:
+  upgrade-v0.1.6.completed and the paired planner/updater status JSON.
+  Functional acceptance found an omission in D60: lemon is a Site2Site server, which v0.1.6 still treats as a
+  strict local daemon, so revision 8 still rolls back to degraded revision 3. Isolated native startup proved the
+  actual exit reason is OpenVPN 2.7 rejecting the configured static-key mode without its compatibility opt-in.
+  Source fix now covers both Site2Site roles (Access remains strict), emits the scoped legacy compatibility
+  options and the proper static cipher directive, and adds a bounded static crypto preflight against the staged
+  key instead of the previous current generation. Nine OpenVPN tests and strict Clippy pass. Real OpenVPN 2.7.7
+  crypto preflight and a localhost-only/null-device listener pass; an invalid cipher is rejected. The native
+  self-test does not fully validate key bytes on every provider, documented accordingly. These additional fixes
+  are source-only and require a subsequent release; v0.1.6 upgrade itself is complete. Authoritative Manager
+  configuration and published artifacts were not modified.

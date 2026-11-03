@@ -171,7 +171,7 @@ of the planner service (or the procd init script) stops them.
 | Situation | What happens / what to do |
 | --- | --- |
 | Manager unreachable | planner keeps running the last good configuration and backs off; local status still works (CLI, dashboard via break-glass link, LuCI) |
-| External VPN peer unreachable | the configuration still applies; OpenVPN clients keep reconnecting, including after repeated process exits (jittered exponential waits, at most 60 seconds); WireGuard retries handshakes when traffic/keepalive requires it. Connection health stays down/starting/degraded until recovery; local file/provider/check/interface failures still fail apply |
+| External VPN peer unreachable | the configuration still applies; OpenVPN Site2Site instances (client and server roles) keep reconnecting, including after repeated process exits (jittered exponential waits, at most 60 seconds); WireGuard retries handshakes when traffic/keepalive requires it. Connection health stays down/starting/degraded until recovery; local file/provider/check/interface failures still fail apply |
 | Power loss during an update | on start the updater reads its journal: before the switch ⇒ nothing changed; after ⇒ verify, else roll back |
 | Power loss during a config apply | planner finds the pending-apply journal and reconciles to the last good configuration |
 | Update keeps failing | `meduza-np update status` shows the last journal and reason; fix the cause, then `meduza-np update apply` |

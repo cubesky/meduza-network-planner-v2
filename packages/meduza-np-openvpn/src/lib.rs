@@ -678,12 +678,16 @@ pub fn render(inst: &Instance, req: &PluginRequest) -> Result<Rendered, PluginEr
         add(format!("data-ciphers {}", inst.data_ciphers.join(":")));
     }
     if let Some(cph) = &inst.cipher {
-        add(format!("data-ciphers-fallback {cph}"));
+        add(format!("{} {cph}", if inst.static_key_ref.is_some() { "cipher" } else { "data-ciphers-fallback" }));
     }
     // Management on a private Unix socket for status queries only.
     add(format!("management {} unix", quote(&format!("{run}/openvpn-{}.mgmt", inst.id))));
 
     if let Some(id) = &inst.static_key_ref {
+        // The user explicitly selected legacy static-key mode. OpenVPN 2.7 needs the opt-in; older supported
+        // providers ignore exactly this option, keeping the same configuration usable with 2.4/2.5/2.6.
+        add("ignore-unknown-option allow-deprecated-insecure-static-crypto".into());
+        add("allow-deprecated-insecure-static-crypto".into());
         let path = secret_file("static.key", id, &mut files)?;
         let dir_word = if inst.role == Role::Server { 0 } else { 1 };
         add(format!("secret {} {dir_word}", quote(&path)));
@@ -745,7 +749,7 @@ pub fn plan(cfg: &OpenVpnConfig, req: &PluginRequest) -> Result<Vec<GenerationPl
     let mut plans = Vec::new();
     for inst in cfg.instances.iter().filter(|i| i.enabled) {
         let r = render(inst, req)?;
-        let client = !inst.is_server();
+        let connection = inst.kind == Kind::Site2site;
         let config_path = format!("${{GENERATION_ROOT}}/openvpn/{}/config.ovpn", inst.id);
         plans.push(GenerationPlan {
             protocol_version: PLUGIN_PROTOCOL_VERSION,
@@ -758,8 +762,8 @@ pub fn plan(cfg: &OpenVpnConfig, req: &PluginRequest) -> Result<Vec<GenerationPl
                 program: None,
                 argv: vec!["--config".into(), config_path.clone()],
                 env: BTreeMap::new(),
-                restart: if client { RestartPolicy::Always } else { RestartPolicy::OnFailure },
-                startup: if client { ProcessStartupPolicy::Connection } else { ProcessStartupPolicy::Required },
+                restart: if connection { RestartPolicy::Always } else { RestartPolicy::OnFailure },
+                startup: if connection { ProcessStartupPolicy::Connection } else { ProcessStartupPolicy::Required },
                 stop_timeout_seconds: 10,
                 reload_signal: None,
                 restart_digest: None,
@@ -769,12 +773,28 @@ pub fn plan(cfg: &OpenVpnConfig, req: &PluginRequest) -> Result<Vec<GenerationPl
             resources: Vec::new(),
             depends_on: Vec::new(),
             probes: vec![ProbeSpec::Plugin { interval_seconds: 30, params: Value::Null }],
-            // OpenVPN has no general dry-run mode. This parses the staged options and then exits before
-            // network/TUN initialization; plugin validation covers the typed configuration and secret refs.
+            // Static-key crypto self-tests need neither a peer nor a TUN and check local crypto options and
+            // key-file accessibility. They do not fully validate the supplied key bytes on every provider.
+            // TLS has no general dry-run mode; parse its staged options without opening the network/TUN.
             checks: vec![CommandSpec {
                 provider_slot: Some(SLOT.into()),
                 program: None,
-                argv: vec!["--config".into(), config_path, "--show-ciphers".into()],
+                argv: if inst.static_key_ref.is_some() {
+                    // Config content uses the stable current link, which still names the previous generation
+                    // during preflight. Override only the key path for this check to read the staged key.
+                    vec![
+                        "--config".into(),
+                        config_path,
+                        "--test-crypto".into(),
+                        "--verb".into(),
+                        "0".into(),
+                        "--secret".into(),
+                        format!("${{GENERATION_ROOT}}/openvpn/{}/static.key", inst.id),
+                        if inst.role == Role::Server { "0".into() } else { "1".into() },
+                    ]
+                } else {
+                    vec!["--config".into(), config_path, "--show-ciphers".into()]
+                },
                 timeout_seconds: 10,
                 required: true,
             }],
@@ -1042,6 +1062,23 @@ mod tests {
     }
 
     #[test]
+    fn site2site_tls_listener_retries_like_an_external_client() {
+        let r = req(json!([{
+            "id":"partner", "kind":"site2site", "role":"server", "topology":"subnet",
+            "serverNetwork":"10.88.0.0/24", "tls":{"caRef":"ca","certRef":"crt","keyRef":"key"}
+        }]));
+        let cfg = load(&r).unwrap();
+        assert!(validate(&cfg, &r).is_empty(), "{:?}", validate(&cfg, &r));
+        let plans = plan(&cfg, &r).unwrap();
+        assert_eq!(plans[0].processes[0].startup, ProcessStartupPolicy::Connection);
+        assert_eq!(plans[0].processes[0].restart, RestartPolicy::Always);
+        assert!(plans[0].files[0].content.contains("tls-server\n"));
+        assert!(!plans[0].files[0].content.contains("allow-deprecated-insecure-static-crypto"));
+        assert_eq!(plans[0].checks[0].argv[2], "--show-ciphers");
+        assert!(plans[0].checks[0].required);
+    }
+
+    #[test]
     fn access_server_hook_and_push_routes() {
         let r = req(json!([{
             "id": "access-main", "kind": "access", "port": 1195, "device": "tun-access",
@@ -1082,7 +1119,7 @@ mod tests {
     fn legacy_compression_framing_and_p2p_pull() {
         let r = req(json!([
             {"id": "lzo", "kind": "site2site", "role": "server", "topology": "p2p", "staticKeyRef": "tc", "port": 1195,
-             "ifconfig": {"local": "10.9.0.1", "remote": "10.9.0.2"}, "compression": "lzo-asym"},
+             "ifconfig": {"local": "10.9.0.1", "remote": "10.9.0.2"}, "compression": "lzo-asym", "cipher":"AES-256-CBC"},
             {"id": "nolzo", "kind": "site2site", "role": "server", "topology": "p2p", "staticKeyRef": "tc", "port": 1196,
              "ifconfig": {"local": "10.9.1.1", "remote": "10.9.1.2"}, "compression": "lzo-no"},
             {"id": "cli", "kind": "site2site", "role": "client", "topology": "p2p", "p2pPull": true, "remotes": [{"host": "vpn.example.test"}],
@@ -1096,8 +1133,28 @@ mod tests {
             "{lzo}"
         );
         assert!(conf("nolzo").contains("comp-lzo no\n"));
+        assert!(lzo.contains("cipher AES-256-CBC\n") && !lzo.contains("data-ciphers-fallback"));
+        for option in ["ignore-unknown-option allow-deprecated-insecure-static-crypto", "allow-deprecated-insecure-static-crypto"] {
+            assert!(lzo.lines().any(|line| line == option), "missing static-key compatibility option {option}");
+        }
         let cli = conf("cli");
         assert!(cli.contains("tls-client\npull\n"), "{cli}");
+        assert!(!cli.contains("allow-deprecated-insecure-static-crypto"), "TLS configurations keep TLS mandatory");
+        for plan in plan(&cfg, &r).unwrap() {
+            assert!(plan.validate().is_empty(), "{:?}", plan.validate().errors());
+            assert_eq!(
+                plan.processes[0].startup,
+                ProcessStartupPolicy::Connection,
+                "{} is an external connection in either role",
+                plan.instance
+            );
+            assert_eq!(plan.processes[0].restart, RestartPolicy::Always);
+            assert_eq!(plan.checks[0].argv[2], if plan.instance == "openvpn/cli" { "--show-ciphers" } else { "--test-crypto" });
+            if plan.instance != "openvpn/cli" {
+                assert_eq!(&plan.checks[0].argv[5..], ["--secret", &format!("${{GENERATION_ROOT}}/{}/static.key", plan.instance), "0"]);
+            }
+            assert!(plan.checks[0].required);
+        }
     }
 
     #[test]
