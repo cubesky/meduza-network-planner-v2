@@ -31,7 +31,8 @@ pub fn snapshot(store: &Path, run: &Path) -> Option<Value> {
     wanted.sort();
     wanted.dedup();
     let pending: Vec<_> = wanted.iter().filter(|n| installed["packages"].get(n.as_str()).is_none()).cloned().collect();
-    let failed = matches!(state["lastResult"]["outcome"].as_str(), Some("failed" | "rolledback" | "rolled-back"));
+    let rolled_back = matches!(state["lastResult"]["outcome"].as_str(), Some("rolledback" | "rolled-back"));
+    let failed = rolled_back || state["lastResult"]["outcome"].as_str() == Some("failed");
     let error = if active || busy.is_some() {
         Value::Null
     } else if !state["lastCheckError"].is_null() {
@@ -48,7 +49,11 @@ pub fn snapshot(store: &Path, run: &Path) -> Option<Value> {
     } else if control["paused"].as_bool() == Some(true) {
         "paused"
     } else if !error.is_null() || failed {
-        "failed"
+        if rolled_back {
+            "rolled-back"
+        } else {
+            "failed"
+        }
     } else if !pending.is_empty() {
         "waiting"
     } else if !installed.is_null() {
@@ -82,6 +87,10 @@ pub fn snapshot(store: &Path, run: &Path) -> Option<Value> {
     Some(json!({
         "phase":phase, "active":active || busy.is_some(),
         "groupVersion":if active || failed { job.get("groupVersion") } else { installed.get("groupVersion") },
+        "installedGroupVersion":installed.get("groupVersion"),
+        "availableGroupVersion":state["available"].get("groupVersion"),
+        "installedAt":installed.get("activatedAt"),
+        "lastCheck":state.get("lastCheck"), "lastResult":state.get("lastResult"),
         "currentPackage":progress.get("currentPackage"),
         "packages":progress.get("packages").or_else(|| job.get("changed")),
         "pendingPackages":pending, "completedPackages":progress["completedPackages"].as_u64().unwrap_or(0),
@@ -141,10 +150,44 @@ mod tests {
         assert_eq!(p["phase"], "failed");
         assert_eq!(p["error"], "TLS EOF");
         assert_eq!(p["nextCheckUnix"], 123);
+        write("state.json", json!({"lastResult":{"outcome":"rolledback","detail":"previous version restored"}}));
+        let p = snapshot(&store, &run).unwrap();
+        assert_eq!(p["phase"], "rolled-back");
+        assert_eq!(p["lastResult"]["outcome"], "rolledback");
         write("activity.json", json!({"busy":"checking"}));
         let p = snapshot(&store, &run).unwrap();
         assert_eq!(p["phase"], "checking");
         assert!(p["error"].is_null());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn completed_upgrade_retains_versions_bytes_and_result() {
+        let root = std::env::temp_dir().join(format!("mnp-update-complete-{}", std::process::id()));
+        let store = root.join("store");
+        let run = root.join("run");
+        std::fs::create_dir_all(&store).unwrap();
+        let write = |name: &str, v: Value| crate::fsutil::write_json_atomic(&store.join(name), &v, 0o644).unwrap();
+        write("installed.json", json!({"groupVersion":"v0.1.5","activatedAt":"2026-11-03T06:57:17Z","packages":{}}));
+        write("journal.last.json", json!({"phase":"done","groupVersion":"v0.1.5","startedAt":"start","updatedAt":"2026-11-03T06:57:20Z"}));
+        write(
+            "download-progress.json",
+            json!({"startedAt":"start","completedBytes":14514061,"bytesTotal":14514061,"completedPackages":14,"totalPackages":14}),
+        );
+        write(
+            "state.json",
+            json!({"available":{"groupVersion":"v0.1.6"},"lastCheck":"2026-11-03T09:02:47Z",
+            "lastResult":{"groupVersion":"v0.1.5","outcome":"done","at":"2026-11-03T06:57:20Z"}}),
+        );
+        let progress = snapshot(&store, &run).unwrap();
+        assert_eq!(progress["active"], false);
+        assert_eq!(progress["phase"], "done");
+        assert_eq!(progress["installedGroupVersion"], "v0.1.5");
+        assert_eq!(progress["availableGroupVersion"], "v0.1.6");
+        assert_eq!(progress["downloadedBytes"], 14514061);
+        assert_eq!(progress["completedPackages"], 14);
+        assert_eq!(progress["lastCheck"], "2026-11-03T09:02:47Z");
+        assert_eq!(progress["lastResult"]["outcome"], "done");
         std::fs::remove_dir_all(root).unwrap();
     }
 }

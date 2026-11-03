@@ -20,6 +20,8 @@ use serde_json::{json, Value};
 const EXE: &str = std::env::consts::EXE_SUFFIX;
 const PRIV: &str = "yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=";
 const PEER: &str = "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=";
+// The native-tool recording hook is process-wide; keep cases from appending to another case's log.
+static NATIVE_TOOL_ENV: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 fn target_dir() -> PathBuf {
     let exe = std::env::current_exe().unwrap();
@@ -163,8 +165,118 @@ fn log_lines(env: &Env) -> Vec<String> {
     std::fs::read_to_string(&env.log).unwrap_or_default().lines().map(str::to_string).collect()
 }
 
+/// An unreachable peer is runtime health, not a failed delivery or a reason to undo other services/WireGuard.
+#[tokio::test(flavor = "current_thread")]
+async fn disconnected_connection_commits_and_recovers_without_reapply() {
+    let _native_env = NATIVE_TOOL_ENV.lock().await;
+    let Some(env) = setup("connection") else { return };
+    let reg = registry::scan(&env.paths.packages, &meduza_np_plugin_sdk::Platform::default());
+    let ready = env.paths.run.join("peer-ready");
+    let (raw, digest) = config(
+        &env,
+        1,
+        json!([
+            {"id": "local"},
+            {"id": "remote", "connection": true, "readyFile": ready.to_string_lossy()}
+        ]),
+    );
+    let prepared = env.engine.prepare(&raw, &digest, &reg, &Default::default()).await.unwrap();
+    let outcomes = env.engine.commit(&prepared, &reg).await.expect("unreachable peer must not fail configuration apply");
+    assert!(outcomes.iter().all(|o| o.ok));
+    let local_pid = env.engine.supervisor.status("avahi/local").unwrap().pid;
+    assert!(local_pid.is_some(), "unrelated local service stays up");
+    let last_good = meduza_np_planner::state::load_last_good(&env.paths).unwrap().unwrap();
+    assert_eq!(last_good.digest, digest);
+    if env.have_wg {
+        assert!(env.paths.current_generation_link().join("wireguard/uplink/wg.conf").exists(), "WireGuard applies without a handshake");
+    }
+    for _ in 0..100 {
+        if env.engine.supervisor.status("avahi/remote").unwrap().state == meduza_np_planner::supervisor::ProcState::Backoff {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(env.engine.supervisor.status("avahi/remote").unwrap().state, meduza_np_planner::supervisor::ProcState::Backoff);
+
+    // Publishing the same inputs during backoff still succeeds and does not roll back the saved configuration.
+    let mut repeated = raw;
+    repeated["revision"] = json!("rev-000002");
+    let digest = canonical_digest(&repeated).unwrap();
+    let prepared = env.engine.prepare(&repeated, &digest, &reg, &Default::default()).await.unwrap();
+    env.engine.commit(&prepared, &reg).await.expect("backoff also counts as delivered on repeat apply");
+    std::fs::write(ready, "peer recovered").unwrap();
+    assert!(env.engine.supervisor.wait_settled("avahi/remote", Duration::from_millis(200), Duration::from_secs(5)).await);
+    assert_eq!(env.engine.supervisor.status("avahi/local").unwrap().pid, local_pid);
+    assert_eq!(meduza_np_planner::state::load_last_good(&env.paths).unwrap().unwrap().digest, digest);
+    env.engine.supervisor.stop_all().await;
+    let _ = std::fs::remove_dir_all(env.paths.etc.parent().unwrap());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn connection_delivery_errors_still_fail_apply() {
+    let _native_env = NATIVE_TOOL_ENV.lock().await;
+    use meduza_np_protocol::plan::CommandSpec;
+
+    for failure in ["spawn", "syntax", "resource", "wireguard-resource"] {
+        let Some(env) = setup(&format!("connection-{failure}")) else { return };
+        if failure == "wireguard-resource" && !env.have_wg {
+            continue;
+        }
+        let reg = registry::scan(&env.paths.packages, &meduza_np_plugin_sdk::Platform::default());
+        let (raw, digest) = config(&env, 1, json!([{"id": "local"}]));
+        let prepared = env.engine.prepare(&raw, &digest, &reg, &Default::default()).await.unwrap();
+        env.engine.commit(&prepared, &reg).await.unwrap();
+        let (raw, next_digest) = config(
+            &env,
+            2,
+            json!([
+                {"id": "local"}, {"id": "remote", "connection": true, "crash": true, "device": "dummy-remote"}
+            ]),
+        );
+        let mut prepared = env.engine.prepare(&raw, &next_digest, &reg, &Default::default()).await.unwrap();
+        let plan = &mut prepared.plans.iter_mut().find(|(_, p)| p.instance == "avahi/remote").unwrap().1;
+        let expected = match failure {
+            "spawn" => {
+                plan.processes[0].provider_slot = None;
+                plan.processes[0].program = Some("/nonexistent/meduza-np-test-daemon".into());
+                "process-failed"
+            }
+            "syntax" => {
+                plan.checks.push(CommandSpec {
+                    provider_slot: Some("avahi.daemon".into()),
+                    program: None,
+                    argv: vec!["crash".into()],
+                    timeout_seconds: 3,
+                    required: true,
+                });
+                "syntax-check-failed"
+            }
+            "resource" => {
+                env.net.fail_on.lock().unwrap().push(plan.resources[0].clone());
+                "network-apply-failed"
+            }
+            "wireguard-resource" => {
+                let plan = &mut prepared.plans.iter_mut().find(|(_, p)| p.instance == "wireguard/uplink").unwrap().1;
+                // Make the already-owned link disappear and fail to recreate it locally.
+                let link =
+                    plan.resources.iter().find(|r| matches!(r, meduza_np_protocol::plan::NetworkResource::Link { .. })).unwrap().clone();
+                env.net.missing.lock().unwrap().push(link.clone());
+                env.net.fail_on.lock().unwrap().push(link);
+                "network-apply-failed"
+            }
+            _ => unreachable!(),
+        };
+        let error = env.engine.commit(&prepared, &reg).await.expect_err("local delivery failure must still reject apply");
+        assert_eq!(error.code, expected, "{failure}: {error:?}");
+        assert_eq!(meduza_np_planner::state::load_last_good(&env.paths).unwrap().unwrap().digest, digest);
+        env.engine.supervisor.stop_all().await;
+        let _ = std::fs::remove_dir_all(env.paths.etc.parent().unwrap());
+    }
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn apply_lifecycle() {
+    let _native_env = NATIVE_TOOL_ENV.lock().await;
     let Some(env) = setup("lifecycle") else { return };
     // Commands run by planner (wg syncconf) inherit the environment; supervised daemons get --log= instead.
     std::env::set_var("MNP_FAKE_TOOL_LOG", &env.log);
@@ -312,6 +424,7 @@ async fn apply_lifecycle() {
 /// configuration plans the feature.
 #[tokio::test(flavor = "current_thread")]
 async fn preparing_provider_holds_back_only_its_feature() {
+    let _native_env = NATIVE_TOOL_ENV.lock().await;
     let Some(env) = setup("preparing") else { return };
     let prep = env.paths.etc.parent().unwrap().join("prep");
     let fake_tool = target_dir().join("examples").join(format!("fake_tool{EXE}"));
@@ -352,6 +465,7 @@ async fn preparing_provider_holds_back_only_its_feature() {
 /// rejects the feature, the restore applies the revision without it and keeps the saved last good as received.
 #[tokio::test(flavor = "current_thread")]
 async fn restore_drops_held_back_feature_rejected_later() {
+    let _native_env = NATIVE_TOOL_ENV.lock().await;
     let Some(env) = setup("held-back") else { return };
     let plat = meduza_np_plugin_sdk::Platform::default();
     let avahi = env.paths.packages.join("meduza-np-avahi");
@@ -392,6 +506,7 @@ async fn restore_drops_held_back_feature_rejected_later() {
 #[cfg(target_os = "linux")]
 #[tokio::test(flavor = "current_thread")]
 async fn planner_restart_adopts_daemons() {
+    let _native_env = NATIVE_TOOL_ENV.lock().await;
     let Some(mut env) = setup("adopt") else { return };
     // No WireGuard: its `wg syncconf` would log into apply_lifecycle's tool log (MNP_FAKE_TOOL_LOG is process-wide).
     env.have_wg = false;

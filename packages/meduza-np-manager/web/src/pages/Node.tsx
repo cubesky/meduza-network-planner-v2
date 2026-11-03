@@ -79,6 +79,7 @@ export function NodePage(props: { id: string; tab?: string; role: Role }) {
                 ].filter(Boolean).join(" · ")}
                 actions={canAct && <Button onClick={() => void job("sync-now", {}, t("Sync requested"))}>{t("Sync now")}</Button>}
               />
+              <PackageProgress progress={n.update ?? n.report?.update} reportedAt={n.report?.observedAt} />
               <Tabs
                 tabs={[
                   { id: "status", label: t("Status") },
@@ -90,7 +91,6 @@ export function NodePage(props: { id: string; tab?: string; role: Role }) {
                 active={tab}
                 onChange={go}
               />
-              <PackageProgress progress={n.report?.update} reportedAt={n.report?.observedAt} />
               {tab === "status" && <StatusTab n={n} services={services} canAct={canAct} restart={restart} />}
               {tab === "routing" && <RoutingTab items={routing} canAct={canAct} restart={restart} />}
               {tab === "connections" && <ConnectionsTab items={connections} canAct={canAct} restart={restart} />}

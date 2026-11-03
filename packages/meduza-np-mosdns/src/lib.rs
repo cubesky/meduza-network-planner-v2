@@ -446,6 +446,7 @@ pub fn plan(cfg: &MosdnsConfig, req: &PluginRequest) -> Result<Vec<GenerationPla
             ],
             env: Default::default(),
             restart: RestartPolicy::Always,
+            startup: Default::default(),
             stop_timeout_seconds: 5,
             reload_signal: None,
             restart_digest: Some(restart_digest),

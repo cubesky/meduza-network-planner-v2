@@ -15,7 +15,12 @@ fn main() {
         }
     }
     match args.first().map(String::as_str) {
-        Some("daemon") => loop {
+        Some("wait-for-peer")
+            if !args.iter().any(|a| a.strip_prefix("--ready-file=").is_some_and(|p| std::path::Path::new(p).exists())) =>
+        {
+            std::process::exit(1)
+        }
+        Some("daemon" | "wait-for-peer") => loop {
             std::thread::sleep(std::time::Duration::from_secs(3600));
         },
         Some("crash") => std::process::exit(3),

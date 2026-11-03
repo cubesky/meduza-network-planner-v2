@@ -951,3 +951,54 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   including real HTTP temporary-404/503/disconnect and permanent-missing cases for both workflow loops; actionlint
   and whitespace checks passed. Inline workflow logic also works for workflow_dispatch of an existing immutable
   source tag after the default-branch workflow is updated. Source fix only; remote upgrade remains pending release.
+- 2026-11-03 (per the user) Supervised v0.1.5 release (run 41564561202) and upgraded 10.42.10.9 successfully.
+  Verified signed stable sequence 3, the pinned image/platform digests and read-only store compatibility. Base
+  runtime is 0.1.5; the installed package group is v0.1.5 with 14 completed updates and successful updater takeover.
+  Unchanged node components correctly reuse 0.1.3; Mihomo/MosDNS provider packages are 0.1.5. Restored the live
+  stable source with automatic package updates and no exact group pin. Both containers are healthy; Dashboard
+  HTTPS at 10.42.10.12:8443 returns 200. Base-container now reports installed/registered version 0.1.5; MosDNS
+  resource resolves its packaged v5.3.4 binary.
+  Split the former shared/pod namespace: planner retains 10.42.10.12 and its MAC, updater uses a stable separate
+  MAC and DHCP (currently 10.42.10.209). Enabled the Netavark DHCP proxy/network; retained gateway 10.42.10.1 and
+  DNS 119.29.29.29 in both roles. Added the documented FRR/Avahi capabilities and placed forwarding sysctls in
+  planner. A real DHCP preflight received the side-router gateway and confirmed the override; a live gateway/DNS
+  overwrite test recovered both settings within seven seconds without changing the DHCP address.
+  A stalled transfer required stopping updater and prefetching its remaining archives with bounded transport
+  waits. All 14 files were verified against signed-plan sizes/SHA-256; updater independently reverified the cache
+  and completed activation. No published artifacts changed. Private full pre-upgrade node/store snapshot and
+  deployment backups: /var/standalone/meduza/backups/pre-v0.1.5-20261103T062223Z. Updated remote operations notes.
+  Remaining pre-existing configuration blocker: Manager supplies services.dnsmasq.listenAddresses=[]; planner
+  still reports apply-failed and the network services are not yet running. Asked the user to set the intended
+  frontend DNS listener in Manager (10.42.10.12 for this LAN) and publish it. Did not modify authoritative cached
+  configuration or advertise service health merely from container health.
+- 2026-11-03 (per the user) Separate external connection health from configuration application (D60). Remote
+  revision 8 now passes the DNS listener check, but openvpn/lemon exited 1 five times and caused the whole apply
+  to roll back. Add an explicit, default-compatible process startup policy: reconnecting clients commit after
+  local delivery/checks and successful exec, then retry all runtime exits indefinitely with jittered exponential
+  waits capped at 60 seconds. OpenVPN outgoing Site2Site clients opt in and retry DNS indefinitely; local Access
+  and Site2Site listeners retain stable startup checks. Add a required offline native options parse before
+  activation; it does not test peer reachability. Local spawn/check/file/provider/network failures still fail
+  apply and preserve last-good state. WireGuard interface configuration remains independent of handshake health.
+  Verified 35 planner unit tests, 6 executable-backed engine integration tests, 27 protocol unit tests, 4 package
+  manifest tests, 2 provider recipe tests, the schema freshness test, 8 OpenVPN tests and 8 WireGuard tests (91
+  total); strict workspace/all-target Clippy passes. Coverage includes six consecutive alternating success/error
+  exits followed by automatic recovery, successful/repeated apply during backoff, preserving unrelated services,
+  and local OpenVPN-style/WireGuard resource failure rejection. Isolated the engine tests' process-wide native
+  tool log environment variable to prevent parallel test interference. Generated generation-plan schema and
+  documented operation/recovery behavior. Remote OpenVPN 2.7.7 accepted the staged lemon config in offline options
+  mode and rejected an injected unknown option. Source fix only; remote v0.1.5 has not been replaced or patched.
+- 2026-11-03 (per the user) Make Manager download/upgrade progress visible after completion. Confirmed the node
+  and the Manager raw report both contain the completed v0.1.5 update (14/14, 14514061 bytes); the live web bundle
+  already has the progress component. Its inactive view hid byte/count progress, and node summaries hid successful
+  upgrades. Move a clearly labelled Packages and updates card above the node tabs, retain completed percentages,
+  sizes/counts/time, accept both summary and raw-report progress, and show explicit missing-status diagnostics.
+  Add dedicated update columns to node list/overview. Shared presentation also improves Dashboard; download 100%
+  remains distinct from activation/verification completion. Extend runtime snapshots with installed/available group
+  versions, activation/check times and last result; report rolled-back separately from generic failure. Existing
+  v0.1.5 reports already support the main UI fix; extra metadata comes from a future node update.
+  Verified actual authenticated report ingestion through detail/list/overview APIs (3 tests), 2 real-file runtime
+  snapshot tests, strict runtime/planner/updater Clippy, UI-kit/Manager type checks and production Manager/Dashboard
+  builds. New tools/test-manager-update-progress.mjs checks the complete pages in Chrome: the supplied completed
+  report, downloading, automatic refresh to completion, retry details, verification, errors, rollback, optional
+  metadata and absent status. Screenshot: target/manager-update-progress.png. Source fix only; the production
+  Manager has not been redeployed.

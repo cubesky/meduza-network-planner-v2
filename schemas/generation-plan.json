@@ -496,6 +496,9 @@
             "null"
           ]
         },
+        "startup": {
+          "$ref": "#/$defs/ProcessStartupPolicy"
+        },
         "stopTimeoutSeconds": {
           "default": 10,
           "format": "uint32",
@@ -515,6 +518,22 @@
         "argv"
       ],
       "type": "object"
+    },
+    "ProcessStartupPolicy": {
+      "description": "Whether applying a process requires a stable local daemon or only delivery to a reconnecting client.",
+      "oneOf": [
+        {
+          "enum": [
+            "required"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "connection",
+          "description": "The peer may be unavailable: successful exec completes apply; runtime exits retry indefinitely.",
+          "type": "string"
+        }
+      ]
     },
     "RestartPolicy": {
       "enum": [

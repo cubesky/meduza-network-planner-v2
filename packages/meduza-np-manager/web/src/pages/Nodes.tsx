@@ -4,6 +4,7 @@ import { useState } from "preact/hooks";
 import { Badge, Button, Card, CopyBlock, Field, Loadable, PageHead, Select, StatusDot, Table, TextInput, msg, relativeTime, t, toast, useAsync } from "@meduza-np/ui-kit";
 import { errorText, get, post } from "../api.ts";
 import { needsAttention, revisionBadge, syncCell, type NodeSummary } from "./Overview.tsx";
+import { PackageUpdateSummary } from "@meduza-np/ui-kit/package-progress";
 
 type Role = "admin" | "operator" | "viewer";
 
@@ -77,6 +78,7 @@ export function NodesPage(props: { role: Role }) {
                   { key: "behavior", label: t("Behavior"), render: (r) => t(String(r.behavior)) },
                   { key: "sync", label: t("Sync"), render: (r) => syncCell(r as unknown as NodeSummary) },
                   { key: "rev", label: t("Configuration"), render: (r) => revisionBadge(r as unknown as NodeSummary) },
+                  { key: "update", label: t("Packages and updates"), render: (r) => <PackageUpdateSummary progress={(r as unknown as NodeSummary).update} /> },
                   {
                     key: "problems",
                     label: t("Problems"),

@@ -3,7 +3,7 @@
 //! `avahi.daemon` provider slot, one config file and an optional link resource.
 
 use meduza_np_plugin_sdk::{run, PlanResult, Plugin, PluginError, PluginRequest, ValidateResult};
-use meduza_np_protocol::plan::{GenerationPlan, NetworkResource, PlannedFile, ProcessSpec, RestartPolicy};
+use meduza_np_protocol::plan::{GenerationPlan, NetworkResource, PlannedFile, ProcessSpec, ProcessStartupPolicy, RestartPolicy};
 use serde_json::Value;
 
 struct Fake;
@@ -29,9 +29,14 @@ impl Plugin for Fake {
         for inst in instances(req) {
             let id = inst["id"].as_str().unwrap_or_default().to_string();
             let crash = inst.get("crash").and_then(Value::as_bool).unwrap_or(false);
+            let connection = inst.get("connection").and_then(Value::as_bool).unwrap_or(false);
             let version = inst.get("version").and_then(Value::as_u64).unwrap_or(1);
             let mut argv =
                 vec![if crash { "crash".to_string() } else { "daemon".to_string() }, format!("${{GENERATION_ROOT}}/avahi/{id}/app.conf")];
+            if let Some(path) = inst.get("readyFile").and_then(Value::as_str) {
+                argv[0] = "wait-for-peer".into();
+                argv.push(format!("--ready-file={path}"));
+            }
             if let Some(l) = inst.get("log").and_then(Value::as_str).map(str::to_string).or(log.clone()) {
                 argv.push(format!("--log={l}"));
             }
@@ -55,7 +60,8 @@ impl Plugin for Fake {
                     program: None,
                     argv,
                     env: Default::default(),
-                    restart: RestartPolicy::OnFailure,
+                    restart: if connection { RestartPolicy::Always } else { RestartPolicy::OnFailure },
+                    startup: if connection { ProcessStartupPolicy::Connection } else { ProcessStartupPolicy::Required },
                     stop_timeout_seconds: 2,
                     reload_signal: None,
                     restart_digest: None,

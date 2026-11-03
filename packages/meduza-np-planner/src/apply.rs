@@ -17,7 +17,7 @@ use meduza_np_protocol::api::InstanceOutcome;
 use meduza_np_protocol::config::{NodeConfig, SecretValue};
 use meduza_np_protocol::digest::{canonical_digest, sha256_hex};
 use meduza_np_protocol::manifest::PackageRole;
-use meduza_np_protocol::plan::{CommandSpec, GenerationPlan, NetworkResource};
+use meduza_np_protocol::plan::{CommandSpec, GenerationPlan, NetworkResource, ProcessStartupPolicy};
 use meduza_np_protocol::{ValidationError, PLUGIN_PROTOCOL_VERSION};
 use meduza_np_runtime::fsutil;
 use meduza_np_runtime::journal::{diff_resources, ApplyStage, OwnedSet, OwnershipJournal, PendingApply};
@@ -683,10 +683,14 @@ impl Engine {
                 };
                 let args: Vec<String> = p.argv.iter().map(|a| self.expand(a, &current, provider.map(|x| x.path.as_str()))).collect();
                 // Default restart digest: binary + argv + env + every file of the instance (§11.1: restart only on change).
-                let digest = p
+                let mut digest = p
                     .restart_digest
                     .clone()
                     .unwrap_or_else(|| sha256_hex(format!("{}\n{:?}\n{:?}\n{file_digest}", program.display(), args, p.env).as_bytes()));
+                if !p.startup.is_required() {
+                    // A transition to connection supervision must also replace an unchanged legacy process.
+                    digest = sha256_hex(format!("{digest}\n{:?}\n{:?}", p.startup, p.restart).as_bytes());
+                }
                 proc_digests.insert(p.id.clone(), digest.clone());
                 let unchanged = previous_applied.as_ref().and_then(|a| a.processes.get(&p.id)) == Some(&digest);
                 if unchanged && self.supervisor.status(&p.id).is_some() {
@@ -708,6 +712,7 @@ impl Engine {
                         args,
                         env: p.env.clone(),
                         restart: p.restart,
+                        startup: p.startup,
                         stop_timeout: Duration::from_secs(p.stop_timeout_seconds.into()),
                         restart_digest: digest,
                         bound_to: p.bound_to.clone(),
@@ -731,9 +736,14 @@ impl Engine {
                     }
                 }
             }
-            // Startup verification: the process must stay up (not "exists once").
+            // Local daemons must settle. Connection clients only need successful delivery/exec: a peer's
+            // availability is reported separately and must never roll back unrelated local services.
             for p in &plan.processes {
-                if !self.supervisor.wait_settled(&p.id, self.settle, self.settle_deadline).await {
+                let started = match p.startup {
+                    ProcessStartupPolicy::Required => self.supervisor.wait_settled(&p.id, self.settle, self.settle_deadline).await,
+                    ProcessStartupPolicy::Connection => self.supervisor.wait_started(&p.id, self.settle_deadline).await,
+                };
+                if !started {
                     let why = self.supervisor.status(&p.id).and_then(|s| s.last_exit).unwrap_or_else(|| "did not stay running".into());
                     outcomes.push(InstanceOutcome {
                         instance: plan.instance.clone(),

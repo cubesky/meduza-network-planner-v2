@@ -1356,3 +1356,27 @@ The previous planner's TPROXY settings map onto `services.mihomo.tproxy`: `tprox
 
 Not covered: UDP answers of forwarded services without `replyPorts` look like new flows from the LAN and are
 proxied. The OpenWrt adapter (OpenClash) keeps OpenClash's own TPROXY rules.
+
+## D60 — Applying external connections does not wait for a reachable peer
+
+An unavailable external peer must not fail a configuration revision or roll back unrelated DNS, routing or mesh
+services. Generation plans explicitly mark reconnecting clients with process `startup: connection` and
+`restart: always`; planner does not infer this from process names. After files, provider resolution, required
+checks and local network operations succeed, a successful exec is enough to commit such a client. Local spawn
+errors still fail apply. Normal local daemons retain stable-start verification and the five-quick-failure limit.
+The default startup field is omitted from serialized plans and process identities, preserving unchanged legacy
+daemon hashes/adoption.
+
+OpenVPN outgoing Site2Site clients opt in; Access and Site2Site listeners remain local daemons. Client DNS
+resolution retries indefinitely and native connection waits grow up to 60 seconds. If a client exits (including
+exit 0), supervisor retries indefinitely with exponential waits capped at 60 seconds and random jitter. A
+client must run at least 60 seconds before its supervisor backoff resets. Runtime failure/backoff, exit reason,
+restart counts and actual tunnel/session health remain visible in node reports; applied does not mean connected.
+No manual restart or republish is needed when the peer returns. Native `--config … --show-ciphers` parses staged
+OpenVPN options without contacting the peer or opening a TUN device; it is a syntax check, not a full certificate
+or connection test. Typed plugin validation continues to check required configuration and secret references.
+
+WireGuard already applies local interface/configuration independently of handshakes; kernel handshakes retry
+when traffic or a configured persistent keepalive needs the peer. Missing/stale handshakes stay in peer health,
+while failed local link/configuration operations still reject apply. Tinc and BGP retain their native reconnect
+loops; peer health is not an application gate.

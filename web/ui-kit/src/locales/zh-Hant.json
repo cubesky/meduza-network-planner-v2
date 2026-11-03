@@ -89,5 +89,15 @@
   "Tinc and external connections also install FRR routing support automatically.": "Tinc 和外部互聯會自動安裝 FRR 路由支援及其系統相依套件。",
   "Waiting to retry download": "等待自動重試下載",
   "Download attempt {attempt}/{maximum}": "第 {attempt}/{maximum} 次下載嘗試",
-  "Automatic download retry": "自動重試時間"
+  "Automatic download retry": "自動重試時間",
+  "Packages and updates": "軟體套件與升級",
+  "Installed group": "已安裝套件組",
+  "Available group": "可用套件組",
+  "Target group": "目標套件組",
+  "Update completed at": "升級完成時間",
+  "Update completed": "升級完成",
+  "Last update result": "上次升級結果",
+  "Last update check": "最近升級檢查",
+  "Update status unavailable": "尚無升級狀態",
+  "Waiting for the node to report updater status. Check that updater is installed and running.": "等待節點回報升級狀態，請確認更新器已安裝並執行。"
 }

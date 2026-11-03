@@ -16,7 +16,7 @@ use meduza_np_plugin_sdk::{PluginError, PluginRequest};
 use meduza_np_protocol::bgp::BgpSession;
 use meduza_np_protocol::config::Networks;
 use meduza_np_protocol::ids::{derive_ifname, validate_ifname, StableId};
-use meduza_np_protocol::plan::{GenerationPlan, PlannedFile, ProbeSpec, ProcessSpec, RestartPolicy};
+use meduza_np_protocol::plan::{CommandSpec, GenerationPlan, PlannedFile, ProbeSpec, ProcessSpec, ProcessStartupPolicy, RestartPolicy};
 use meduza_np_protocol::report::{InstanceStatus, ServiceState};
 use meduza_np_protocol::{ValidationError, Validator, PLUGIN_PROTOCOL_VERSION};
 use schemars::JsonSchema;
@@ -537,6 +537,9 @@ pub fn render(inst: &Instance, req: &PluginRequest) -> Result<Rendered, PluginEr
         add(format!("port {}", inst.port));
     } else {
         add("nobind".into());
+        // A failed DNS lookup must not exhaust startup or require publishing the configuration again.
+        add("resolv-retry infinite".into());
+        add("connect-retry 1 60".into());
         for r in &inst.remotes {
             let port = r.port.unwrap_or(inst.port);
             match r.proto {
@@ -742,6 +745,8 @@ pub fn plan(cfg: &OpenVpnConfig, req: &PluginRequest) -> Result<Vec<GenerationPl
     let mut plans = Vec::new();
     for inst in cfg.instances.iter().filter(|i| i.enabled) {
         let r = render(inst, req)?;
+        let client = !inst.is_server();
+        let config_path = format!("${{GENERATION_ROOT}}/openvpn/{}/config.ovpn", inst.id);
         plans.push(GenerationPlan {
             protocol_version: PLUGIN_PROTOCOL_VERSION,
             request_id: req.request_id.clone(),
@@ -751,9 +756,10 @@ pub fn plan(cfg: &OpenVpnConfig, req: &PluginRequest) -> Result<Vec<GenerationPl
                 id: format!("openvpn/{}", inst.id),
                 provider_slot: Some(SLOT.into()),
                 program: None,
-                argv: vec!["--config".into(), format!("${{GENERATION_ROOT}}/openvpn/{}/config.ovpn", inst.id)],
+                argv: vec!["--config".into(), config_path.clone()],
                 env: BTreeMap::new(),
-                restart: RestartPolicy::OnFailure,
+                restart: if client { RestartPolicy::Always } else { RestartPolicy::OnFailure },
+                startup: if client { ProcessStartupPolicy::Connection } else { ProcessStartupPolicy::Required },
                 stop_timeout_seconds: 10,
                 reload_signal: None,
                 restart_digest: None,
@@ -763,7 +769,15 @@ pub fn plan(cfg: &OpenVpnConfig, req: &PluginRequest) -> Result<Vec<GenerationPl
             resources: Vec::new(),
             depends_on: Vec::new(),
             probes: vec![ProbeSpec::Plugin { interval_seconds: 30, params: Value::Null }],
-            checks: Vec::new(),
+            // OpenVPN has no general dry-run mode. This parses the staged options and then exits before
+            // network/TUN initialization; plugin validation covers the typed configuration and secret refs.
+            checks: vec![CommandSpec {
+                provider_slot: Some(SLOT.into()),
+                program: None,
+                argv: vec!["--config".into(), config_path, "--show-ciphers".into()],
+                timeout_seconds: 10,
+                required: true,
+            }],
             reload: Vec::new(),
         });
     }
@@ -1003,6 +1017,8 @@ mod tests {
             "dev-type tun",
             "proto udp",
             "remote vpn.example.test 1194",
+            "resolv-retry infinite",
+            "connect-retry 1 60",
             "client",
             "route-nopull",
             "persist-key",
@@ -1019,6 +1035,10 @@ mod tests {
         assert!(!out.config.contains("BEGIN PRIVATE KEY"), "secrets are files, never inline");
         let plans = plan(&cfg, &r).unwrap();
         assert!(plans[0].validate().is_empty(), "{:?}", plans[0].validate().errors());
+        assert_eq!(plans[0].processes[0].startup, ProcessStartupPolicy::Connection);
+        assert_eq!(plans[0].processes[0].restart, RestartPolicy::Always);
+        assert_eq!(plans[0].checks[0].argv, vec!["--config", "${GENERATION_ROOT}/openvpn/office/config.ovpn", "--show-ciphers"]);
+        assert!(plans[0].checks[0].required);
     }
 
     #[test]
@@ -1053,6 +1073,9 @@ mod tests {
         assert!(!out.config.contains("10.99.10.0"));
         assert!(!out.config.contains("10.42.10.128"));
         assert!(!out.config.contains("route 10.88.0.0"));
+        let plans = plan(&cfg, &r).unwrap();
+        assert_eq!(plans[0].processes[0].startup, ProcessStartupPolicy::Required);
+        assert_eq!(plans[0].processes[0].restart, RestartPolicy::OnFailure);
     }
 
     #[test]

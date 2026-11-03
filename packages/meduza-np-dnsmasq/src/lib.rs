@@ -473,6 +473,7 @@ pub fn plan(cfg: &DnsmasqConfig, req: &PluginRequest) -> Result<Vec<GenerationPl
             ],
             env: Default::default(),
             restart: RestartPolicy::Always,
+            startup: Default::default(),
             stop_timeout_seconds: 5,
             reload_signal: Some("SIGHUP".into()),
             restart_digest: Some(restart_digest),

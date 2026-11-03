@@ -459,6 +459,7 @@ pub fn plan(cfg: &TincConfig, req: &PluginRequest) -> Result<Vec<GenerationPlan>
                 ],
                 env: BTreeMap::new(),
                 restart: RestartPolicy::OnFailure,
+                startup: Default::default(),
                 stop_timeout_seconds: 10,
                 reload_signal: Some("SIGHUP".into()),
                 restart_digest: Some(restart_digest),

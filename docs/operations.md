@@ -147,6 +147,12 @@ new adapter arrives; FRR still needs `SYS_ADMIN` in the planner container (fixed
   place**; a replaced directory is not visible to an already running updater container until it restarts.
 * Controls: `meduza-np update status|check|plan|apply|pause|resume`, `MEDUZA_NP_UPDATE_AUTO=0`,
   `MEDUZA_NP_UPDATE_WINDOW=02:00-05:00` (UTC), `MEDUZA_NP_GROUP_VERSION=vX` to pin a group.
+* Manager node details show **Packages and updates** above the tabs; node lists and overview have an update
+  column. Completed upgrades retain their group, download size/count and completion time. Missing updater
+  reports are labelled unavailable rather than disappearing. Download 100% can still mean activation or
+  registration checks are running; configuration application and tunnel health are shown separately. Current
+  v0.1.5 node reports work with this display; newer nodes additionally report available versions and the last
+  upgrade/check result. Dashboard uses the same progress presentation.
 * OpenWrt: packages are installed one at a time with the native package manager. That is **not** an atomic switch.
   Packages without a cached previous file cannot be rolled back automatically; the plan says so.
 * Updater self-update: the new updater is activated last and started by its launcher (container entrypoint,
@@ -165,6 +171,7 @@ of the planner service (or the procd init script) stops them.
 | Situation | What happens / what to do |
 | --- | --- |
 | Manager unreachable | planner keeps running the last good configuration and backs off; local status still works (CLI, dashboard via break-glass link, LuCI) |
+| External VPN peer unreachable | the configuration still applies; OpenVPN clients keep reconnecting, including after repeated process exits (jittered exponential waits, at most 60 seconds); WireGuard retries handshakes when traffic/keepalive requires it. Connection health stays down/starting/degraded until recovery; local file/provider/check/interface failures still fail apply |
 | Power loss during an update | on start the updater reads its journal: before the switch ⇒ nothing changed; after ⇒ verify, else roll back |
 | Power loss during a config apply | planner finds the pending-apply journal and reconciles to the last good configuration |
 | Update keeps failing | `meduza-np update status` shows the last journal and reason; fix the cause, then `meduza-np update apply` |

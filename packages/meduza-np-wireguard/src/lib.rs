@@ -549,6 +549,14 @@ mod tests {
         assert_eq!(st[1].detail["endpoint"], json!("203.0.113.5:51820"));
         let stale = statuses(&cfg, &dumps, 5000);
         assert_eq!(stale[1].state, ServiceState::Down, "active peer with old handshake is down");
+        let mut unconnected = BTreeMap::new();
+        unconnected.insert(
+            "wg-uplink".to_string(),
+            Ok(format!("{PRIV}\tOWNPUB\t51820\toff\n{PEER}\t(none)\t203.0.113.5:51820\t10.9.0.1/32\t0\t0\t0\t25\n")),
+        );
+        let waiting = statuses(&cfg, &unconnected, 1100);
+        assert_eq!(waiting[0].state, ServiceState::Up, "configured interface stays up without a peer handshake");
+        assert_eq!(waiting[1].state, ServiceState::Down, "an unreachable active peer is reported separately");
         let none = statuses(&cfg, &BTreeMap::new(), 1100);
         assert_eq!(none[0].state, ServiceState::Down, "missing interface is not up");
         assert_eq!(none[1].state, ServiceState::Down);

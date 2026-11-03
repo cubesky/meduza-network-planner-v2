@@ -5,6 +5,12 @@ export interface InstallProgress {
   phase: string;
   active?: boolean;
   groupVersion?: string | null;
+  installedGroupVersion?: string | null;
+  availableGroupVersion?: string | null;
+  installedAt?: string | null;
+  lastCheck?: string | null;
+  updatedAt?: string | null;
+  lastResult?: { groupVersion?: string; outcome?: string; at?: string; detail?: string | null } | null;
   currentPackage?: string | null;
   packages?: string[] | null;
   pendingPackages?: string[];
@@ -30,6 +36,8 @@ const labels: Record<string, string> = {
 };
 export const installPhaseLabel = (phase: string) => t(labels[phase] ?? "Installing packages");
 const tone = (p: InstallProgress): Tone => p.phase === "failed" || p.phase === "rolled-back" ? "bad" : p.phase === "done" ? "ok" : p.phase === "retrying" ? "warn" : p.active ? "info" : "warn";
+const progressLabel = (p: InstallProgress) => p.phase === "done" && ((p.totalPackages ?? 0) > 0 || p.lastResult?.outcome === "done") ? t("Update completed") : installPhaseLabel(p.phase);
+const resultLabel = (outcome?: string) => outcome === "done" ? t("Update completed") : outcome === "failed" ? installPhaseLabel("failed") : outcome === "rolledback" || outcome === "rolled-back" ? installPhaseLabel("rolled-back") : t(outcome ?? "unknown");
 
 /** Older updater APIs still provide journal/error phases; never invent byte progress when they do not report it. */
 export function progressFromStatus(status: Record<string, any>): InstallProgress | null {
@@ -51,19 +59,51 @@ export function packageInstallLabel(progress: InstallProgress | null | undefined
   return installPhaseLabel(progress.phase === "done" ? "waiting" : progress.phase);
 }
 
+/** Node lists retain the installed group and finished progress instead of hiding all inactive upgrades. */
+export function PackageUpdateSummary(props: { progress?: InstallProgress | null }) {
+  const p = props.progress;
+  if (!p) return <span class="faint small">{t("Update status unavailable")}</span>;
+  const total = p.bytesTotal != null && p.bytesTotal > 0 ? p.bytesTotal : null;
+  const done = total != null && p.downloadedBytes != null ? Math.min(total, Math.max(0, p.downloadedBytes)) : null;
+  const percent = done != null && total != null ? Math.floor(done / total * 100) : null;
+  const installed = p.installedGroupVersion ?? (!p.active && p.phase === "done" ? p.groupVersion : null);
+  return <div class="stack" style={{ gap: "4px", minWidth: "165px" }}>
+    <div class="row" style={{ gap: "6px" }}><Badge tone={tone(p)} title={p.error ?? p.retryError ?? p.currentPackage ?? ""}>{progressLabel(p)}</Badge>
+      {(installed || p.groupVersion) && <span class="mono small" title={installed ? t("Installed group") : t("Target group")}>{installed ?? p.groupVersion}</span>}
+    </div>
+    {p.active && p.currentPackage && <span class="mono small">{p.currentPackage.replace(/^meduza-np-/, "")}</span>}
+    {percent != null && <>
+      <progress aria-label={t("Package download progress")} value={done!} max={total!} style={{ width: "100%", height: "5px" }} />
+      <span class="small muted">{percent}% · {bytes(done!)} / {bytes(total!)}</span>
+    </>}
+    {p.totalPackages != null && <span class="small muted">{t("{done}/{total} downloads verified", { done: p.completedPackages ?? 0, total: p.totalPackages })}</span>}
+    {p.active && percent == null && <span class="small muted">{t("Waiting for progress data")}</span>}
+    {p.error && <span class="small" style={{ color: "var(--bad)", overflowWrap: "anywhere" }}>{p.error}</span>}
+  </div>;
+}
+
 export function PackageProgress(props: { progress?: InstallProgress | null; reportedAt?: string }) {
   const p = props.progress;
-  if (!p) return null;
+  if (!p) return <Card title={t("Packages and updates")}>
+    <Badge tone="idle">{t("Update status unavailable")}</Badge>
+    <p class="small muted">{t("Waiting for the node to report updater status. Check that updater is installed and running.")}</p>
+    {props.reportedAt && <p class="small faint">{t("Last node report")}: {new Date(props.reportedAt).toLocaleString(getLocale())}</p>}
+  </Card>;
   const total = p.bytesTotal != null && p.bytesTotal > 0 ? p.bytesTotal : undefined;
   const downloaded = total != null && p.downloadedBytes != null ? Math.min(total, Math.max(0, p.downloadedBytes)) : undefined;
   const percentage = total != null && downloaded != null ? Math.floor(downloaded / total * 100) : null;
   const pending = p.pendingPackages ?? [];
   const packages = [...new Set([...(p.packages ?? []), ...pending])];
+  const completedAt = p.phase === "done" ? (p.lastResult?.outcome === "done" ? p.lastResult.at : p.totalPackages ? p.updatedAt : null) : null;
   return (
-    <Card title={t("Package installation")}>
-      <div class="row"><Badge tone={tone(p)}>{installPhaseLabel(p.phase)}</Badge>{p.groupVersion && <span class="mono small">{p.groupVersion}</span>}</div>
+    <Card title={t("Packages and updates")}>
+      <div class="row"><Badge tone={tone(p)}>{progressLabel(p)}</Badge>{p.groupVersion && <span class="mono small">{p.groupVersion}</span>}</div>
+      <div class="row small" style={{ gap: "20px", marginTop: "8px" }}>
+        {(p.installedGroupVersion || !p.active && p.phase === "done" && p.groupVersion) && <span>{t("Installed group")}: <strong class="mono">{p.installedGroupVersion ?? p.groupVersion}</strong></span>}
+        {p.availableGroupVersion && <span>{t("Available group")}: <span class="mono">{p.availableGroupVersion}</span></span>}
+      </div>
       {p.currentPackage && p.active && <p class="mono small">{t("Current package")}: {p.currentPackage}</p>}
-      {p.active && (
+      {(p.active || percentage != null || p.totalPackages != null) && (
         <div style={{ marginTop: "12px" }}>
           <progress aria-label={t("Package download progress")} value={downloaded} max={total ?? 1} style={{ width: "100%" }} />
           <p class="small muted">
@@ -72,12 +112,15 @@ export function PackageProgress(props: { progress?: InstallProgress | null; repo
           </p>
           {p.attempt != null && p.maxAttempts != null && <p class="small muted">{t("Download attempt {attempt}/{maximum}", { attempt: p.attempt, maximum: p.maxAttempts })}</p>}
           {p.retryAtUnix != null && <p class="small muted">{t("Automatic download retry")}: {new Date(p.retryAtUnix * 1000).toLocaleString(getLocale())}</p>}
-          {!["downloading", "retrying"].includes(p.phase) && <p class="small muted">{installPhaseLabel(p.phase)} · {t("Download completion does not mean installation is complete.")}</p>}
+          {p.active && !["downloading", "retrying"].includes(p.phase) && <p class="small muted">{installPhaseLabel(p.phase)} · {t("Download completion does not mean installation is complete.")}</p>}
         </div>
       )}
       {p.error && <div class="callout bad" style={{ overflowWrap: "anywhere", marginTop: "12px" }}>{p.error}</div>}
       {p.active && p.retryError && <div class="callout warn" style={{ overflowWrap: "anywhere", marginTop: "12px" }}>{p.retryError}</div>}
-      {!p.active && p.phase !== "done" && p.phase !== "paused" && p.nextCheckUnix != null && <p class="small muted">{t("Next automatic check")}: {new Date(p.nextCheckUnix * 1000).toLocaleString(getLocale())}</p>}
+      {completedAt && <p class="small muted">{t("Update completed at")}: {new Date(completedAt).toLocaleString(getLocale())}</p>}
+      {p.lastResult && <p class="small muted">{t("Last update result")}: {p.lastResult.groupVersion && <span class="mono">{p.lastResult.groupVersion} · </span>}{resultLabel(p.lastResult.outcome)}{p.lastResult.detail ? ` · ${p.lastResult.detail}` : ""}</p>}
+      {p.lastCheck && <p class="small muted">{t("Last update check")}: {new Date(p.lastCheck).toLocaleString(getLocale())}</p>}
+      {!p.active && p.phase !== "paused" && p.nextCheckUnix != null && <p class="small muted">{t("Next automatic check")}: {new Date(p.nextCheckUnix * 1000).toLocaleString(getLocale())}</p>}
       {packages.length > 0 && <div class="row" style={{ marginTop: "12px" }}>{packages.map((pkg) => <Badge tone={pkg === p.currentPackage && p.active ? "info" : pending.includes(pkg) ? "warn" : "idle"} title={packageInstallLabel(p, pkg) ?? ""}>{pkg.replace(/^meduza-np-/, "")}{pkg === p.currentPackage && p.active ? ` · ${t("current")}` : ""}</Badge>)}</div>}
       {props.reportedAt && <p class="small faint">{t("Last node report")}: {new Date(props.reportedAt).toLocaleString(getLocale())}</p>}
     </Card>

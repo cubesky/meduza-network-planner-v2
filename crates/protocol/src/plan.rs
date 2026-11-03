@@ -58,6 +58,22 @@ pub enum RestartPolicy {
     Always,
 }
 
+/// Whether applying a process requires a stable local daemon or only delivery to a reconnecting client.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProcessStartupPolicy {
+    #[default]
+    Required,
+    /// The peer may be unavailable: successful exec completes apply; runtime exits retry indefinitely.
+    Connection,
+}
+
+impl ProcessStartupPolicy {
+    pub fn is_required(&self) -> bool {
+        *self == Self::Required
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ProcessSpec {
@@ -73,6 +89,8 @@ pub struct ProcessSpec {
     pub env: BTreeMap<String, String>,
     #[serde(default)]
     pub restart: RestartPolicy,
+    #[serde(default, skip_serializing_if = "ProcessStartupPolicy::is_required")]
+    pub startup: ProcessStartupPolicy,
     #[serde(default = "default_stop_timeout")]
     pub stop_timeout_seconds: u32,
     /// Signal used for reload instead of restart, if the daemon supports it for the changed files.
@@ -244,6 +262,11 @@ impl GenerationPlan {
             v.check(ids.insert(p.id.as_str()), format!("{path}/id"), "duplicate process id");
             v.check(valid_instance_ref(&p.id), format!("{path}/id"), "process id must be <package>/<id>");
             v.check(p.provider_slot.is_some() != p.program.is_some(), &path, "exactly one of providerSlot or program is required");
+            v.check(
+                p.startup != ProcessStartupPolicy::Connection || p.restart == RestartPolicy::Always,
+                format!("{path}/restart"),
+                "connection startup requires restart always",
+            );
             if let Some(program) = &p.program {
                 v.check(program.starts_with('/') && !program.contains(".."), format!("{path}/program"), "program must be absolute");
             }
@@ -346,6 +369,24 @@ mod tests {
         }))
         .unwrap();
         assert!(plan.validate().is_empty(), "{:?}", plan.validate().errors());
+        assert_eq!(plan.processes[0].startup, ProcessStartupPolicy::Required);
+        assert!(serde_json::to_value(&plan.processes[0]).unwrap().get("startup").is_none(), "legacy plan digests stay unchanged");
+    }
+
+    #[test]
+    fn connection_startup_requires_continuous_retry() {
+        let mut plan: GenerationPlan = serde_json::from_value(json!({
+            "protocolVersion": 1, "requestId": "r", "instance": "openvpn/remote",
+            "processes": [{"id": "openvpn/remote", "program": "/usr/bin/openvpn", "argv": [], "startup": "connection"}]
+        }))
+        .unwrap();
+        for restart in [RestartPolicy::Never, RestartPolicy::OnFailure] {
+            plan.processes[0].restart = restart;
+            assert!(plan.validate().errors().iter().any(|e| e.path == "/processes/0/restart"));
+        }
+        plan.processes[0].restart = RestartPolicy::Always;
+        assert!(plan.validate().is_empty());
+        assert_eq!(serde_json::to_value(&plan.processes[0]).unwrap()["startup"], "connection");
     }
 
     #[test]

@@ -874,6 +874,7 @@ pub fn plan(cfg: &MihomoConfig, req: &PluginRequest) -> Result<Vec<GenerationPla
             ],
             env: Default::default(),
             restart: RestartPolicy::Always,
+            startup: Default::default(),
             stop_timeout_seconds: 10,
             reload_signal: None,
             restart_digest: Some(sha256_hex(spec_text.as_bytes())),

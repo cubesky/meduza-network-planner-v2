@@ -69,6 +69,7 @@ impl Plugin for MihomoPkg {
                     ],
                     env: Default::default(),
                     restart: RestartPolicy::Always,
+                    startup: Default::default(),
                     stop_timeout_seconds: 5,
                     reload_signal: None,
                     restart_digest: None,

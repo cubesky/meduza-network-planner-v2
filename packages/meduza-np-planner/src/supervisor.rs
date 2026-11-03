@@ -15,7 +15,8 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use meduza_np_protocol::plan::RestartPolicy;
+use meduza_np_protocol::plan::{ProcessStartupPolicy, RestartPolicy};
+use meduza_np_runtime::jitter::{Jitter, OsJitter};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::process::{Child, Command};
@@ -28,6 +29,7 @@ pub struct LaunchSpec {
     pub args: Vec<String>,
     pub env: BTreeMap<String, String>,
     pub restart: RestartPolicy,
+    pub startup: ProcessStartupPolicy,
     pub stop_timeout: Duration,
     /// Changing digest ⇒ restart; equal ⇒ keep the running process (§11.1).
     pub restart_digest: String,
@@ -51,6 +53,9 @@ impl LaunchSpec {
         let mut v = v;
         if let Some(b) = &self.bound_to {
             v["boundTo"] = b.as_str().into();
+        }
+        if !self.startup.is_required() {
+            v["startup"] = serde_json::to_value(self.startup).expect("startup policy");
         }
         hex(&Sha256::digest(v.to_string().as_bytes()))
     }
@@ -270,6 +275,25 @@ impl Supervisor {
                 }
             } else {
                 return false;
+            }
+            if start.elapsed() > deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    /// Successful exec is enough for a connection client. Backoff is a runtime connection condition;
+    /// a local spawn failure still rejects apply, even if an earlier attempt managed to start.
+    pub async fn wait_started(&self, id: &str, deadline: Duration) -> bool {
+        let start = Instant::now();
+        loop {
+            let Some(s) = self.status(id) else { return false };
+            if matches!(s.state, ProcState::Failed | ProcState::Stopped) {
+                return false;
+            }
+            if s.running_since.is_some() {
+                return true;
             }
             if start.elapsed() > deadline {
                 return false;
@@ -767,6 +791,8 @@ async fn run(
     };
     let mut quick_failures = 0u32;
     let mut backoff = Duration::from_secs(1);
+    let connection = spec.startup == ProcessStartupPolicy::Connection;
+    let mut jitter = OsJitter::new();
     loop {
         set_state(&status, &id, |s| s.state = ProcState::Starting);
         let mut proc = if let Some(rec) = adopt.take() {
@@ -842,7 +868,8 @@ async fn run(
                         warn!("{id}: stopped the processes it left behind (group {pgid})");
                     }
                 }
-                if ran < QUICK_FAILURE { quick_failures += 1 } else { quick_failures = 0; backoff = Duration::from_secs(1) }
+                let stable = if connection { MAX_BACKOFF } else { QUICK_FAILURE };
+                if ran < stable { quick_failures = quick_failures.saturating_add(1) } else { quick_failures = 0; backoff = Duration::from_secs(1) }
                 let restart = match spec.restart {
                     RestartPolicy::Never => false,
                     RestartPolicy::Always => true,
@@ -857,7 +884,7 @@ async fn run(
                         None => return,
                     }
                 }
-                if quick_failures >= MAX_QUICK_FAILURES {
+                if !connection && quick_failures >= MAX_QUICK_FAILURES {
                     error!("{id}: {quick_failures} quick failures, giving up until the next apply or manual restart");
                     set_state(&status, &id, |s| { s.state = ProcState::Failed; s.pid = None; s.last_exit = Some(text); });
                     match rx.recv().await {
@@ -866,9 +893,10 @@ async fn run(
                         None => return,
                     }
                 }
-                set_state(&status, &id, |s| { s.state = ProcState::Backoff; s.pid = None; s.restarts += 1; s.last_exit = Some(text); });
+                set_state(&status, &id, |s| { s.state = ProcState::Backoff; s.pid = None; s.restarts = s.restarts.saturating_add(1); s.last_exit = Some(text); });
+                let delay = if connection { backoff / 2 + jitter.uniform(backoff / 2) } else { backoff };
                 tokio::select! {
-                    _ = tokio::time::sleep(backoff) => {}
+                    _ = tokio::time::sleep(delay) => {}
                     ctl = rx.recv() => match ctl {
                         Some(Control::Stop(ack)) | Some(Control::Detach(ack)) => { finish(TailEnd::Remove); let _ = ack.send(()); return; }
                         Some(Control::Restart) => { backoff = Duration::from_secs(1); continue }
@@ -930,6 +958,7 @@ mod tests {
             args: vec![secs.into()],
             env: Default::default(),
             restart: RestartPolicy::OnFailure,
+            startup: Default::default(),
             stop_timeout: Duration::from_secs(2),
             restart_digest: digest.into(),
             bound_to: None,
@@ -959,6 +988,47 @@ mod tests {
         sup.ensure(spec).await;
         tokio::time::sleep(Duration::from_secs(1) * 20).await;
         assert_eq!(sup.status("t/f").unwrap().state, ProcState::Failed);
+        sup.stop_all().await;
+    }
+
+    #[tokio::test]
+    async fn connection_retries_beyond_quick_failure_limit_and_recovers() {
+        let counter = std::env::temp_dir().join(format!("mnp-connection-retries-{}", std::process::id()));
+        let _ = std::fs::remove_file(&counter);
+        let sup = Supervisor::new();
+        let mut spec = sleeper("t/connection", "60", "d");
+        spec.startup = ProcessStartupPolicy::Connection;
+        spec.restart = RestartPolicy::Always;
+        spec.program = "/bin/sh".into();
+        // Alternate success/failure exits, then recover without a new apply or manual restart.
+        spec.args = vec!["-c".into(),
+            "n=0; if [ -f \"$1\" ]; then read -r n < \"$1\"; fi; n=$((n+1)); echo \"$n\" > \"$1\"; if [ \"$n\" -le 6 ]; then exit $((n % 2)); fi; exec sleep 60".into(),
+            "retry-test".into(), counter.to_string_lossy().into_owned()];
+        sup.ensure(spec).await;
+        assert!(sup.wait_started("t/connection", Duration::from_secs(3)).await);
+        let recovered = sup.wait_settled("t/connection", Duration::from_millis(200), Duration::from_secs(135)).await;
+        let status = sup.status("t/connection").unwrap();
+        let attempts = std::fs::read_to_string(&counter).unwrap_or_default();
+        sup.stop_all().await;
+        let _ = std::fs::remove_file(counter);
+        assert!(recovered, "{status:?}");
+        assert_eq!(status.restarts, 6);
+        assert_eq!(attempts.trim(), "7");
+        assert_eq!(status.state, ProcState::Running);
+    }
+
+    #[tokio::test]
+    async fn connection_spawn_failure_still_rejects_startup() {
+        let sup = Supervisor::new();
+        let mut spec = sleeper("t/missing", "60", "d");
+        spec.startup = ProcessStartupPolicy::Connection;
+        spec.restart = RestartPolicy::Always;
+        spec.program = "/nonexistent/meduza-np-connection-test".into();
+        sup.ensure(spec).await;
+        assert!(!sup.wait_started("t/missing", Duration::from_secs(3)).await);
+        assert_eq!(sup.status("t/missing").unwrap().state, ProcState::Failed);
+        assert!(sup.status("t/missing").unwrap().last_exit.unwrap().contains("spawn failed"));
+        sup.stop_all().await;
     }
 
     #[cfg(target_os = "linux")]
@@ -1028,6 +1098,7 @@ mod tests {
             args: vec!["-c".into(), format!("sleep 60 & echo $! > {}; sleep 0.5; kill -9 $$", pidfile.display())],
             env: Default::default(),
             restart: RestartPolicy::Never,
+            startup: Default::default(),
             stop_timeout: Duration::from_secs(2),
             restart_digest: "d".into(),
             bound_to: None,
@@ -1057,6 +1128,7 @@ mod tests {
             args: vec!["-c".into(), "echo hello >&2; exec sleep 60".into()],
             env: Default::default(),
             restart: RestartPolicy::OnFailure,
+            startup: Default::default(),
             stop_timeout: Duration::from_secs(2),
             restart_digest: "d".into(),
             bound_to: None,

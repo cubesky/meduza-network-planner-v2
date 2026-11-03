@@ -313,6 +313,7 @@ pub fn plan(cfg: &OpenClashConfig, req: &PluginRequest) -> Result<Vec<Generation
             ],
             env: Default::default(),
             restart,
+            startup: Default::default(),
             stop_timeout_seconds: 10,
             reload_signal: None,
             restart_digest: Some(sha256_hex(spec_text.as_bytes())),
