@@ -367,6 +367,57 @@ fn manager_check_is_read_only_and_upgrade_now_overrides_pause() {
 }
 
 #[test]
+fn readonly_planner_helper_failure_falls_back_to_the_writable_updater_owner() {
+    struct ReadonlyPlanner<'a>(&'a FakePlanner, u8);
+    impl PlannerApi for ReadonlyPlanner<'_> {
+        fn call(&self, method: &str, params: Value) -> Result<Value, String> {
+            if method == "updater.activate" {
+                if self.1 == 1 {
+                    // The helper switched successfully but its acknowledgement was lost.
+                    self.0.call(method, params)?;
+                } else if self.1 == 2 {
+                    let file = self.0.store.join("journal.json");
+                    let mut journal: Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+                    journal["handoff"]["installed"]["packages"]["meduza-np-planner"]["version"] = json!("unverified");
+                    meduza_np_runtime::fsutil::write_json_atomic(&file, &journal, 0o600).unwrap();
+                }
+                return Err("update-failed: updater activation helper failed: exit status: 1: current.new: Read-only file system".into());
+            }
+            self.0.call(method, params)
+        }
+    }
+    for mode in 0..3 {
+        let env = Env::new(&format!("readonly-planner-handoff-{mode}"));
+        let cfg = env.config(Some(vec![]));
+        let planner = FakePlanner { store: cfg.store_dir(), up: Cell::new(false), boot: Cell::new(1), calls: RefCell::new(vec![]) };
+        let readonly = ReadonlyPlanner(&planner, mode);
+        let now_fn = now;
+        let e = engine(&cfg, &readonly, &now_fn);
+        let names = ["meduza-np-planner", "meduza-np-updater"];
+        env.publish("v0.1.0", 1, names.iter().map(|name| env.package(name, "0.1.0", false)).collect(), FAR);
+        assert_eq!(e.run_once(true).unwrap().1, Some(Outcome::Applied));
+        planner.up.set(true);
+        env.publish("v0.2.0", 2, names.iter().map(|name| env.package(name, "0.2.0", false)).collect(), FAR);
+        let outcome = e.run_once(true).unwrap().1;
+        if mode == 2 {
+            let Some(Outcome::RolledBack(reason)) = outcome else { panic!("a malformed handoff must roll back") };
+            assert!(reason.contains("owner updater activation failed") && reason.contains("preserve every other package"));
+            assert_eq!(e.installed().unwrap().packages["meduza-np-planner"].version, "0.1.0");
+            assert_eq!(e.installed().unwrap().packages["meduza-np-updater"].version, "0.1.0");
+            std::fs::remove_dir_all(env.root).unwrap();
+            continue;
+        }
+        assert_eq!(outcome, Some(Outcome::AppliedRestartSelf));
+        let installed = e.installed().unwrap();
+        assert_eq!(installed.packages["meduza-np-updater"].version, "0.2.0");
+        assert_eq!(installed.packages["meduza-np-planner"].version, "0.1.0", "only updater changes before independent takeover");
+        assert!(e.recover(true).unwrap().contains("complete"));
+        assert_eq!(e.installed().unwrap().packages["meduza-np-planner"].version, "0.2.0");
+        std::fs::remove_dir_all(env.root).unwrap();
+    }
+}
+
+#[test]
 fn planner_activates_updater_then_new_updater_upgrades_planner_without_network() {
     struct ExecutableHelperPlanner<'a> {
         planner: &'a FakePlanner,

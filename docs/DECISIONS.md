@@ -1584,3 +1584,20 @@ to traverse redirected internal directories; archive names must be single normal
 This is runtime package storage housekeeping. It does not change service configuration, discard pending
 handoffs, remove user-managed binaries/data or run global container/image pruning. Updated updater and
 mihomo-pkg artifacts are required; source validation does not clean production volumes.
+
+## D69 — Recover updater activation within its writable owner
+
+The reference Podman deployment intentionally mounts the package store read-only in planner and writable in
+updater. A staged activation helper launched by planner inherits that read-only mount and cannot create
+store/current.new, causing a generic exit-status error and rollback before the new updater can take over.
+Keep that mount isolation. When planner's activation RPC fails, the independent updater repeats the same
+constrained activation in its writable namespace. It revalidates the persisted self-restart journal, target
+updater, generation, backend, unchanged other packages and expected current view. A lost acknowledgement after
+a successful switch is idempotent; invalid handoffs still fail and roll back. The independent entrypoint then
+starts the new updater, which resumes the verified staged plan and upgrades planner afterwards.
+
+Planner drains helper stderr while retaining at most 4 KiB, and includes the diagnostic in failed RPCs.
+Execution and capture waits stay bounded; timeout still kills the helper's process group. If owner activation
+also fails, report both errors. This fix requires an updated updater binary. Older deployed updaters need one
+owner-side takeover through their signed source before the new behavior is available; changing planner's
+store mount to writable is not required.

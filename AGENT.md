@@ -1016,6 +1016,8 @@ updater 自更新需要系统 supervisor 或短命 helper 完成接替，不能�
 
 planner 与 updater 相互协调升级。两者都有更新时，先由 planner 通过短命 helper 仅激活 updater，独立运行入口接替到新 updater 后，再由新 updater 立即继续已校验、已暂存的计划，升级 planner 及其余包；不能等待下一次周期检查或提前将整个包组标为完成。updater 接替失败时保持原 planner；planner 后续升级失败时恢复原 planner 与业务包并保留已经成功接替的 updater。planner 不可用或上一发布尚不支持接替协议时，updater 必须保留独立引导/修复能力。
 
+planner 的包目录可以保持只读。planner 激活助手失败时，updater 在自己的可写目录重新校验并执行同一项仅替换 updater 的接替事务；已经切换但确认丢失的请求可幂等重复，journal 不匹配仍须拒绝并回滚。不能通过放宽 planner 的挂载权限修复接替。助手失败需上报有界 stderr，便于区分只读文件系统、空间不足和其他安装错误。
+
 Podman 模式下，容器内独立 updater 可校验、暂存和切换持久化包目录中的 planner、插件及自身版本，通过维护协议协调健康检查和进程接替。基础镜像更新或必须重建容器时，由受控的宿主部署 helper/Podman 管理入口执行，容器内 updater 提交经过验证的更新计划；不要求宿主另装一份 updater，也不能依赖 planner 替换自身容器。宿主入口只允许操作预先登记的本项目容器、卷和已验证镜像 digest，不默认暴露整个宿主容器 socket 给节点服务。具体部署与故障恢复见第 14.3 节。
 
 ### 13.4 升级元数据

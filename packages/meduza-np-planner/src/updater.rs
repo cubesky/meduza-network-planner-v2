@@ -128,12 +128,31 @@ pub async fn activate(paths: &NodePaths) -> Result<(), String> {
         .env("MEDUZA_NP_UPDATE_BACKEND", journal["newInstalled"]["backend"].as_str().unwrap_or_default())
         .stdin(Stdio::null())
         .stdout(Stdio::null())
+        .stderr(Stdio::piped())
         .kill_on_drop(true);
     #[cfg(unix)]
     cmd.process_group(0);
     let mut child = cmd.spawn().map_err(|e| format!("updater activation helper: {e}"))?;
+    let mut stderr = child.stderr.take().expect("piped helper stderr");
+    let mut capture = tokio::spawn(async move {
+        use tokio::io::AsyncReadExt;
+        let mut message = Vec::new();
+        let mut buffer = [0u8; 1024];
+        while let Ok(n) = stderr.read(&mut buffer).await {
+            if n == 0 {
+                break;
+            }
+            let keep = n.min(4096usize.saturating_sub(message.len()));
+            message.extend_from_slice(&buffer[..keep]);
+        }
+        String::from_utf8_lossy(&message).trim().to_string()
+    });
     let status = match tokio::time::timeout(Duration::from_secs(120), child.wait()).await {
-        Ok(s) => s.map_err(|e| format!("updater activation helper: {e}"))?,
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => {
+            capture.abort();
+            return Err(format!("updater activation helper: {e}"));
+        }
         Err(_) => {
             #[cfg(unix)]
             if let Some(pid) = child.id() {
@@ -145,13 +164,21 @@ pub async fn activate(paths: &NodePaths) -> Result<(), String> {
             }
             let _ = child.kill().await;
             let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+            capture.abort();
             return Err("updater activation helper timed out".into());
+        }
+    };
+    let detail = match tokio::time::timeout(Duration::from_secs(1), &mut capture).await {
+        Ok(Ok(message)) => message,
+        _ => {
+            capture.abort();
+            String::new()
         }
     };
     if status.success() {
         Ok(())
     } else {
-        Err(format!("updater activation helper failed: {status}"))
+        Err(format!("updater activation helper failed: {status}{}", if detail.is_empty() { String::new() } else { format!(": {detail}") }))
     }
 }
 
@@ -225,6 +252,12 @@ mod tests {
         activate(&paths).await.unwrap();
         assert_eq!(std::fs::read(paths.state.join("helper-called")).unwrap(), b"activated");
         std::fs::remove_file(paths.state.join("helper-called")).unwrap();
+        std::fs::write(&exe, b"#!/bin/sh\necho 'store/current.new: Read-only file system' >&2\nexit 1\n").unwrap();
+        let error = activate(&paths).await.unwrap_err();
+        assert!(
+            error.contains("Read-only file system") && error.contains("exit status: 1"),
+            "the helper diagnostic must survive the RPC: {error}"
+        );
         journal["newInstalled"]["packages"]["meduza-np-updater"]["object"] = json!("../../etc");
         fsutil::write_json_atomic(&store.join("journal.json"), &journal, 0o600).unwrap();
         assert!(activate(&paths).await.unwrap_err().contains("invalid staged updater"));

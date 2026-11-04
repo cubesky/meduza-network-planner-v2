@@ -1159,3 +1159,18 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   and symlink/manual-file preservation. Log: target/check-cache-cleanup-final.log. Source-only: production
   volumes were not cleaned; updated updater and mihomo-pkg artifacts must be released. Git submissions remain
   with the user as requested; no index/commit/push changes were made for this task.
+- 2026-11-04 (per the user) Fix updater activation rollback with a read-only planner store (D69).
+  Confirmed the live helper could not create store/current.new because planner's deliberate store mount is
+  read-only. Preserve that isolation and retry failed activation within the writable updater owner, validating
+  the same updater-only journal and generation. Lost acknowledgements are idempotent; malformed handoffs still
+  roll back. Planner captures at most 4 KiB of helper stderr so failures retain their actual filesystem/install
+  reason; all waits remain bounded. All 44 updater/targeted planner tests and strict Clippy pass, including
+  read-only helper failure, already-switched recovery, corrupted journal rejection and diagnostic propagation.
+  Log: target/check-updater-owner-final.log. Recover the existing 10.42.10.9 node through its signed source:
+  back up installation/control metadata, pause and stop only the idle old updater worker, activate v0.2.1 from
+  its writable owner, then restart the independent updater container to finish the staged planner upgrade.
+  Verified installed group v0.2.1/generation 11, both running executables at 0.2.1, terminal journal done/no
+  error, healthy containers and restored automatic policy. Planner store remains read-only; gateway remains
+  10.42.10.1 and DNS 119.29.29.29. Private repair backup is under /var/standalone/meduza/backups/.
+  The source fix is not yet published or installed on this node: its next transition to a fixed updater may
+  need the same owner-side takeover. Git index/commit/push and release remain with the user.

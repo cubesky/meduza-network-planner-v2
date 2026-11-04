@@ -641,7 +641,12 @@ impl<'a> Engine<'a> {
                     eprintln!("previous planner has no updater.activate; using the independent takeover helper");
                     self.activate_updater()
                 }
-                Err(e) => Err(e),
+                Err(e) => {
+                    // Planner's store mount can be read-only. Repeat the same constrained activation in
+                    // the writable owner; activate_updater revalidates the journal and updater-only scope.
+                    eprintln!("planner updater activation failed ({e}); retrying the verified handoff in its writable owner");
+                    self.activate_updater().map_err(|owner| format!("{e}; owner updater activation failed: {owner}"))
+                }
             }
         } else {
             // Bootstrap / broken planner must never prevent updater from repairing the node.
