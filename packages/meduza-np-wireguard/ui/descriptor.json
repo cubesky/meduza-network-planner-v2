@@ -115,7 +115,8 @@
         "endpoint",
         "rxBytes",
         "txBytes",
-        "reasonCode"
+        "reasonCode",
+        "reason"
       ]
     }
   ],
@@ -132,6 +133,7 @@
         "高级": "Advanced"
       },
       "fields": {
+        "reason": "Connection error",
         "accept": "Accepted prefixes",
         "acceptDefault": "Accept a default route",
         "address": "Neighbor address",
@@ -202,6 +204,7 @@
         "publicEndpoint": "公网端点",
         "publicKey": "公钥",
         "reasonCode": "原因代码",
+        "reason": "连接错误",
         "remoteAsn": "对端 ASN",
         "rxBytes": "接收字节",
         "state": "状态",
@@ -258,6 +261,7 @@
         "publicEndpoint": "公開端點",
         "publicKey": "公鑰",
         "reasonCode": "原因代碼",
+        "reason": "連線錯誤",
         "remoteAsn": "對端 ASN",
         "rxBytes": "接收位元組",
         "state": "狀態",

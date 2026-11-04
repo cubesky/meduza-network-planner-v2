@@ -273,6 +273,12 @@ pub struct CommandOutput {
 /// Runs a read-only status command (e.g. `wg show <dev> dump`) with a timeout and output cap.
 /// Never used to change system state: changes go through plans applied by planner.
 pub fn run_status_command(program: &str, args: &[&str], timeout: Duration, max_output: usize) -> std::io::Result<CommandOutput> {
+    run_plan_command(program, args, timeout, max_output)
+}
+
+/// Bounded native command for a runner explicitly launched and owned by a generation plan.
+/// Mutating commands must never be called from plugin validate/plan/probe operations.
+pub fn run_plan_command(program: &str, args: &[&str], timeout: Duration, max_output: usize) -> std::io::Result<CommandOutput> {
     let mut child = Command::new(program).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
     let mut stdout = child.stdout.take().expect("piped");
     let mut stderr = child.stderr.take().expect("piped");

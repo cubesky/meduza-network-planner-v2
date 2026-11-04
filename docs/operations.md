@@ -203,6 +203,7 @@ of the planner service (or the procd init script) stops them.
 | --- | --- |
 | Manager unreachable | planner keeps running the last good configuration and backs off; local status still works (CLI, dashboard via break-glass link, LuCI) |
 | External VPN peer unreachable | the configuration still applies; OpenVPN Site2Site instances (client and server roles) keep reconnecting, including after repeated process exits (jittered exponential waits, at most 60 seconds); WireGuard retries handshakes when traffic/keepalive requires it. Connection health stays down/starting/degraded until recovery; local file/provider/check/interface failures still fail apply |
+| WireGuard endpoint DNS fails | local interface/keys/peers still apply; an instance-owned runner resolves each hostname separately and retries with jitter capped at 60 seconds. A failed peer keeps its old endpoint while other peers/services continue. Successful names refresh every 60 seconds. Manager Connections and Dashboard Instances show the failure on the corresponding row, without marking the revision failed; no republish is needed after DNS recovery |
 | Power loss during an update | on start the updater reads its journal: before the switch ⇒ nothing changed; after ⇒ verify, else roll back |
 | Power loss during a config apply | planner finds the pending-apply journal and reconciles to the last good configuration |
 | Update keeps failing | `meduza-np update status` shows the last journal and reason; fix the cause, then `meduza-np update apply` |

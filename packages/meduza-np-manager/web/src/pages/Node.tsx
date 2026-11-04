@@ -351,7 +351,7 @@ function ConnectionsTab(props: { items: Inst[]; canAct: boolean; restart: (insta
             columns={[
               { key: "id", label: t("Peer"), render: (r) => <strong>{last(String(r.id))}</strong> },
               { key: "remoteAddress", label: t("Address"), render: (r) => <span class="mono">{String(r.remoteAddress ?? "—")}</span> },
-              { key: "state", label: t("State"), render: (r) => stateCell(r, r.reasonCode ? t(String(r.reasonCode)) : undefined) },
+              { key: "state", label: t("State"), render: (r) => <div>{stateCell(r, r.reasonCode ? t(String(r.reasonCode)) : undefined)}{r.reason != null && <div class="small muted">{String(r.reason)}</div>}</div> },
               { key: "lastChange", label: t("Since"), render: (r) => relativeTime(r.lastChange as string | undefined) },
               { key: "d", label: "", render: (r) => <DetailsButton item={r as Inst} /> },
             ]}
@@ -365,8 +365,8 @@ function ConnectionsTab(props: { items: Inst[]; canAct: boolean; restart: (insta
             rowKey={(r) => String(r.id)}
             columns={[
               { key: "id", label: t("Peer"), render: (r) => <span><strong>{last(String(r.id))}</strong> <span class="faint small">{String(r.id).split("/")[1]}</span></span> },
-              { key: "endpoint", label: t("Endpoint"), render: (r) => <span class="mono">{String(r.endpoint ?? "—")}</span> },
-              { key: "state", label: t("State"), render: (r) => stateCell(r, r.reasonCode ? t(String(r.reasonCode)) : undefined) },
+              { key: "endpoint", label: t("Endpoint"), render: (r) => <span class="mono">{String(r.endpoint ?? r.configuredEndpoint ?? "—")}</span> },
+              { key: "state", label: t("State"), render: (r) => <div>{stateCell(r, r.reasonCode ? t(String(r.reasonCode)) : undefined)}{r.reason != null && <div class="small muted">{String(r.reason)}</div>}</div> },
               { key: "latestHandshake", label: t("Last handshake"), render: (r) => relativeTime(r.latestHandshake as string | undefined) },
               { key: "traffic", label: t("Traffic in / out"), render: (r) => `${bytes(Number(r.rxBytes ?? 0))} / ${bytes(Number(r.txBytes ?? 0))}` },
               { key: "d", label: "", render: rowActions },
@@ -382,7 +382,7 @@ function ConnectionsTab(props: { items: Inst[]; canAct: boolean; restart: (insta
             columns={[
               { key: "id", label: t("Session"), render: (r) => <span><strong>{last(String(r.id))}</strong> <span class="faint small">{String(r.id).split("/")[1]} · {String(r.kind).replace("openvpn-", "")}</span></span> },
               { key: "remote", label: t("Address"), render: (r) => <span class="mono">{String(r.realAddress ?? r.remote ?? r.remoteAddress ?? "—")}</span> },
-              { key: "state", label: t("State"), render: (r) => stateCell(r) },
+              { key: "state", label: t("State"), render: (r) => <div>{stateCell(r)}{r.reason != null && <div class="small muted">{String(r.reason)}</div>}</div> },
               { key: "since", label: t("Since"), render: (r) => relativeTime((r.connectedSince ?? r.since) as string | undefined) },
               { key: "d", label: "", render: rowActions },
             ]}

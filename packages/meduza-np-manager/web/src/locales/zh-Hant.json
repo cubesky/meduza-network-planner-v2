@@ -671,5 +671,7 @@
   "Install packaged binary": "安裝本體套件",
   "Stop requesting": "停止請求",
   "Stop requesting {package}? Installed or deployment-pinned binaries may remain; the provider status shows what is active.": "停止請求 {package}？已安裝或由部署固定的本體套件可能仍被保留，實際使用情況以下方 provider 狀態為準。",
-  "unknown version": "版本未知"
+  "unknown version": "版本未知",
+  "endpoint-resolution-failed": "端點 DNS 解析失敗，自動重試",
+  "endpoint-update-failed": "端點更新失敗，自動重試"
 }

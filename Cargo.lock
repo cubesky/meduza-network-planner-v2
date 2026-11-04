@@ -767,6 +767,7 @@ dependencies = [
  "ipnet",
  "meduza-np-plugin-sdk",
  "meduza-np-protocol",
+ "meduza-np-runtime",
  "schemars",
  "serde",
  "serde_json",

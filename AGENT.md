@@ -621,6 +621,8 @@ Access 客户端配置导出、证书策略、用户禁用后的新登录拒绝/
 
 支持多个接口与多个 Peer。接口包含 enabled、device、privateKeyRef、公钥展示、addresses、listenPort、MTU；Peer 包含 enabled/publicKey/presharedKeyRef/allowedIps/endpoint/persistentKeepalive。
 
+OpenVPN、WireGuard 等外部连接的域名解析、对端不可达和临时连接错误仅在 manager/dashboard 对应实例或 Peer 行显示，后台自动重试，不中止整次配置应用。WireGuard 必须先落地本地密钥、Peer 和接口配置，再独立解析域名并更新 Endpoint；失败保留已有端点。分发、格式、密钥和本地接口操作失败仍需明确报错。
+
 界面支持密钥生成、公钥派生、PSK、Peer 增删、配置导出。禁止仅用最后一位数字推导接口名；接口名最多 15 字节并检查跨实例冲突。
 
 默认不根据 AllowedIPs 自动安装路由；系统路由由声明的路由计划/FRR 管理。AllowedIPs 是加密 Peer 选择范围，不是默认路由开关。地址、MTU 使用明确的系统操作配置，不能暗中通过 wg-quick 修改系统 DNS。

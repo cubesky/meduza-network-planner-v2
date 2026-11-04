@@ -16,12 +16,14 @@ use meduza_np_plugin_sdk::text::ConfigWriter;
 use meduza_np_plugin_sdk::{PluginError, PluginRequest};
 use meduza_np_protocol::bgp::BgpSession;
 use meduza_np_protocol::ids::{derive_ifname, validate_ifname, StableId};
-use meduza_np_protocol::plan::{CommandSpec, GenerationPlan, NetworkResource, PlannedFile, ProbeSpec};
+use meduza_np_protocol::plan::{CommandSpec, GenerationPlan, NetworkResource, PlannedFile, ProbeSpec, ProcessSpec, RestartPolicy};
 use meduza_np_protocol::report::{InstanceStatus, ServiceState};
 use meduza_np_protocol::{ValidationError, Validator, PLUGIN_PROTOCOL_VERSION};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+pub mod endpoints;
 
 pub const SLOT: &str = "wireguard.tools";
 
@@ -289,6 +291,17 @@ pub fn render_wg_quick_export(inst: &Interface, req: &PluginRequest) -> Result<S
     Ok(native.replacen("[Interface]\n", &format!("[Interface]\n{extra}"), 1))
 }
 
+/// DNS-dependent endpoints are reconciled by the instance runner, outside the required local reload.
+fn render_local_config(inst: &Interface, req: &PluginRequest) -> Result<String, PluginError> {
+    let mut local = inst.clone();
+    for peer in &mut local.peers {
+        if peer.endpoint.as_ref().is_some_and(|e| e.parse::<SocketAddr>().is_err()) {
+            peer.endpoint = None;
+        }
+    }
+    render_setconf(&local, req)
+}
+
 pub fn plan(cfg: &WireGuardConfig, req: &PluginRequest) -> Result<Vec<GenerationPlan>, PluginError> {
     if !cfg.enabled {
         return Ok(Vec::new());
@@ -301,12 +314,50 @@ pub fn plan(cfg: &WireGuardConfig, req: &PluginRequest) -> Result<Vec<Generation
         for a in &inst.addresses {
             resources.push(NetworkResource::Address { device: dev.clone(), cidr: a.to_string() });
         }
+        let mut files =
+            vec![PlannedFile { path: rel.clone(), mode: "0600".into(), content: render_local_config(inst, req)?, sensitive: true }];
+        let peers: Vec<_> = inst
+            .peers
+            .iter()
+            .filter(|p| p.enabled)
+            .filter_map(|p| {
+                let endpoint = p.endpoint.as_ref().filter(|ep| ep.parse::<SocketAddr>().is_err())?;
+                Some(endpoints::PeerSpec { id: p.id.to_string(), public_key: p.public_key.clone()?, endpoint: endpoint.clone() })
+            })
+            .collect();
+        let mut processes = Vec::new();
+        if !peers.is_empty() {
+            let spec = endpoints::Spec { instance: inst.id.to_string(), device: dev.clone(), wg: req.provider(SLOT)?.path.clone(), peers };
+            let spec_path = format!("wireguard/{}/endpoints.json", inst.id);
+            files.push(PlannedFile {
+                path: spec_path.clone(),
+                mode: "0600".into(),
+                content: serde_json::to_string(&spec).unwrap(),
+                sensitive: false,
+            });
+            processes.push(ProcessSpec {
+                id: format!("wireguard/{}/endpoints", inst.id),
+                provider_slot: None,
+                program: Some(format!("{}/plugins/wireguard", req.context.libexec_dir.trim_end_matches('/'))),
+                argv: vec!["watch-endpoints".into(), format!("${{GENERATION_ROOT}}/{spec_path}"), "${RUN_DIR}".into()],
+                env: BTreeMap::new(),
+                restart: RestartPolicy::Always,
+                startup: Default::default(),
+                stop_timeout_seconds: 3,
+                reload_signal: None,
+                restart_digest: Some(meduza_np_protocol::digest::sha256_hex(
+                    format!("{}\n{}", serde_json::to_string(&spec).unwrap(), endpoints::runner_identity()).as_bytes(),
+                )),
+                user: None,
+                bound_to: None,
+            });
+        }
         plans.push(GenerationPlan {
             protocol_version: PLUGIN_PROTOCOL_VERSION,
             request_id: req.request_id.clone(),
             instance: format!("wireguard/{}", inst.id),
-            files: vec![PlannedFile { path: rel.clone(), mode: "0600".into(), content: render_setconf(inst, req)?, sensitive: true }],
-            processes: Vec::new(),
+            files,
+            processes,
             resources,
             depends_on: Vec::new(),
             probes: vec![ProbeSpec::Plugin { interval_seconds: 30, params: Value::Null }],
@@ -406,6 +457,9 @@ pub fn statuses(cfg: &WireGuardConfig, dumps: &BTreeMap<String, Result<String, S
             let d = parsed.as_ref().and_then(|(_, peers)| peers.iter().find(|p| Some(&p.public_key) == peer.public_key.as_ref()));
             let (state, reason) = peer_state(peer, d, now, inst.handshake_timeout_seconds);
             let mut detail = BTreeMap::new();
+            if let Some(endpoint) = &peer.endpoint {
+                detail.insert("configuredEndpoint".into(), Value::String(endpoint.clone()));
+            }
             if let Some(d) = d {
                 if d.latest_handshake > 0 {
                     detail.insert("latestHandshake".into(), Value::String(meduza_np_plugin_sdk::unix_to_rfc3339(d.latest_handshake)));
@@ -440,7 +494,7 @@ mod tests {
     const PEER: &str = "xTIBA5rboUvnH4htodjb6e697QjLERt1NAB4mZqp8Dg=";
 
     fn req() -> PluginRequest {
-        test_request(
+        let mut request = test_request(
             "plan",
             json!({
                 "services": {"wireguard": {"instances": [{
@@ -449,7 +503,12 @@ mod tests {
                 }]}},
                 "secrets": {"wg-uplink": {"kind": "wireguard-private-key", "value": PRIV}}
             }),
-        )
+        );
+        request.providers.insert(
+            SLOT.into(),
+            meduza_np_plugin_sdk::ResolvedProvider { path: "/usr/bin/wg".into(), source: "system".into(), version: None },
+        );
+        request
     }
 
     #[test]
@@ -496,7 +555,10 @@ mod tests {
         assert!(p.validate().is_empty(), "{:?}", p.validate().errors());
         assert_eq!(p.files[0].mode, "0600");
         assert!(p.files[0].sensitive);
-        assert!(p.processes.is_empty());
+        assert_eq!(p.processes[0].id, "wireguard/uplink/endpoints");
+        assert!(!p.files[0].content.contains("Endpoint = wg.example.test"));
+        assert!(p.files[0].content.contains(PEER), "peer keys still apply before DNS succeeds");
+        assert!(p.reload[0].required, "local configuration errors still fail apply");
         assert_eq!(
             p.resources[0],
             NetworkResource::Link { device: "wg-uplink".into(), link_type: "wireguard".into(), mtu: Some(1420), up: true }
@@ -504,6 +566,66 @@ mod tests {
         assert_eq!(p.reload[0].argv, vec!["syncconf", "wg-uplink", "${GENERATION_ROOT}/wireguard/uplink/wg.conf"]);
         // Keys never appear in argv.
         assert!(!serde_json::to_string(&p.reload).unwrap().contains(PRIV));
+    }
+
+    #[test]
+    fn numeric_endpoints_stay_in_required_local_reload_without_an_extra_runner() {
+        let r = req();
+        let mut cfg = load(&r).unwrap();
+        for endpoint in ["192.0.2.1:51820", "[2001:db8::1]:51820"] {
+            cfg.instances[0].peers[0].endpoint = Some(endpoint.into());
+            let plans = plan(&cfg, &r).unwrap();
+            assert!(plans[0].processes.is_empty());
+            assert!(plans[0].files[0].content.contains(&format!("Endpoint = {endpoint}")));
+            assert!(plans[0].reload[0].required);
+        }
+    }
+
+    #[test]
+    fn endpoint_errors_only_degrade_the_matching_peer_and_stale_config_errors_are_ignored() {
+        let r = req();
+        let cfg = load(&r).unwrap();
+        let run = std::env::temp_dir().join(format!("mnp-wg-status-{}", std::process::id()));
+        let state = endpoints::EndpointStatus {
+            public_key: PEER.into(),
+            desired_endpoint: "wg.example.test:51820".into(),
+            phase: "resolution-failed".into(),
+            attempt: 3,
+            retry_at_unix: 120,
+            updated_unix: 100,
+            resolved_endpoint: Some("192.0.2.1:51820".into()),
+            error: Some("Name does not resolve".into()),
+        };
+        meduza_np_runtime::fsutil::write_json_atomic(&endpoints::state_path(&run, "uplink"), &BTreeMap::from([("peer-b", state)]), 0o644)
+            .unwrap();
+        let make = |id: &str, kind: &str| InstanceStatus {
+            id: id.into(),
+            kind: kind.into(),
+            state: ServiceState::Up,
+            observed_at: None,
+            reason: None,
+            detail: BTreeMap::new(),
+        };
+        let original = vec![
+            make("wireguard/uplink", "wireguard-interface"),
+            make("wireguard/uplink/peer-b", "wireguard-peer"),
+            make("openvpn/lemon", "openvpn-site2site"),
+        ];
+        let mut rows = original.clone();
+        endpoints::attach_statuses(&cfg, &mut rows, &run, 110);
+        assert_eq!(rows[1].state, ServiceState::Degraded);
+        assert_eq!(rows[1].detail["connectionState"], "up", "a working old endpoint can still carry traffic");
+        assert_eq!(rows[1].reason.as_deref(), Some("Name does not resolve"));
+        assert_eq!(rows[0], original[0]);
+        assert_eq!(rows[2], original[2]);
+        let mut stale = original.clone();
+        endpoints::attach_statuses(&cfg, &mut stale, &run, 221);
+        assert_eq!(stale, original);
+        let mut changed = cfg;
+        changed.instances[0].peers[0].endpoint = Some("changed.example.test:51820".into());
+        endpoints::attach_statuses(&changed, &mut stale, &run, 110);
+        assert_eq!(stale, original);
+        std::fs::remove_dir_all(run).unwrap();
     }
 
     #[test]

@@ -34,7 +34,9 @@ impl Plugin for WireGuard {
             dumps.insert(dev, out);
         }
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        Ok(ProbeResult { instances: wg::statuses(&cfg, &dumps, now) })
+        let mut instances = wg::statuses(&cfg, &dumps, now);
+        wg::endpoints::attach_statuses(&cfg, &mut instances, std::path::Path::new(&req.context.run_dir), now);
+        Ok(ProbeResult { instances })
     }
 
     fn action(&self, req: &PluginRequest) -> Result<Value, PluginError> {
@@ -66,5 +68,26 @@ impl Plugin for WireGuard {
 }
 
 fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let result = match args.get(1).map(String::as_str) {
+        Some("resolve-endpoint") => Some(
+            args.get(2)
+                .ok_or_else(|| "endpoint required".into())
+                .and_then(|ep| wg::endpoints::resolve(ep))
+                .map(|address| println!("{address}")),
+        ),
+        Some("watch-endpoints") => Some(match (args.get(2), args.get(3)) {
+            (Some(spec), Some(run)) => wg::endpoints::watch(std::path::Path::new(spec), std::path::Path::new(run)),
+            _ => Err("endpoint spec and run directory required".into()),
+        }),
+        _ => None,
+    };
+    if let Some(result) = result {
+        if let Err(error) = result {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+        return;
+    }
     run(&WireGuard, env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
 }

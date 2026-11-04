@@ -1125,3 +1125,21 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   updater, Dashboard and Manager artifacts; production node binaries/configuration were not replaced.
   Final protocol/runtime/planner regression passed all 102 tests (including six executable-backed engine cases),
   followed by strict Clippy for all five affected Rust packages. Log: target/check-package-resources-full.log.
+- 2026-11-04 (per the user) Keep WireGuard endpoint DNS errors out of configuration application (D67).
+  Required local syncconf now applies all keys/peers/AllowedIPs and numeric endpoints without resolving remote
+  hostnames. Instances with hostname peers own a supervised resolver/updater with five-second DNS deadlines,
+  three-second native-command deadlines and independent exponential retries capped at 60 seconds with jitter.
+  It retains previous endpoints on failure, refreshes successful DNS, preserves learned endpoints when DNS is
+  unchanged, repairs empty endpoints after link recreation, and replaces the helper on binary/spec changes.
+  Per-peer status carries the bounded error, retry phase/attempt/time and desired/resolved endpoints; stale or
+  superseded observations are ignored. Manager shows WireGuard/OpenVPN reasons directly on their connection
+  rows; both packages' status descriptors expose a translated Connection error column for Dashboard/plugin
+  views. OpenVPN retains its existing native reconnect and connection-process retry policy. Typed config,
+  distribution, provider and local interface/reload failures still reject apply; no wg error-string bypass
+  or suppression of required checks was added to planner. Verified 71 Rust tests, including seven executable
+  engine cases and the real resolver-process scenario where invalid DNS commits alongside another service but
+  a forced local wg rejection still fails. Strict planner/SDK/WireGuard/OpenVPN Clippy, frontend type checks,
+  both production UI builds, six Manager API/i18n tests, final descriptor checks and full-page Chrome assertions
+  pass. Screenshot: target/connection-errors.png; logs: target/check-wireguard-{final,engine,endpoints}.log.
+  Source-only: release the changed WireGuard/OpenVPN package descriptors and Manager; no production node
+  binary, configuration or service was replaced.

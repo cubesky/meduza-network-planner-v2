@@ -174,7 +174,8 @@
         "remote",
         "since",
         "processRunning",
-        "devicePresent"
+        "devicePresent",
+        "reason"
       ]
     },
     {
@@ -186,7 +187,8 @@
         "clients",
         "processRunning",
         "devicePresent",
-        "statusUpdated"
+        "statusUpdated",
+        "reason"
       ]
     }
   ],
@@ -208,6 +210,7 @@
         "链路": "Link"
       },
       "fields": {
+        "reason": "Connection error",
         "accept": "Accepted prefixes",
         "acceptDefault": "Accept a default route",
         "address": "Neighbor address",
@@ -271,6 +274,7 @@
         "devType": "设备类型",
         "device": "设备",
         "devicePresent": "设备存在",
+        "reason": "连接错误",
         "dhRef": "DH 参数",
         "enabled": "启用",
         "exportAccessPools": "通告 Access 地址池",
@@ -375,6 +379,7 @@
         "devType": "裝置類型",
         "device": "裝置",
         "devicePresent": "裝置存在",
+        "reason": "連線錯誤",
         "dhRef": "DH 參數",
         "enabled": "啟用",
         "exportAccessPools": "通告 Access 位址池",

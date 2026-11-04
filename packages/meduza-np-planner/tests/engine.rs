@@ -165,6 +165,71 @@ fn log_lines(env: &Env) -> Vec<String> {
     std::fs::read_to_string(&env.log).unwrap_or_default().lines().map(str::to_string).collect()
 }
 
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn wireguard_dns_failure_does_not_abort_other_services_but_local_reload_errors_still_fail() {
+    use std::os::unix::fs::PermissionsExt;
+    let _native_env = NATIVE_TOOL_ENV.lock().await;
+    let Some(env) = setup("wireguard-dns") else { return };
+    if !env.have_wg {
+        return;
+    }
+    let root = env.paths.etc.parent().unwrap();
+    let wg = root.join("wg-test");
+    let failure = root.join("fail-local");
+    let script = format!(
+        r#"#!/bin/sh
+if [ "$1" = syncconf ]; then
+    if [ -e '{}' ]; then echo 'local configuration rejected' >&2; exit 1; fi
+    if sed -n '/^Endpoint = /p' "$3" | cut -d= -f2 | tr -d ' ' | grep -q '\.invalid'; then
+        echo 'Name does not resolve: external.invalid:51820 Configuration parsing error' >&2; exit 1
+    fi
+    exit 0
+fi
+if [ "$1" = show ]; then printf '%s\t(none)\n' '{}'; exit 0; fi
+exit 0
+"#,
+        failure.display(),
+        PEER
+    );
+    std::fs::write(&wg, script).unwrap();
+    std::fs::set_permissions(&wg, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let helper = env.paths.libexec.join("plugins/wireguard");
+    std::fs::create_dir_all(helper.parent().unwrap()).unwrap();
+    std::fs::copy(target_dir().join(format!("meduza-np-wireguard{EXE}")), helper).unwrap();
+    let mut reg = registry::scan(&env.paths.packages, &Default::default());
+    reg.providers.get_mut("wireguard.tools").unwrap().path = wg.to_string_lossy().into_owned();
+    let (mut raw, _) = config(&env, 1, json!([{"id":"a","version":1}]));
+    raw["services"]["wireguard"]["instances"][0]["peers"][0]["endpoint"] = json!("external.invalid:51820");
+    let prepared = env.engine.prepare(&raw, &canonical_digest(&raw).unwrap(), &reg, &Default::default()).await.unwrap();
+    env.engine.commit(&prepared, &reg).await.expect("unresolved peer must not abort applying WireGuard or the other service");
+    assert!(env.engine.supervisor.status("avahi/a").unwrap().pid.is_some());
+    assert_eq!(meduza_np_planner::state::AppliedState::load(&env.paths).unwrap().revision.as_deref(), Some("rev-000001"));
+    let file = std::fs::read_to_string(env.paths.current_generation_link().join("wireguard/uplink/wg.conf")).unwrap();
+    assert!(file.contains(PEER) && !file.contains("external.invalid"), "local peer/key delivery is independent of DNS");
+    let status = env.paths.run.join("wireguard-uplink.endpoints.json");
+    let end = std::time::Instant::now() + Duration::from_secs(9);
+    let mut failure_reported = false;
+    while std::time::Instant::now() < end {
+        let state = std::fs::read(&status).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+        if state.as_ref().is_some_and(|v| v.as_object().unwrap().values().any(|s| s["phase"] == "resolution-failed")) {
+            failure_reported = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    std::fs::write(&failure, "fail").unwrap();
+    raw["revision"] = json!("rev-000002");
+    raw["services"]["wireguard"]["instances"][0]["listenPort"] = json!(51900);
+    let prepared = env.engine.prepare(&raw, &canonical_digest(&raw).unwrap(), &reg, &Default::default()).await.unwrap();
+    let result = env.engine.commit(&prepared, &reg).await;
+    env.engine.supervisor.stop_all().await;
+    assert!(failure_reported, "the per-peer DNS failure and retry must be observable while the revision stays applied");
+    assert_eq!(result.unwrap_err().code, "reload-failed", "local configuration failures must not be silently ignored");
+    assert_eq!(meduza_np_planner::state::AppliedState::load(&env.paths).unwrap().revision.as_deref(), Some("rev-000001"));
+    let _ = std::fs::remove_dir_all(root);
+}
+
 /// An unreachable peer is runtime health, not a failed delivery or a reason to undo other services/WireGuard.
 #[tokio::test(flavor = "current_thread")]
 async fn disconnected_connection_commits_and_recovers_without_reapply() {

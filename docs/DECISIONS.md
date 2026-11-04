@@ -1384,7 +1384,8 @@ legacy mode with `allow-deprecated-insecure-static-crypto`, required by OpenVPN 
 `ignore-unknown-option` keeps that same configuration usable with earlier providers; TLS configurations never
 carry this compatibility opt-in. See the [OpenVPN manual](https://openvpn.net/community-docs/community-articles/openvpn-2-7-manual/).
 
-WireGuard already applies local interface/configuration independently of handshakes; kernel handshakes retry
+WireGuard applies local interface/configuration independently of handshakes; D67 also separates endpoint DNS
+resolution from required local reloads. Kernel handshakes retry
 when traffic or a configured persistent keepalive needs the peer. Missing/stale handshakes stay in peer health,
 while failed local link/configuration operations still reject apply. Tinc and BGP retain their native reconnect
 loops; peer health is not an application gate.
@@ -1524,3 +1525,32 @@ package/host-boot samples no older than 30 seconds. Stale, missing, unreadable o
 unknown, not zero. Report time and disk/memory sample times remain visible. Older reports parse unchanged and
 the UI explains when upgrading planner is needed. Source-only delivery requires updated planner, updater,
 Dashboard and Manager artifacts; no production package/configuration is replaced by this change.
+
+## D67 — WireGuard endpoint DNS failures are per-peer runtime health
+
+`wg syncconf` resolves configured endpoint names while parsing, so an external DNS failure used to abort the
+required reload and roll back unrelated configuration. Generated local wg.conf now omits hostname endpoints
+while retaining every peer, key, AllowedIPs, listen port and numeric IPv4/IPv6 endpoint. Local syncconf remains
+required: malformed local configuration, missing providers and failed interface operations still reject apply.
+Exports retain the operator's original endpoint names. Omitting an endpoint leaves an existing kernel endpoint
+untouched; see upstream [parser](https://git.zx2c4.com/wireguard-tools/plain/src/config.c),
+[syncconf](https://git.zx2c4.com/wireguard-tools/plain/src/setconf.c) and
+[netlink endpoint writes](https://git.zx2c4.com/wireguard-tools/plain/src/ipc-linux.h).
+
+An instance with hostname peers owns a small supervised endpoint runner. It resolves each peer independently,
+checks that local syncconf has loaded that peer, and updates only its numeric endpoint through wg set. Resolver
+subprocesses time out after five seconds; native observation/updates after three seconds. Failures use per-peer
+bounded exponential retries with jitter capped at 60 seconds, retain the last working endpoint and never raise
+sync.apply-failed. Successful DNS is refreshed every 60 seconds. Unchanged DNS preserves learned endpoints;
+an empty endpoint after link recreation is repaired even if DNS did not change. Runner/spec identity changes
+replace the helper on upgrades or configuration changes; instances without hostname endpoints need no helper.
+Mutations occur only in this generation-owned runner, never in plugin plan/validate/probe operations.
+
+Per-peer status exposes desired/resolved endpoints, phase, attempt, retry time and bounded error text. Only the
+matching current peer is degraded; its actual connection state remains separately visible. Stale observations
+and observations for old endpoint/key configurations are ignored. Manager connection rows show WireGuard and
+OpenVPN reasons directly, with automatic endpoint retry labels; Dashboard's existing per-instance reason column
+consumes the same report. External connection errors do not become revision application errors. OpenVPN retains
+D60's native reconnect plus supervised process retries. No arbitrary wg error-string exception was added to
+planner, and no required local checks were suppressed. Release the WireGuard plugin and Manager changes to
+enable the new behavior on deployed nodes.
