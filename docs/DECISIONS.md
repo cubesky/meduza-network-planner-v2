@@ -1554,3 +1554,33 @@ consumes the same report. External connection errors do not become revision appl
 D60's native reconnect plus supervised process retries. No arbitrary wg error-string exception was added to
 planner, and no required local checks were suppressed. Release the WireGuard plugin and Manager changes to
 enable the new behavior on deployed nodes.
+
+## D68 — Reclaim obsolete download versions automatically
+
+Successful-install-only cleanup leaves interrupted or failed downloads on small devices indefinitely. Updater
+now collects before metadata checks (before space planning), after terminal transactions and on startup even
+without an active journal. A process-wide filesystem operation lock serializes metadata/download/install/recover
+and collection across updater processes; it does not hold planner's configuration maintenance lock during a
+download. The short-lived updater activation helper participates in its parent's transaction without retaking
+that lock. Pending journals, especially the updater-first handoff, suppress collection until recovery finishes.
+
+Current installed sets/views and one accepted rollback baseline remain. A separate rollback.json checkpoint
+survives failed attempts replacing journal.last.json; compatible legacy successful journals seed retention.
+Failed candidates are discarded after an unchanged/rolled-back installation, while failed rollback/repair
+references remain protected. Store executable references visible in procfs and same-boot planner adoption
+records protect binaries still running in another PID namespace. Native caches retain only the selected
+current/rollback package archives. This bounds normal version history without deleting running/recovery files.
+Kept views also protect their actual object targets when a full disk interrupts installed-record persistence.
+An optional repairRequired journal flag preserves native repair downloads even when an interrupted native
+installation has changed files without advancing its package database; old journals still parse.
+
+Mihomo auto mode uses the existing transfer lock to remove known asset archives and mihomo.new before/after
+each attempt, including failed HTTP bodies, and periodically when the installed binary is already ready.
+Legacy Linux archive names with bounded release version syntax remain recognized after leaving assets.json.
+Its previous/mihomo path continues to hold only one previous binary. Manual mode and unknown files remain
+untouched. Final byte progress is captured before deleting failed files. Store/native/Mihomo cleanup refuses
+to traverse redirected internal directories; archive names must be single normal path components.
+
+This is runtime package storage housekeeping. It does not change service configuration, discard pending
+handoffs, remove user-managed binaries/data or run global container/image pruning. Updated updater and
+mihomo-pkg artifacts are required; source validation does not clean production volumes.

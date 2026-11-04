@@ -176,6 +176,13 @@ new adapter arrives; FRR still needs `SYS_ADMIN` in the planner container (fixed
   the listener. The default still detects port conflicts and local resolution loops; no DHCP is enabled.
 * OpenWrt: packages are installed one at a time with the native package manager. That is **not** an atomic switch.
   Packages without a cached previous file cannot be rolled back automatically; the plan says so.
+* Old downloads are cleaned before update checks, after completed/failed upgrades and during startup recovery,
+  including when no new version is installed. Store objects/views and native package archives keep the current
+  set and one valid rollback baseline; running/adoptable executables and pending self-update files remain
+  protected. Failed attempts do not erase the last successful rollback baseline. Mihomo auto-download cleans
+  recognized obsolete archives and failed candidates, keeping its current and one previous binary. Manual
+  binaries and unknown user files are preserved. Cleanup shares the download/transaction lock and does not
+  traverse internal symlinks. No manual cache cleanup is needed after an ordinary failed transfer.
 * The OpenVPN provider builds LZO and LZ4 into its static executable. Compression/framing options such as
   `lzo-asym` and `lzo-no` work with legacy peers without installing compression libraries on the host or changing
   the base image. Per-connection policy still controls use: the pinned OpenVPN 2.7 accepts compressed traffic

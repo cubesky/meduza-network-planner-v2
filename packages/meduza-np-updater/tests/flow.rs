@@ -222,6 +222,123 @@ fn current_file(cfg: &Config, rel: &str) -> Option<String> {
 const FAR: &str = "2099-01-01T00:00:00Z";
 
 #[test]
+fn obsolete_downloads_are_collected_on_checks_failures_and_restart_while_rollback_survives() {
+    let env = Env::new("automatic-gc");
+    let cfg = env.config(Some(vec![]));
+    let planner = FakePlanner { store: cfg.store_dir(), up: Cell::new(false), boot: Cell::new(1), calls: RefCell::new(vec![]) };
+    let now_fn = now;
+    let e = engine(&cfg, &planner, &now_fn);
+    let updater = env.package("meduza-np-updater", "0.1.0", false);
+    for n in 1..=3 {
+        let version = format!("0.{n}.0");
+        env.publish(&format!("v{version}"), n, vec![env.package("meduza-np-planner", &version, false), updater.clone()], FAR);
+        assert_eq!(e.run_once(true).unwrap().1, Some(Outcome::Applied));
+    }
+    let store = e.store();
+    let objects = store.objects().join("meduza-np-planner");
+    let versions =
+        || std::fs::read_dir(&objects).unwrap().map(|p| p.unwrap().file_name().to_string_lossy().into_owned()).collect::<Vec<_>>();
+    assert_eq!(versions().len(), 2, "only current and one rollback version remain");
+    assert!(versions().iter().all(|v| !v.starts_with("0.1.0-")));
+    let orphan = objects.join("0.0.0-orphan");
+    std::fs::create_dir_all(&orphan).unwrap();
+    std::fs::write(orphan.join("binary"), vec![1u8; 8192]).unwrap();
+    let partial = store.staging().join("old-download.part");
+    std::fs::write(&partial, vec![1u8; 8192]).unwrap();
+    let lock = store.operation_lock().unwrap();
+    assert!(e.check().is_err(), "another process cannot collect an active download");
+    assert!(partial.exists() && orphan.exists());
+    drop(lock);
+    let calls = planner.calls.borrow().clone();
+    e.run_once(false).unwrap();
+    assert_eq!(*planner.calls.borrow(), calls, "housekeeping does not restart/reapply services");
+    assert!(!partial.exists() && !orphan.exists());
+    assert_eq!(versions().len(), 2);
+
+    let mut broken = env.package("meduza-np-planner", "0.4.0", false);
+    broken.artifacts[0].url = "missing-package.tar.gz".into();
+    env.publish("v0.4.0", 4, vec![broken, updater], FAR);
+    assert!(e.run_once(true).is_err());
+    assert!(std::fs::read_dir(store.staging()).unwrap().next().is_none(), "failed downloads are removed immediately");
+    assert_eq!(versions().len(), 2, "failed attempts must not forget the older valid rollback baseline");
+    assert!(versions().iter().any(|v| v.starts_with("0.2.0-")));
+    std::fs::write(store.staging().join("interrupted-download"), b"partial").unwrap();
+    assert!(e.recover(false).is_none());
+    assert!(std::fs::read_dir(store.staging()).unwrap().next().is_none(), "startup also cleans when no journal needs recovery");
+    assert_eq!(e.installed().unwrap().packages["meduza-np-planner"].version, "0.3.0");
+    std::fs::remove_dir_all(env.root).unwrap();
+}
+
+#[test]
+fn failed_native_rollback_preserves_repair_downloads_even_if_the_package_database_still_shows_old_versions() {
+    struct NativePackages;
+    impl Runner for NativePackages {
+        fn run(&self, program: &str, _args: &[String]) -> Result<String, String> {
+            assert_eq!(program, "opkg");
+            Ok("meduza-np-planner - 0.1.0\n".into())
+        }
+    }
+    let env = Env::new("native-repair-gc");
+    let mut cfg = env.config(None);
+    cfg.backend = Backend::Opkg;
+    let planner = FakePlanner { store: cfg.store_dir(), up: Cell::new(false), boot: Cell::new(1), calls: RefCell::new(vec![]) };
+    let now_fn = now;
+    let native = NativePackages;
+    let mut e = engine(&cfg, &planner, &now_fn);
+    e.runner = &native;
+    let store = e.store();
+    store.init().unwrap();
+    let current: meduza_np_protocol::group::InstalledSet =
+        serde_json::from_value(json!({"formatVersion":1,"generation":7,"backend":"opkg","platform":"openwrt/test","activatedAt":"",
+        "packages":{"meduza-np-planner":{"version":"0.1.0","source":"group:stable"}}}))
+        .unwrap();
+    store.save_installed(&current).unwrap();
+    let mut target = current.clone();
+    target.packages.get_mut("meduza-np-planner").unwrap().version = "0.2.0".into();
+    let mut last = json!({"formatVersion":1,"groupVersion":"v0.2.0","phase":"failed","startedAt":"","updatedAt":"",
+        "previousInstalled":current,"newInstalled":target,"repairRequired":true});
+    let file = store.root.join("journal.last.json");
+    meduza_np_runtime::fsutil::write_json_atomic(&file, &last, 0o600).unwrap();
+    let repair = store.staging().join("meduza-np-planner_0.2.0.ipk");
+    std::fs::write(&repair, b"repair archive").unwrap();
+    e.recover(false);
+    assert!(repair.exists(), "a failed install may change files before updating its native package database");
+    last["repairRequired"] = json!(false);
+    meduza_np_runtime::fsutil::write_json_atomic(&file, &last, 0o600).unwrap();
+    e.recover(false);
+    assert!(!repair.exists(), "obsolete repair downloads are collected after repair is complete");
+    std::fs::remove_dir_all(env.root).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn old_objects_referenced_by_supervised_processes_are_not_collected() {
+    let env = Env::new("gc-live-record");
+    let cfg = env.config(Some(vec![]));
+    let planner = FakePlanner { store: cfg.store_dir(), up: Cell::new(false), boot: Cell::new(1), calls: RefCell::new(vec![]) };
+    let now_fn = now;
+    let e = engine(&cfg, &planner, &now_fn);
+    let store = e.store();
+    store.init().unwrap();
+    let old = store.objects().join("meduza-np-planner/old-running");
+    std::fs::create_dir_all(&old).unwrap();
+    let record = cfg.paths.run.join("supervisor/process.json");
+    meduza_np_runtime::fsutil::write_json_atomic(
+        &record,
+        &json!({"program":old.join("usr/bin/old"),
+        "bootId":std::fs::read_to_string("/proc/sys/kernel/random/boot_id").unwrap().trim()}),
+        0o600,
+    )
+    .unwrap();
+    e.recover(false);
+    assert!(old.exists(), "a planner namespace adoption record protects the running version");
+    std::fs::remove_file(record).unwrap();
+    e.recover(false);
+    assert!(!old.exists(), "unreferenced binaries are removed on the next automatic pass");
+    std::fs::remove_dir_all(env.root).unwrap();
+}
+
+#[test]
 fn manager_check_is_read_only_and_upgrade_now_overrides_pause() {
     let env = Env::new("manager-update-controls");
     let cfg = env.config(Some(vec![]));
@@ -289,6 +406,10 @@ fn planner_activates_updater_then_new_updater_upgrades_planner_without_network()
     planner.calls.borrow_mut().clear();
     env.publish("v0.2.0", 2, names.iter().map(|n| env.package(n, "0.2.0", false)).collect(), FAR);
     assert_eq!(e.run_once(true).unwrap().1, Some(Outcome::AppliedRestartSelf));
+    let staged: Vec<_> = std::fs::read_dir(e.store().staging()).unwrap().map(|e| e.unwrap().path()).collect();
+    assert!(!staged.is_empty());
+    e.check().unwrap();
+    assert!(staged.iter().all(|p| p.exists()), "checks must preserve downloads needed by the pending updater/planner handoff");
     let halfway = e.installed().unwrap();
     assert_eq!(halfway.group_version.as_deref(), Some("v0.1.0"), "the group is not complete just because updater was activated");
     assert_eq!(halfway.packages["meduza-np-updater"].version, "0.2.0");

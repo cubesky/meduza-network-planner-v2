@@ -96,8 +96,24 @@ pub struct Journal {
     pub locked: bool,
     #[serde(default)]
     pub error: Option<String>,
+    /// Local package installation could not be rolled back; retain both sides and native repair downloads.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub repair_required: bool,
     #[serde(default)]
     pub history: Vec<(Phase, String)>,
+}
+
+/// Survives failed attempts overwriting journal.last.json; keep only the last accepted rollback baseline.
+#[derive(Debug, Serialize, Deserialize)]
+struct RollbackPoint {
+    generation: u64,
+    packages: BTreeMap<String, InstalledPackage>,
+    installed: InstalledSet,
+    view: Option<String>,
+}
+
+fn same_package_files(a: &BTreeMap<String, InstalledPackage>, b: &BTreeMap<String, InstalledPackage>) -> bool {
+    a.len() == b.len() && a.iter().all(|(name, p)| b.get(name).is_some_and(|other| p.version == other.version && p.object == other.object))
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -214,7 +230,21 @@ impl<'a> Engine<'a> {
             }
         }
         self.save_state(&st);
+        if phase == Phase::Done {
+            if let (Some(current), Some(previous)) = (&j.new_installed, &j.previous_installed) {
+                let point = RollbackPoint {
+                    generation: current.generation,
+                    packages: current.packages.clone(),
+                    installed: previous.clone(),
+                    view: j.previous_view.clone(),
+                };
+                if let Err(e) = meduza_np_runtime::fsutil::write_json_atomic(&self.store().root.join("rollback.json"), &point, 0o600) {
+                    eprintln!("warning: cannot save rollback retention: {e}");
+                }
+            }
+        }
         let _ = std::fs::rename(self.store().journal_path(), self.store().root.join("journal.last.json"));
+        self.cleanup_idle();
     }
 
     pub fn trust(&self) -> Result<TrustStore, String> {
@@ -234,7 +264,8 @@ impl<'a> Engine<'a> {
     /// Fetches and verifies metadata; advances the accepted sequence only after full verification.
     pub fn check(&self) -> Result<VerifiedGroup, MetaError> {
         let store = self.store();
-        store.init().map_err(|e| MetaError { code: "fetch-failed", message: e })?;
+        let _operation = store.operation_lock().map_err(|e| MetaError { code: "fetch-failed", message: e })?;
+        self.cleanup_idle();
         let mut st = self.load_state();
         let now = (self.now)();
         st.last_check = Some(now_text(now));
@@ -429,6 +460,7 @@ impl<'a> Engine<'a> {
 
     /// Applies a resolved plan. `force` ignores the failed-group memory (explicit operator request).
     pub fn apply(&self, group: &VerifiedGroup, plan: &Plan, force: bool) -> Result<Outcome, String> {
+        let _operation = self.store().operation_lock()?;
         if plan.is_blocked() {
             return Err(format!("plan blocked: {}", plan.blocked.join("; ")));
         }
@@ -478,6 +510,7 @@ impl<'a> Engine<'a> {
             planner_boot_id: None,
             locked: false,
             error: None,
+            repair_required: false,
             history: vec![],
         };
         let _ = std::fs::remove_file(store.root.join("download-progress.json"));
@@ -677,7 +710,6 @@ impl<'a> Engine<'a> {
             return self.rollback(j, &affected, e);
         }
         self.unlock(j);
-        self.gc(j);
         self.finish_journal(j, Phase::Done, None);
         Ok(Outcome::Applied)
     }
@@ -731,21 +763,6 @@ impl<'a> Engine<'a> {
             next.packages.insert("meduza-np-updater".into(), u.clone());
         }
         store.save_installed(next)?;
-        let keep: BTreeMap<String, Vec<String>> = next
-            .packages
-            .iter()
-            .map(|(n, p)| {
-                let mut v = vec![p.version.clone()];
-                if let Some(old) = previous.packages.get(n) {
-                    v.push(old.version.clone());
-                }
-                if let Some(a) = plan.action(n) {
-                    v.extend(a.to.clone());
-                }
-                (n.clone(), v)
-            })
-            .collect();
-        cache.prune(&keep);
         Ok(())
     }
 
@@ -837,6 +854,7 @@ impl<'a> Engine<'a> {
             }
             Err(e) => {
                 let msg = format!("{cause}; rollback failed: {e}");
+                j.repair_required = true;
                 self.finish_journal(j, Phase::Failed, Some(msg.clone()));
                 Err(msg)
             }
@@ -879,32 +897,96 @@ impl<'a> Engine<'a> {
         }
     }
 
-    fn gc(&self, j: &Journal) {
-        if self.cfg.backend != Backend::Store {
-            let _ = std::fs::remove_dir_all(self.store().staging());
-            return;
+    /// Called only while holding operation.lock. Pending recovery/handoff data is never collected.
+    fn cleanup_idle(&self) {
+        if let Err(error) = self.cleanup_idle_inner() {
+            eprintln!("warning: obsolete package cleanup skipped: {error}");
         }
+    }
+
+    fn cleanup_idle_inner(&self) -> Result<(), String> {
         let store = self.store();
-        let mut views = vec![];
-        views.extend(j.new_view.clone());
-        views.extend(j.previous_view.clone());
+        if store.journal_path().exists() {
+            return Ok(());
+        }
+        let current = self.installed()?;
+        if store.current_view().is_some() && !store.installed_path().is_file() {
+            return Err("current view has no installed record".into());
+        }
+        let mut views: Vec<_> = store.current_view().into_iter().collect();
+        let mut sets = vec![current.clone()];
+        let point = meduza_np_runtime::fsutil::read_json::<RollbackPoint>(&store.root.join("rollback.json"), 4 * 1024 * 1024)
+            .map_err(|e| e.to_string())?;
+        if let Some(point) = point.filter(|p| p.generation == current.generation && same_package_files(&p.packages, &current.packages)) {
+            views.extend(point.view);
+            sets.push(point.installed);
+        }
+        let last = meduza_np_runtime::fsutil::read_json::<Journal>(&store.root.join("journal.last.json"), 4 * 1024 * 1024)
+            .map_err(|e| e.to_string())?;
+        let mut repair_pending = false;
+        if let Some(last) = last {
+            // Legacy journals have no rollback.json. A failed rollback can still need both sides of the transaction.
+            let done = last.phase == Phase::Done
+                && last
+                    .new_installed
+                    .as_ref()
+                    .is_some_and(|n| n.generation == current.generation && same_package_files(&n.packages, &current.packages));
+            let repair = last.phase == Phase::Failed
+                && (last.repair_required
+                    || !last.previous_installed.as_ref().is_some_and(|p| same_package_files(&p.packages, &current.packages))
+                    || (self.cfg.backend == Backend::Store && store.current_view() != last.previous_view));
+            repair_pending = repair;
+            if done || repair {
+                views.extend(last.previous_view);
+                sets.extend(last.previous_installed);
+            }
+            if repair {
+                views.extend(last.new_view);
+                sets.extend(last.new_installed);
+            }
+        }
+        if self.cfg.backend != Backend::Store {
+            let mut keep: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for set in &sets {
+                for (name, package) in &set.packages {
+                    keep.entry(name.clone()).or_default().push(package.version.clone());
+                }
+            }
+            openwrt::Cache::new(&store.root, self.cfg.backend).prune(&keep);
+            if !repair_pending {
+                store.clear_staging();
+            }
+            return Ok(());
+        }
         let mut objects = BTreeSet::new();
-        for s in [&j.new_installed, &j.previous_installed].into_iter().flatten() {
+        for s in &sets {
             for (n, p) in &s.packages {
                 if let Some(o) = &p.object {
                     objects.insert((n.clone(), o.clone()));
                 }
             }
         }
+        retain_running_objects(&store, &self.cfg.paths.run, &mut objects)?;
         store.gc(&views, &objects);
+        Ok(())
     }
 
     /// Completes or rolls back an update interrupted by a crash/power loss. Returns a description of what it did.
     pub fn recover(&self, running_new_updater: bool) -> Option<String> {
+        let _operation = match self.store().operation_lock() {
+            Ok(lock) => lock,
+            Err(error) => {
+                eprintln!("recovery deferred: {error}");
+                return None;
+            }
+        };
         if self.cfg.backend != Backend::Store {
             openwrt::InstallMarker::clear_stale(&self.cfg.paths.run);
         }
-        let mut j = self.load_journal()?;
+        let Some(mut j) = self.load_journal() else {
+            self.cleanup_idle();
+            return None;
+        };
         let affected = self.affected_instances(&j.changed);
         let msg = match j.phase {
             Phase::Downloading | Phase::Staged | Phase::Locked => {
@@ -1018,6 +1100,50 @@ impl<'a> Engine<'a> {
         let outcome = self.apply(&group, &plan, false)?;
         Ok((Some(plan), Some(outcome)))
     }
+}
+
+/// Keep executables still in use (including adoption records from planner's separate PID namespace).
+fn retain_running_objects(store: &Store, run: &std::path::Path, keep: &mut BTreeSet<(String, String)>) -> Result<(), String> {
+    let root = std::fs::canonicalize(store.objects()).map_err(|e| e.to_string())?;
+    let mut retain = |path: &std::path::Path| {
+        if let Ok(relative) = path.strip_prefix(&root) {
+            let parts: Vec<_> = relative.components().collect();
+            if let [std::path::Component::Normal(package), std::path::Component::Normal(object), ..] = parts.as_slice() {
+                keep.insert((package.to_string_lossy().into_owned(), object.to_string_lossy().into_owned()));
+            }
+        }
+    };
+    if let Ok(entries) = std::fs::read_dir("/proc") {
+        for (index, entry) in entries.enumerate() {
+            if index > 16_384 {
+                return Err("process scan limit reached".into());
+            }
+            let Ok(entry) = entry else { continue };
+            if entry.file_name().to_str().is_some_and(|s| s.parse::<u32>().is_ok()) {
+                if let Ok(exe) = std::fs::read_link(entry.path().join("exe")) {
+                    retain(&exe);
+                }
+            }
+        }
+    }
+    let boot = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").ok();
+    if let Ok(entries) = std::fs::read_dir(run.join("supervisor")) {
+        for (index, entry) in entries.enumerate() {
+            if index > 4096 {
+                return Err("supervisor record limit reached".into());
+            }
+            let entry = entry.map_err(|e| e.to_string())?;
+            if entry.path().extension().is_some_and(|e| e == "json") {
+                let value = meduza_np_runtime::fsutil::read_json::<Value>(&entry.path(), 64 * 1024).map_err(|e| e.to_string())?;
+                if let Some(value) = value.filter(|v| boot.as_ref().is_some_and(|boot| v["bootId"].as_str() == Some(boot.trim()))) {
+                    if let Some(path) = value["program"].as_str() {
+                        retain(std::path::Path::new(path));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

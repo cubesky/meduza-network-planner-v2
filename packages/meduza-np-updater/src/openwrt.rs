@@ -101,9 +101,17 @@ impl Cache {
     }
     /// Keeps the files of `keep` (package → version) and deletes every other cached file.
     pub fn prune(&self, keep: &BTreeMap<String, Vec<String>>) {
+        if [&self.dir, self.dir.parent().unwrap_or(&self.dir)].iter().any(|p| !std::fs::symlink_metadata(p).is_ok_and(|m| m.is_dir())) {
+            return;
+        }
         let Ok(rd) = std::fs::read_dir(&self.dir) else { return };
         for e in rd.flatten() {
             let n = e.file_name().to_string_lossy().into_owned();
+            if !(n.ends_with(".apk") || n.ends_with(".ipk"))
+                || !meduza_np_protocol::manifest::ALL_PACKAGES.iter().any(|p| n.starts_with(&format!("{p}_")))
+            {
+                continue;
+            }
             let wanted = keep.iter().any(|(p, vs)| vs.iter().any(|v| n == format!("{p}_{v}.{}", self.ext)));
             if !wanted {
                 let _ = std::fs::remove_file(e.path());
@@ -196,5 +204,24 @@ mod tests {
         let t = "DISTRIB_ID='OpenWrt'\nDISTRIB_RELEASE='24.10.2'\nDISTRIB_ARCH='aarch64_cortex-a53'\n";
         assert_eq!(parse_release_arch(t).as_deref(), Some("aarch64_cortex-a53"));
         assert_eq!(parse_release_arch("DISTRIB_ARCH='x; rm -rf /'\n"), None);
+    }
+
+    #[test]
+    fn cache_retains_only_selected_rollback_versions_and_leaves_unknown_files() {
+        let root = std::env::temp_dir().join(format!("mnp-native-cache-gc-{}", std::process::id()));
+        for backend in [Backend::Opkg, Backend::Apk] {
+            let cache = Cache::new(&root, backend);
+            std::fs::create_dir_all(&cache.dir).unwrap();
+            for version in ["0.1.0", "0.2.0", "0.3.0"] {
+                std::fs::write(cache.file("meduza-np-planner", version), b"archive").unwrap();
+            }
+            std::fs::write(cache.dir.join("user-notes"), b"preserve").unwrap();
+            cache.prune(&BTreeMap::from([("meduza-np-planner".into(), vec!["0.2.0".into(), "0.3.0".into()])]));
+            assert!(!cache.file("meduza-np-planner", "0.1.0").exists());
+            assert!(cache.file("meduza-np-planner", "0.2.0").exists());
+            assert!(cache.file("meduza-np-planner", "0.3.0").exists());
+            assert!(cache.dir.join("user-notes").exists());
+            std::fs::remove_dir_all(&root).unwrap();
+        }
     }
 }

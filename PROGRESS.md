@@ -1143,3 +1143,19 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   pass. Screenshot: target/connection-errors.png; logs: target/check-wireguard-{final,engine,endpoints}.log.
   Source-only: release the changed WireGuard/OpenVPN package descriptors and Manager; no production node
   binary, configuration or service was replaced.
+- 2026-11-04 (per the user) Automatically reclaim obsolete downloaded versions on space-constrained nodes (D68).
+  Updater cleans before checks/space planning, after terminal attempts and during startup recovery, including
+  no-change and failed-download runs. Keep current/one rollback generation plus running/adoption/view references
+  and pending handoff/repair files. A persistent rollback checkpoint survives failed attempts replacing the
+  last journal. Kept view targets remain protected if a full disk leaves installed.json behind; explicit native
+  repair state retains archives even when its package database still reports old versions. Native opkg/APK
+  caches prune obsolete owned archives while preserving unknown files. Cleanup and updater work share a process
+  operation lock. Mihomo uses its transfer lock to clean obsolete/partial automatic archives and candidates,
+  including old assets absent from the current manifest, after failure and periodically while ready. Capture
+  final progress before deletion; preserve current/previous binaries, manual mode and unknown files. Internal
+  directory symlinks are not traversed. Verified all 52 updater/mihomo-pkg tests and strict Clippy, including
+  real truncated HTTP cleanup, failed attempts retaining rollback, no-change/startup collection, pending updater
+  handoff survival, native repair, actual view references, adoption references, concurrent transfer protection
+  and symlink/manual-file preservation. Log: target/check-cache-cleanup-final.log. Source-only: production
+  volumes were not cleaned; updated updater and mihomo-pkg artifacts must be released. Git submissions remain
+  with the user as requested; no index/commit/push changes were made for this task.

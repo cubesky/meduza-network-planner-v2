@@ -57,6 +57,21 @@ impl Store {
         self.root.join("state.json")
     }
 
+    /// Serializes cleanup, metadata downloads, installation and crash recovery across updater processes.
+    /// The short-lived handoff helper acts inside its parent's transaction and does not take this lock.
+    pub fn operation_lock(&self) -> Result<std::fs::File, String> {
+        self.init()?;
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(self.root.join("operation.lock"))
+            .map_err(|e| e.to_string())?;
+        file.try_lock().map_err(|e| format!("another updater operation is active: {e}"))?;
+        Ok(file)
+    }
+
     pub fn init(&self) -> Result<(), String> {
         for d in [self.root.clone(), self.objects(), self.views(), self.staging()] {
             meduza_np_runtime::fsutil::ensure_dir(&d, 0o755).map_err(|e| io(e, &d))?;
@@ -168,7 +183,13 @@ impl Store {
 
     /// Removes views not in `keep_views` and objects not referenced by the kept installed sets.
     pub fn gc(&self, keep_views: &[String], keep_objects: &BTreeSet<(String, String)>) {
-        if let Ok(rd) = std::fs::read_dir(self.views()) {
+        let mut keep_objects = keep_objects.clone();
+        // The actual view is authoritative even if a full disk interrupted installed.json persistence.
+        if let Err(error) = self.retain_view_objects(keep_views, &mut keep_objects) {
+            eprintln!("warning: store collection skipped: {error}");
+            return;
+        }
+        if let Ok(rd) = read_owned_dir(&self.views()) {
             for e in rd.flatten() {
                 let n = e.file_name().to_string_lossy().into_owned();
                 if !keep_views.contains(&n) {
@@ -176,10 +197,10 @@ impl Store {
                 }
             }
         }
-        if let Ok(rd) = std::fs::read_dir(self.objects()) {
+        if let Ok(rd) = read_owned_dir(&self.objects()) {
             for pkg in rd.flatten() {
                 let pname = pkg.file_name().to_string_lossy().into_owned();
-                if let Ok(objs) = std::fs::read_dir(pkg.path()) {
+                if let Ok(objs) = read_owned_dir(&pkg.path()) {
                     for o in objs.flatten() {
                         let oname = o.file_name().to_string_lossy().into_owned();
                         if !keep_objects.contains(&(pname.clone(), oname)) {
@@ -190,9 +211,56 @@ impl Store {
                 let _ = std::fs::remove_dir(pkg.path()); // only succeeds when empty
             }
         }
-        let _ = std::fs::remove_dir_all(self.staging());
-        let _ = std::fs::create_dir_all(self.staging());
+        self.clear_staging();
     }
+
+    pub fn clear_staging(&self) {
+        if read_owned_dir(&self.staging()).is_ok() {
+            let _ = std::fs::remove_dir_all(self.staging());
+            let _ = std::fs::create_dir_all(self.staging());
+        }
+    }
+
+    fn retain_view_objects(&self, views: &[String], keep: &mut BTreeSet<(String, String)>) -> Result<(), String> {
+        if !views.is_empty() {
+            read_owned_dir(&self.views()).map_err(|e| e.to_string())?;
+        }
+        let root = std::fs::canonicalize(self.objects()).map_err(|e| e.to_string())?;
+        let mut pending: Vec<_> = views.iter().map(|v| self.views().join(v)).collect();
+        let mut count = 0;
+        while let Some(path) = pending.pop() {
+            count += 1;
+            if count > 100_000 {
+                return Err("view scan limit reached".into());
+            }
+            let meta = std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+            if meta.is_dir() {
+                for e in read_owned_dir(&path).map_err(|e| e.to_string())? {
+                    if pending.len() + count >= 100_000 {
+                        return Err("view scan limit reached".into());
+                    }
+                    pending.push(e.map_err(|e| e.to_string())?.path());
+                }
+            } else if meta.file_type().is_symlink() {
+                let target = std::fs::canonicalize(&path).map_err(|e| e.to_string())?;
+                if let Ok(relative) = target.strip_prefix(&root) {
+                    let mut parts = relative.components();
+                    if let (Some(Component::Normal(package)), Some(Component::Normal(object))) = (parts.next(), parts.next()) {
+                        keep.insert((package.to_string_lossy().into_owned(), object.to_string_lossy().into_owned()));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Never traverse an internal store directory redirected through a symlink.
+fn read_owned_dir(path: &Path) -> std::io::Result<std::fs::ReadDir> {
+    if !std::fs::symlink_metadata(path)?.is_dir() {
+        return Err(std::io::Error::other("store directory is not an owned directory"));
+    }
+    std::fs::read_dir(path)
 }
 
 pub fn sha256_file(path: &Path) -> Result<(u64, String), String> {
@@ -379,6 +447,43 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn collection_does_not_follow_redirected_internal_directories() {
+        let root = tmpdir("gc-symlinks");
+        let store = Store::new(root.join("store"));
+        store.init().unwrap();
+        let outside = root.join("other-app");
+        std::fs::create_dir_all(outside.join("old-version")).unwrap();
+        let marker = outside.join("old-version/data");
+        std::fs::write(&marker, b"preserve").unwrap();
+        std::fs::remove_dir(store.views()).unwrap();
+        std::os::unix::fs::symlink(&outside, store.views()).unwrap();
+        std::os::unix::fs::symlink(&outside, store.objects().join("meduza-np-planner")).unwrap();
+        store.gc(&[], &BTreeSet::new());
+        assert_eq!(std::fs::read(marker).unwrap(), b"preserve");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn kept_views_protect_their_objects_even_when_installed_metadata_is_incomplete() {
+        let root = tmpdir("gc-view-references");
+        let store = Store::new(root.join("store"));
+        store.init().unwrap();
+        let (archive, artifact) =
+            make_package(&root, "meduza-np-planner", "0.1.0", &[("usr/bin/meduza-np-planner", "current binary", true)]);
+        let object = store.install_object("meduza-np-planner", "0.1.0", &artifact, &archive).unwrap();
+        let view = store.build_view(1, &BTreeMap::from([("meduza-np-planner".into(), object.clone())])).unwrap();
+        store.switch(&view).unwrap();
+        store.gc(&[view], &BTreeSet::new());
+        assert!(
+            store.object_dir("meduza-np-planner", &object).exists(),
+            "a full disk can leave installed.json behind the actual current view"
+        );
+        assert_eq!(std::fs::read_to_string(store.current_path("usr/bin/meduza-np-planner").unwrap()).unwrap(), "current binary");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

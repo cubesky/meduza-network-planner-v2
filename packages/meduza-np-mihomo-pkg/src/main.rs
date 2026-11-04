@@ -237,6 +237,11 @@ fn prepare(args: &[String]) -> ! {
             .map(|s| s.state == "registered" && s.version == cfg.target_version && s.verified && d.binary().is_file())
             .unwrap_or(false);
         if done {
+            if let Err(e) = mp::cleanup_downloads(&d, &cfg, &assets()) {
+                if e != mp::progress::BUSY {
+                    eprintln!("cannot clean binary downloads: {e}");
+                }
+            }
             std::thread::sleep(Duration::from_secs(30));
             continue;
         }

@@ -72,6 +72,22 @@ pub fn load(d: &Dirs) -> Option<DownloadProgress> {
     Some(p)
 }
 
+pub fn download_lock(d: &Dirs) -> Result<File, String> {
+    std::fs::create_dir_all(&d.state_dir).map_err(|e| e.to_string())?;
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(d.state_dir.join("download.lock"))
+        .map_err(|e| e.to_string())?;
+    match lock.try_lock() {
+        Ok(()) => Ok(lock),
+        Err(TryLockError::WouldBlock) => Err(BUSY.into()),
+        Err(TryLockError::Error(e)) => Err(e.to_string()),
+    }
+}
+
 /// One writer for the complete download/verify/activate operation; readers never write or take a blocking lock.
 pub struct Transfer {
     _lock: File,
@@ -84,19 +100,7 @@ pub struct Transfer {
 
 impl Transfer {
     pub fn start(d: &Dirs, file: &Path, version: &str, platform: &str, size: u64) -> Result<Self, String> {
-        std::fs::create_dir_all(&d.state_dir).map_err(|e| e.to_string())?;
-        let lock = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(d.state_dir.join("download.lock"))
-            .map_err(|e| e.to_string())?;
-        match lock.try_lock() {
-            Ok(()) => {}
-            Err(TryLockError::WouldBlock) => return Err(BUSY.into()),
-            Err(TryLockError::Error(e)) => return Err(e.to_string()),
-        }
+        let lock = download_lock(d)?;
         match std::fs::remove_file(file) {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
@@ -153,6 +157,9 @@ impl Transfer {
 
     pub fn finish(&self, error: Option<&str>) -> Result<(), String> {
         let mut p = self.value.lock().unwrap();
+        if let Ok(metadata) = std::fs::metadata(&self.file) {
+            p.downloaded_bytes = metadata.len().min(p.bytes_total);
+        }
         p.active = false;
         p.phase = if error.is_some() { "failed" } else { "done" }.into();
         p.error = error.map(str::to_string);

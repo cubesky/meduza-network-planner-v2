@@ -351,6 +351,63 @@ pub fn check_local(d: &Dirs, cfg: &BinarySourceConfig, trusted: Option<&str>) ->
     st
 }
 
+/// Remove only known automatic-download files, while holding the same lock as the downloader.
+/// Manual binaries, the retained previous binary and unknown user files are never removed.
+pub fn cleanup_downloads(d: &Dirs, cfg: &BinarySourceConfig, assets: &AssetManifest) -> Result<(), String> {
+    if cfg.mode == Mode::Manual {
+        return Ok(());
+    }
+    let _lock = progress::download_lock(d)?;
+    cleanup_staging(d, assets)
+}
+
+fn cleanup_staging(d: &Dirs, assets: &AssetManifest) -> Result<(), String> {
+    match std::fs::symlink_metadata(d.staging()) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.to_string()),
+        Ok(m) if !m.is_dir() => return Err("binary staging must be an owned directory, not a symlink".into()),
+        _ => {}
+    }
+    let mut names: Vec<String> = std::iter::once("mihomo.new")
+        .chain(assets.versions.iter().flat_map(|v| v.assets.iter().map(|a| a.name.as_str())))
+        .map(str::to_string)
+        .collect();
+    for entry in std::fs::read_dir(d.staging()).map_err(|e| e.to_string())? {
+        let name = entry.map_err(|e| e.to_string())?.file_name().to_string_lossy().into_owned();
+        if legacy_archive(&name) {
+            names.push(name);
+        }
+    }
+    for name in &names {
+        if std::path::Path::new(name).components().count() != 1
+            || !matches!(std::path::Path::new(name).components().next(), Some(std::path::Component::Normal(_)))
+        {
+            return Err("invalid automatic asset filename".into());
+        }
+        match std::fs::remove_file(d.staging().join(name)) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(format!("cannot clean obsolete binary download {name}: {e}")),
+        }
+    }
+    Ok(())
+}
+
+/// Legacy automatic downloads predate an ownership index; only the shipped Linux naming contracts qualify.
+fn legacy_archive(name: &str) -> bool {
+    let version = ["mihomo-linux-amd64-compatible-v", "mihomo-linux-arm64-v", "mihomo-linux-armv7-v"]
+        .iter()
+        .find_map(|prefix| name.strip_prefix(prefix))
+        .and_then(|s| s.strip_suffix(".gz"));
+    let Some(version) = version else { return false };
+    if version.len() > 128 || !version.bytes().all(|c| c.is_ascii_alphanumeric() || b".-+".contains(&c)) {
+        return false;
+    }
+    let core = version.split(['-', '+']).next().unwrap_or_default();
+    let parts: Vec<_> = core.split('.').collect();
+    parts.len() == 3 && parts.iter().all(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+}
+
 /// Downloads, verifies and activates the pinned asset (auto mode). Never overwrites a user-provided file.
 pub fn download(d: &Dirs, cfg: &BinarySourceConfig, assets: &AssetManifest) -> Result<ProviderState, String> {
     if cfg.mode != Mode::AutoDownload {
@@ -364,6 +421,11 @@ pub fn download(d: &Dirs, cfg: &BinarySourceConfig, assets: &AssetManifest) -> R
         .find(|v| v.tag == tag)
         .and_then(|v| v.assets.iter().find(|a| a.platform == platform))
         .ok_or("no tested asset for this platform")?;
+    if Path::new(&asset.name).components().count() != 1
+        || !matches!(Path::new(&asset.name).components().next(), Some(std::path::Component::Normal(_)))
+    {
+        return Err("invalid automatic asset filename".into());
+    }
     if d.binary().exists() {
         let prev = load_state(d);
         let ours = prev.as_ref().and_then(|p| p.installed_by.as_deref()) == Some("meduza-np-mihomo-pkg");
@@ -373,18 +435,28 @@ pub fn download(d: &Dirs, cfg: &BinarySourceConfig, assets: &AssetManifest) -> R
             );
         }
         if prev.as_ref().and_then(|p| p.version.as_deref()) == Some(tag.as_str()) && prev.as_ref().map(|p| p.verified).unwrap_or(false) {
+            if let Err(e) = cleanup_downloads(d, cfg, assets) {
+                eprintln!("cannot clean binary downloads: {e}");
+            }
             return Ok(check_local(d, cfg, prev.as_ref().and_then(|p| p.sha256.as_deref())));
         }
     }
     std::fs::create_dir_all(d.staging()).map_err(|e| e.to_string())?;
+    if !std::fs::symlink_metadata(d.staging()).map_err(|e| e.to_string())?.is_dir() {
+        return Err("binary staging must be an owned directory, not a symlink".into());
+    }
     let gz = d.staging().join(&asset.name);
     let transfer = progress::Transfer::start(d, &gz, &tag, platform, asset.size)?;
+    cleanup_staging(d, assets)?;
     let result = download_asset(d, cfg, asset, platform, &tag, &gz, &transfer).and_then(|st| {
         save_state(d, &st)?;
         Ok(st)
     });
     if let Err(e) = transfer.finish(result.as_ref().err().map(String::as_str)) {
         eprintln!("cannot record final binary progress: {e}");
+    }
+    if let Err(e) = cleanup_staging(d, assets) {
+        eprintln!("cannot clean binary downloads: {e}");
     }
     result
 }
@@ -541,6 +613,117 @@ mod tests {
         assert!(p.error.is_some());
         assert_eq!(std::fs::read(d.binary()).unwrap(), b"previous binary");
         assert_eq!(load_state(&d).unwrap().version.as_deref(), Some("v0.0.0-previous"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn interrupted_http_download_is_removed_immediately_and_preserves_the_installed_binary() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let root = std::env::temp_dir().join(format!("mnp-mihomo-partial-cleanup-{}", std::process::id()));
+        let cfg =
+            BinarySourceConfig { mode: Mode::AutoDownload, target_version: Some("v1.0.0".into()), data_dir: None, download_proxy: None };
+        let d = Dirs::new(&root.to_string_lossy(), &cfg);
+        std::fs::create_dir_all(&d.data_dir).unwrap();
+        std::fs::write(d.binary(), b"installed binary").unwrap();
+        save_state(
+            &d,
+            &ProviderState {
+                state: "registered".into(),
+                version: Some("v0.0.1".into()),
+                installed_by: Some("meduza-np-mihomo-pkg".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let url = format!("http://{}/asset.gz", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            let mut stream = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && std::time::Instant::now() < end => {
+                        std::thread::sleep(std::time::Duration::from_millis(10))
+                    }
+                    other => panic!("download request missing: {other:?}"),
+                }
+            };
+            stream.set_read_timeout(Some(std::time::Duration::from_secs(2))).unwrap();
+            let mut request = [0u8; 2048];
+            let _ = stream.read(&mut request);
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 8192\r\nConnection: close\r\n\r\npartial").unwrap();
+            // Drop the connection before the announced body completes, leaving a real partial file.
+        });
+        let assets = AssetManifest {
+            versions: vec![VersionAssets {
+                tag: "v1.0.0".into(),
+                assets: vec![Asset {
+                    platform: host_platform().unwrap().into(),
+                    name: "asset.gz".into(),
+                    url,
+                    sha256: "0".repeat(64),
+                    size: 8192,
+                }],
+            }],
+            ..Default::default()
+        };
+        assert!(download(&d, &cfg, &assets).is_err());
+        server.join().unwrap();
+        assert!(!d.staging().join("asset.gz").exists(), "failed HTTP bodies must not occupy flash until the next retry");
+        assert_eq!(std::fs::read(d.binary()).unwrap(), b"installed binary");
+        assert_eq!(progress::load(&d).unwrap().phase, "failed");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn automatic_cleanup_removes_obsolete_partials_but_preserves_active_previous_and_unknown_files() {
+        let root = std::env::temp_dir().join(format!("mnp-mihomo-cleanup-{}", std::process::id()));
+        let mut cfg =
+            BinarySourceConfig { mode: Mode::AutoDownload, target_version: Some("v1.19.33".into()), data_dir: None, download_proxy: None };
+        let d = Dirs::new(&root.to_string_lossy(), &cfg);
+        std::fs::create_dir_all(d.staging()).unwrap();
+        std::fs::create_dir_all(d.previous()).unwrap();
+        std::fs::write(d.binary(), b"active binary").unwrap();
+        std::fs::write(d.previous().join("mihomo"), b"rollback binary").unwrap();
+        let old = d.staging().join("mihomo-linux-amd64-compatible-v1.19.1.gz");
+        let candidate = d.staging().join("mihomo.new");
+        let user = d.staging().join("user-file");
+        for path in [&old, &candidate, &user] {
+            std::fs::write(path, b"bytes").unwrap();
+        }
+        let lock = progress::download_lock(&d).unwrap();
+        assert_eq!(cleanup_downloads(&d, &cfg, &AssetManifest::default()).unwrap_err(), progress::BUSY);
+        assert!(old.exists() && candidate.exists(), "active writer's staging is protected");
+        drop(lock);
+        cfg.mode = Mode::Manual;
+        cleanup_downloads(&d, &cfg, &AssetManifest::default()).unwrap();
+        assert!(old.exists() && candidate.exists(), "manual mode does not collect user-managed data");
+        cfg.mode = Mode::AutoDownload;
+        cleanup_downloads(&d, &cfg, &AssetManifest::default()).unwrap();
+        assert!(!old.exists() && !candidate.exists(), "old assets no longer listed in assets.json are still recognized");
+        assert_eq!(std::fs::read(d.binary()).unwrap(), b"active binary");
+        assert_eq!(std::fs::read(d.previous().join("mihomo")).unwrap(), b"rollback binary");
+        assert_eq!(std::fs::read(user).unwrap(), b"bytes");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_does_not_follow_a_staging_symlink() {
+        let root = std::env::temp_dir().join(format!("mnp-mihomo-cleanup-link-{}", std::process::id()));
+        let cfg = BinarySourceConfig { mode: Mode::AutoDownload, target_version: None, data_dir: None, download_proxy: None };
+        let d = Dirs::new(&root.to_string_lossy(), &cfg);
+        let outside = root.join("other-app");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::create_dir_all(&d.data_dir).unwrap();
+        let marker = outside.join("mihomo.new");
+        std::fs::write(&marker, b"preserve").unwrap();
+        std::os::unix::fs::symlink(&outside, d.staging()).unwrap();
+        assert!(cleanup_downloads(&d, &cfg, &AssetManifest::default()).is_err());
+        assert_eq!(std::fs::read(marker).unwrap(), b"preserve");
         std::fs::remove_dir_all(root).unwrap();
     }
 
