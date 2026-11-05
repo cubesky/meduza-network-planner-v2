@@ -1204,3 +1204,9 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   strict Mihomo Clippy and Manager's DNS-loop publishing test/type compilation. Log: target/check-mihomo-v1-final.log.
   Read the live subscription only in memory and printed sanitized DNS facts; no URL/token or proxy credentials
   were exposed or persisted. Native -t fixture directories were removed; running services were not replaced.
+- 2026-11-05 (per the user) Fix CI's executable-bit false positive for Rust inner attributes.
+  tools/fix-exec-bits.sh now requires a shebang interpreter path after optional spaces/tabs instead of treating
+  every leading #! as a script. Rust #![cfg(unix)] remains ordinary 100644 source. Three regressions run the real
+  helper in temporary Git repositories and verify both check/fix behavior, script paths with spaces, spaced/tab
+  shebangs and unchanged Rust modes. All pass; the actual project --check and git diff --check pass as well.
+  Log: target/check-exec-bits.log. The project's Git index was not modified; submission remains with the user.

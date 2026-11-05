@@ -1,5 +1,5 @@
 #!/bin/sh
-# Marks every tracked or staged file that starts with "#!" as executable in the git index (mode 100755). Run it after
+# Marks tracked/staged scripts with a shebang interpreter path as executable in the git index (mode 100755). Run it after
 # `git add` when the files were added on Windows (or from a zip): git there records every new file as 100644, and the
 # CI, the release scripts and the OpenWrt/container packaging run these scripts directly.
 #
@@ -8,7 +8,12 @@
 set -eu
 cd "$(git rev-parse --show-toplevel)"
 missing=$(git ls-files -s | while read -r mode _ _ path; do
-	[ "$mode" = 100644 ] && [ "$(head -c 2 "$path" 2>/dev/null)" = "#!" ] && echo "$path"
+	# Rust inner attributes (`#![cfg(unix)]`, optionally spaced) are source, not script shebangs.
+	if [ "$mode" = 100644 ] && [ "$(head -c 2 "$path" 2>/dev/null)" = "#!" ]; then
+		if head -n 1 "$path" | LC_ALL=C grep -Eq '^#![[:blank:]]*/'; then
+			echo "$path"
+		fi
+	fi
 	true
 done)
 [ -n "$missing" ] || exit 0
