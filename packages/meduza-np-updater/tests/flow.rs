@@ -97,7 +97,15 @@ impl Env {
             reused_from_group: None,
             requires: if name == "meduza-np-planner" || name == "meduza-np-updater" { vec![] } else { vec!["meduza-np-planner".into()] },
             conflicts: vec![],
-            artifacts: vec![Artifact { platform: "linux/amd64".into(), format: "tar.gz".into(), url: file, size, sha256, oci: None }],
+            artifacts: vec![Artifact {
+                platform: "linux/amd64".into(),
+                format: "tar.gz".into(),
+                url: file,
+                size,
+                sha256,
+                chunks: vec![],
+                oci: None,
+            }],
             upstream: None,
             migration: None,
         }
@@ -220,6 +228,75 @@ fn current_file(cfg: &Config, rel: &str) -> Option<String> {
 }
 
 const FAR: &str = "2099-01-01T00:00:00Z";
+
+#[test]
+fn signed_pages_chunks_install_without_the_full_archive_and_reject_invalid_metadata() {
+    let env = Env::new("signed-pages-chunks");
+    let cfg = env.config(Some(vec![]));
+    let planner = FakePlanner { store: cfg.store_dir(), up: Cell::new(false), boot: Cell::new(1), calls: RefCell::new(vec![]) };
+    let now_fn = now;
+    let e = engine(&cfg, &planner, &now_fn);
+    let mut package = env.package("meduza-np-planner", "0.1.0", false);
+    let artifact = &mut package.artifacts[0];
+    let original = env.repo.join(&artifact.url);
+    let part = format!("packages/{}/000000.part", artifact.sha256);
+    std::fs::create_dir_all(env.repo.join(&part).parent().unwrap()).unwrap();
+    std::fs::rename(&original, env.repo.join(&part)).unwrap();
+    artifact.chunks = vec![meduza_np_protocol::group::ArtifactChunk { url: part, size: artifact.size, sha256: artifact.sha256.clone() }];
+    env.publish("v0.1.0", 1, vec![package.clone(), env.package("meduza-np-updater", "0.1.0", false)], FAR);
+    assert_eq!(e.run_once(true).unwrap().1, Some(Outcome::Applied));
+    assert_eq!(e.installed().unwrap().packages["meduza-np-planner"].version, "0.1.0");
+    assert!(!e.store().root.join("downloads").join(artifact_digest(&package)).exists(), "installed package chunk cache is released");
+    let accepted = e.load_state().last_sequence.clone();
+    package.artifacts[0].chunks[0].size += 1;
+    env.publish("v0.2.0", 2, vec![package], FAR);
+    assert!(e.check().unwrap_err().to_string().contains("invalid-metadata"));
+    assert_eq!(e.load_state().last_sequence, accepted, "malformed chunk layout cannot advance the accepted sequence");
+    std::fs::remove_dir_all(env.root).unwrap();
+}
+
+fn artifact_digest(package: &GroupPackage) -> String {
+    package.artifacts[0].sha256.clone()
+}
+
+#[test]
+fn failed_transaction_and_metadata_check_keep_completed_package_parts_for_resume() {
+    let env = Env::new("pages-resume-through-check");
+    let cfg = env.config(Some(vec!["meduza-np-wireguard"]));
+    let planner = FakePlanner { store: cfg.store_dir(), up: Cell::new(false), boot: Cell::new(1), calls: RefCell::new(vec![]) };
+    let now_fn = now;
+    let e = engine(&cfg, &planner, &now_fn);
+    let mut packages = Vec::new();
+    let mut sources = Vec::new();
+    for name in ["meduza-np-planner", "meduza-np-wireguard"] {
+        let mut package = env.package(name, "0.1.0", false);
+        let a = &mut package.artifacts[0];
+        let original = env.repo.join(&a.url);
+        let body = std::fs::read(&original).unwrap();
+        let part = format!("packages/{}/000000.part", a.sha256);
+        let path = env.repo.join(&part);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::rename(original, &path).unwrap();
+        a.chunks = vec![meduza_np_protocol::group::ArtifactChunk { url: part, size: a.size, sha256: a.sha256.clone() }];
+        sources.push((path, body));
+        packages.push(package);
+    }
+    let digests: Vec<_> = packages.iter().map(artifact_digest).collect();
+    packages.push(env.package("meduza-np-updater", "0.1.0", false));
+    std::fs::write(&sources[1].0, vec![0; sources[1].1.len()]).unwrap();
+    env.publish("v0.1.0", 1, packages, FAR);
+    assert!(e.run_once(true).unwrap_err().contains("digest-mismatch"));
+    let cache = e.store().root.join("downloads");
+    assert!(cache.join(&digests[0]).join("000000.part").is_file());
+    assert!(std::fs::read_dir(e.store().staging()).unwrap().next().is_none());
+    std::fs::remove_file(&sources[0].0).unwrap();
+    std::fs::write(&sources[1].0, &sources[1].1).unwrap();
+    // check() performs normal housekeeping before apply; it must not discard resumable verified parts.
+    assert_eq!(e.run_once(true).unwrap().1, Some(Outcome::Applied));
+    assert_eq!(e.installed().unwrap().packages["meduza-np-wireguard"].version, "0.1.0");
+    assert!(digests.iter().all(|d| !cache.join(d).exists()));
+    std::fs::remove_dir_all(env.root).unwrap();
+}
 
 #[test]
 fn obsolete_downloads_are_collected_on_checks_failures_and_restart_while_rollback_survives() {

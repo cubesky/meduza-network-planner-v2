@@ -89,7 +89,73 @@ def files_under(site):
     return {str(path.relative_to(site)).replace("\\", "/"): path.read_bytes() for path in site.rglob("*") if path.is_file()}
 
 
+def chunked_fixture(site, base, tag="v0.10.0", sequence=10, body=None):
+    group, filename, _ = fixture(site, tag, sequence)
+    body = body if body is not None else bytes(i % 251 for i in range(1_000_017))
+    artifact = group["packages"][0]["artifacts"][0]
+    digest = api.sha256(body)
+    relative = f"packages/{digest}/{filename}"
+    artifact.update(size=len(body), sha256=digest, url=f"{base}/{relative}", chunks=[])
+    api.write(site / relative, body)
+    for offset in range(0, len(body), api.CHUNK_BYTES):
+        data = body[offset:offset + api.CHUNK_BYTES]
+        path = f"packages/{digest}/{len(artifact['chunks']):06}.part"
+        artifact["chunks"].append(dict(url=path, size=len(data), sha256=api.sha256(data)))
+        api.write(site / path, data)
+    raw = api.encoded(group)
+    api.write(site / f"releases/{tag}/manifest.json", raw)
+    pointer = site / "channels/stable.json"
+    value = json.loads(pointer.read_bytes())
+    value["manifestSha256"] = api.sha256(raw)
+    api.write(pointer, value)
+    return group, relative, body
+
+
 class PagesTests(unittest.TestCase):
+    def test_chunk_files_and_full_archive_survive_history_merge_with_content_deduplication(self):
+        old = self.root / "old"
+        files = {}
+        with server(files) as (base, requests):
+            previous, relative, body = chunked_fixture(old, base, "v0.9.0", 9)
+            api.write(old / "index.json", {"groups": ["v0.9.0"], "channels": ["stable"]})
+            files.update(files_under(old))
+            group, new_relative, _ = chunked_fixture(self.new, base)
+            index = api.build(self.new, self.out, REPO, base)
+        self.assertEqual(index["groups"], ["v0.10.0", "v0.9.0"])
+        self.assertEqual(relative, new_relative)
+        self.assertEqual((self.out / relative).read_bytes(), body)
+        self.assertEqual(len(list((self.out / "packages").rglob("*.part"))), 3)
+        self.assertEqual(len(list((self.out / "packages").rglob("*.tar.gz"))), 1)
+        self.assertFalse(any(path.startswith("/packages/") for path in requests), "new content also satisfies historical artifacts")
+        artifact = group["packages"][0]["artifacts"][0]
+        self.assertEqual(b"".join((self.out / p["url"]).read_bytes() for p in artifact["chunks"]), body)
+        value = json.loads((self.out / "api/v1/releases/v0.10.0.json").read_bytes())
+        self.assertTrue(value["assets"][0]["chunks"][0]["url"].startswith(base + "/packages/"))
+
+    def test_history_downloads_full_archive_once_and_rebuilds_verified_chunks(self):
+        old = self.root / "old"
+        files = {}
+        with server(files) as (base, requests):
+            group, relative, body = chunked_fixture(old, base, "v0.9.0", 9)
+            api.write(old / "index.json", {"groups": ["v0.9.0"], "channels": ["stable"]})
+            files.update(files_under(old))
+            fixture(self.new)
+            api.build(self.new, self.out, REPO, base)
+        self.assertEqual([p for p in requests if p.startswith("/packages/")], ["/" + relative])
+        self.assertEqual((self.out / relative).read_bytes(), body)
+        for part in group["packages"][0]["artifacts"][0]["chunks"]:
+            self.assertEqual(api.file_digest(self.out / part["url"]), (part["size"], part["sha256"]))
+
+    def test_corrupt_chunks_and_site_capacity_block_pages_deployment(self):
+        with server({}) as (base, _):
+            group, _, _ = chunked_fixture(self.new, base)
+            group["packages"][0]["artifacts"][0]["chunks"][0]["sha256"] = "0" * 64
+            # A full archive alone cannot justify parts that disagree with its signed chunk list.
+            with self.assertRaisesRegex(ValueError, "chunk differs"):
+                api.restore_packages(group, self.new, self.out, base)
+            with patch.object(api, "MAX_SITE_BYTES", 1), self.assertRaisesRegex(ValueError, "published-site limit"):
+                api.build(self.new, self.root / "too-large", REPO, base)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="meduza-pages-")
         self.addCleanup(self.temp.cleanup)

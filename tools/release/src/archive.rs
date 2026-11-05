@@ -215,7 +215,7 @@ pub fn write(entries: &BTreeMap<String, (Src, bool)>, out: &Path, platform: &str
     }
     b.into_inner().map_err(|e| e.to_string())?.finish().map_err(|e| e.to_string())?;
     let (size, sha256) = meduza_np_updater::store::sha256_file(out)?;
-    Ok(Artifact { platform: platform.to_string(), format: "tar.gz".into(), url: String::new(), size, sha256, oci: None })
+    Ok(Artifact { platform: platform.to_string(), format: "tar.gz".into(), url: String::new(), size, sha256, chunks: vec![], oci: None })
 }
 
 pub fn platform_slug(platform: &str) -> String {

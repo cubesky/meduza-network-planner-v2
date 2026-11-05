@@ -288,11 +288,18 @@ The container itself keeps its main-router gateway (`10.42.10.1`) and independen
 planner/updater and subscription downloads are never redirected through TPROXY. Mihomo only intercepts forwarded
 IPv4 traffic from the selected LAN sources. It declares IPv4 forwarding even when no NAT rules are configured.
 
+Leaving Mihomo DNS `nameservers` empty preserves the v1 startup behavior: inherit the subscription's DNS
+resolution policy, or the core defaults for keys absent from that subscription. No duplicate node resolver
+list is required before downloading. A nonempty node `nameservers` list selects custom DNS instead. The
+project always controls DNS enable/listen/IPv6 and checks the effective inherited policy for DNS loops before
+accepting an update. Failed subscription refreshes keep the previous usable subscription/configuration.
+
 The DNS resolver-policy tab supports `fallback`, `fallbackFilter`, `nameserverPolicy`, `proxyServerNameservers`,
 `proxyServerNameserverPolicy`, `directNameservers`, `directNameserverFollowPolicy` and `respectRules`; the Fake-IP
 tab sets its range, filter and filter mode. Policy maps accept a resolver string or an array per domain. All
 resolver groups are checked against the enabled dnsmasq front end and Mihomo's own DNS listener. `respectRules`
-requires explicit proxy-server resolvers to bootstrap proxy hostnames. These options map to the corresponding
+requires proxy-server resolvers in the effective subscription/custom policy to bootstrap proxy hostnames.
+Empty node bootstrap lists are omitted so they do not suppress core defaults. These options map to the corresponding
 [Mihomo DNS keys](https://wiki.metacubex.one/en/config/dns/).
 
 For legacy MosDNS configurations referring to SOCKS port `7891`, set `socksPort: 7891`; the etcd importer does this

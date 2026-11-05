@@ -1174,3 +1174,33 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   10.42.10.1 and DNS 119.29.29.29. Private repair backup is under /var/standalone/meduza/backups/.
   The source fix is not yet published or installed on this node: its next transition to a fixed updater may
   need the same owner-side takeover. Git index/commit/push and release remain with the user.
+- 2026-11-05 (per the user) Complete the signed owner-side v0.2.2 transition on 10.42.10.9.
+  GitHub connection/low-speed timeouts had exhausted retries. With metadata backups and restored automatic
+  policy, both running planner/updater executables reached 0.2.2; normal selection installed the remaining 11
+  service/provider packages and the final transaction completed at generation 14. Planner store stayed read-only.
+  Existing rev-000011 recovery is separately degraded because Mihomo DNS is enabled without nameservers;
+  manager requests also observed HTTP 429. No remote DNS policy was changed.
+- 2026-11-05 (per the user) Publish non-OpenWrt package archives on Pages with resumable 500,000-byte parts (D70).
+  Include reused packages, keep full-file compatibility, bind every ordered part to the signed group manifest,
+  preserve and deduplicate historical Pages downloads, and retain verified partial downloads across failures.
+  OpenWrt and legacy metadata continue full downloads. Remove the unpublished mirror implementation/settings.
+  Source changes only; Git submission and publishing remain with the user.
+  Verified 91 Rust tests (protocol schema, release CLI/package publication, runtime progress and updater flows),
+  26 Python release/Pages tests and strict updater/runtime/release Clippy. Real HTTP failure resumes only the
+  missing second part; failed transactions preserve earlier completed packages through housekeeping/checks.
+  Tests cover corrupted cache repair, final whole-file digest, signed malformed layouts, successful cleanup,
+  redirected paths, historical Pages preservation/content deduplication and the site capacity guard.
+  Generated schemas/group-manifest.json. Log: target/check-pages-chunks-final.log.
+- 2026-11-05 (per the user) Compare actual v1 Mihomo startup and fix DNS compatibility regression (D71).
+  Restore subscription/core resolver inheritance for nodes with no custom nameservers, preserve explicit
+  custom DNS policies and project-owned listeners, and stop emitting an empty bootstrap list. Validate the
+  effective inherited DNS before caching/reloading, including wildcard front-end/local-address loop checks.
+  Worker status now exposes downloading/results immediately; probe rows report blocked configuration and
+  subscription reasons through existing Manager/Dashboard fields. Updated the schema, descriptor translations
+  and Manager validation. Live subscription download succeeded and already provides its DNS resolvers;
+  installed core v1.19.33 passed two temporary -t fixtures without changing the running configuration.
+  Source-only: release updated Mihomo and Manager packages; existing node binary/revision was not replaced.
+  Verified 19 Rust tests (normalization, real HTTP worker/last-good refresh, probe errors, schemas/descriptors),
+  strict Mihomo Clippy and Manager's DNS-loop publishing test/type compilation. Log: target/check-mihomo-v1-final.log.
+  Read the live subscription only in memory and printed sanitized DNS facts; no URL/token or proxy credentials
+  were exposed or persisted. Native -t fixture directories were removed; running services were not replaced.

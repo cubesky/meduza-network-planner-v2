@@ -438,7 +438,15 @@ pub(crate) mod tests {
         }
         b.into_inner().unwrap().finish().unwrap();
         let (size, sha256) = sha256_file(&path).unwrap();
-        let artifact = Artifact { platform: "linux/amd64".into(), format: "tar.gz".into(), url: String::new(), size, sha256, oci: None };
+        let artifact = Artifact {
+            platform: "linux/amd64".into(),
+            format: "tar.gz".into(),
+            url: String::new(),
+            size,
+            sha256,
+            chunks: vec![],
+            oci: None,
+        };
         (path, artifact)
     }
 

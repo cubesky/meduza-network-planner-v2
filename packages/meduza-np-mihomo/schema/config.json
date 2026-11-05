@@ -199,7 +199,7 @@
         },
         "nameservers": {
           "default": [],
-          "description": "Upstreams for Mihomo DNS. Must not include the dnsmasq front end (loop).",
+          "description": "Upstreams for Mihomo DNS. Empty inherits subscription DNS and core defaults; a nonempty list selects custom DNS. Must not point back at the front end.",
           "items": {
             "type": "string"
           },

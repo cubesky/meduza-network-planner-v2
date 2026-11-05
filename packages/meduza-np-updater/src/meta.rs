@@ -38,6 +38,16 @@ pub struct Source {
 }
 
 impl Source {
+    pub(crate) fn fetch_once(&self, url: &str, dest: &Path, opts: &meduza_np_plugin_sdk::fetch::FetchOptions<'_>) -> Result<(), MetaError> {
+        if let Some(path) = Self::local_path(url) {
+            if std::fs::metadata(&path).map_err(|e| MetaError::new("fetch-failed", e.to_string()))?.len() > opts.max_bytes {
+                return Err(MetaError::new("fetch-failed", "chunk exceeds signed size"));
+            }
+            std::fs::copy(path, dest).map_err(|e| MetaError::new("fetch-failed", e.to_string()))?;
+            return Ok(());
+        }
+        meduza_np_plugin_sdk::fetch::fetch_to_file(url, dest, opts).map_err(|e| MetaError::new("fetch-failed", format!("{url}: {e}")))
+    }
     pub fn new(base: &str) -> Result<Self, MetaError> {
         let base = base.trim().trim_end_matches('/').to_string();
         let allow_http = std::env::var("MEDUZA_NP_UPDATE_ALLOW_HTTP").map(|v| v == "1").unwrap_or(false);
@@ -214,6 +224,11 @@ fn validate_manifest(m: &GroupManifest) -> Result<(), MetaError> {
             return Err(MetaError::new("invalid-metadata", format!("{}: bad version {:?}", p.name, p.version)));
         }
         for a in &p.artifacts {
+            crate::chunks::validate(a).map_err(|e| MetaError::new("invalid-metadata", format!("{}: {e}", p.name)))?;
+            let source = Source::new("https://validation.invalid")?;
+            for part in &a.chunks {
+                source.resolve(&part.url)?;
+            }
             let hex_ok = a.sha256.len() == 64 && a.sha256.bytes().all(|b| b.is_ascii_hexdigit());
             if !hex_ok || a.size == 0 {
                 return Err(MetaError::new("invalid-metadata", format!("{}: artifact {} lacks size/sha256", p.name, a.platform)));
@@ -228,6 +243,65 @@ mod retry_tests {
     use super::*;
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
+
+    #[test]
+    fn real_pages_requests_resume_at_the_missing_part() {
+        use meduza_np_protocol::group::{Artifact, ArtifactChunk};
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let source = Source { base: format!("http://{}", listener.local_addr().unwrap()) };
+        let mut body = vec![b'a'; 500_000];
+        body.push(b'z');
+        let parts = vec![
+            ArtifactChunk { url: "parts/0".into(), size: 500_000, sha256: meduza_np_protocol::digest::sha256_hex(&body[..500_000]) },
+            ArtifactChunk { url: "parts/1".into(), size: 1, sha256: meduza_np_protocol::digest::sha256_hex(b"z") },
+        ];
+        let artifact = Artifact {
+            platform: "linux/amd64".into(),
+            format: "tar.gz".into(),
+            url: "full.tar.gz".into(),
+            size: body.len() as u64,
+            sha256: meduza_np_protocol::digest::sha256_hex(&body),
+            oci: None,
+            chunks: parts,
+        };
+        let server = std::thread::spawn(move || {
+            let mut requests = Vec::new();
+            for n in 0..3 {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut request = String::new();
+                reader.read_line(&mut request).unwrap();
+                requests.push(request);
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                        break;
+                    }
+                }
+                match n {
+                    0 => {
+                        stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 500000\r\nConnection: close\r\n\r\n").unwrap();
+                        stream.write_all(&vec![b'a'; 500_000]).unwrap();
+                    }
+                    1 => stream.write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap(),
+                    _ => stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nConnection: close\r\n\r\nz").unwrap(),
+                }
+            }
+            requests
+        });
+        let root = std::env::temp_dir().join(format!("mnp-real-pages-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let dest = root.join("archive");
+        let cache = root.join("downloads");
+        assert!(crate::chunks::download(&source, &artifact, &dest, &cache, |_| {}).unwrap_err().contains("404"));
+        crate::chunks::download(&source, &artifact, &dest, &cache, |_| {}).unwrap();
+        assert_eq!(std::fs::read(dest).unwrap(), body);
+        let requests = server.join().unwrap();
+        assert!(requests[0].starts_with("GET /parts/0 "));
+        assert!(requests[1..].iter().all(|r| r.starts_with("GET /parts/1 ")), "the verified first part is never fetched twice");
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn real_download_recovers_from_a_partial_body_and_http_503() {

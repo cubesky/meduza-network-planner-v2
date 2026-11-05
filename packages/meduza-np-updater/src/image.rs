@@ -191,6 +191,7 @@ mod tests {
             url: "https://ghcr.io/v2/x/manifests/sha256:0".into(),
             size: 1,
             sha256: digest.to_string().repeat(64),
+            chunks: vec![],
             oci: reference.map(str::to_string),
         }
     }

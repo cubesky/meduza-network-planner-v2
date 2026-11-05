@@ -21,6 +21,13 @@
     },
     "Artifact": {
       "properties": {
+        "chunks": {
+          "description": "Ordered, signed Pages chunks for non-OpenWrt file artifacts. Older clients use `url` as a full download.",
+          "items": {
+            "$ref": "#/$defs/ArtifactChunk"
+          },
+          "type": "array"
+        },
         "format": {
           "description": "`tar.zst`, `tar.gz`, `ipk`, `apk`, `oci`.",
           "type": "string"
@@ -50,6 +57,27 @@
       "required": [
         "platform",
         "format",
+        "url",
+        "size",
+        "sha256"
+      ],
+      "type": "object"
+    },
+    "ArtifactChunk": {
+      "properties": {
+        "sha256": {
+          "type": "string"
+        },
+        "size": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
         "url",
         "size",
         "sha256"

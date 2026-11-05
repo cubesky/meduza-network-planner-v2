@@ -296,6 +296,7 @@ pub fn apply(gp: &mut GroupPackage, img: &OciImage) -> Result<(), String> {
                 url: manifest_url(&img.image, &d.digest),
                 size: d.size,
                 sha256: d.digest.trim_start_matches("sha256:").to_string(),
+                chunks: vec![],
                 oci: Some(reference.clone()),
             });
         }
@@ -380,7 +381,15 @@ mod tests {
                 package: package.into(),
                 version: version.into(),
                 file: file.clone(),
-                artifact: Artifact { platform: platform.to_string(), format: "tar.gz".into(), url: String::new(), size, sha256, oci: None },
+                artifact: Artifact {
+                    platform: platform.to_string(),
+                    format: "tar.gz".into(),
+                    url: String::new(),
+                    size,
+                    sha256,
+                    chunks: vec![],
+                    oci: None,
+                },
             };
             std::fs::write(dir.join(format!("{file}.json")), serde_json::to_vec(&b).unwrap()).unwrap();
         }
@@ -490,6 +499,7 @@ mod tests {
                 url: "u".into(),
                 size: 1,
                 sha256: "s".into(),
+                chunks: vec![],
                 oci: None,
             }],
         );

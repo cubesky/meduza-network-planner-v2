@@ -284,6 +284,22 @@ impl<'a> Engine<'a> {
         })();
         match &result {
             Ok(g) => {
+                let installed = self.installed().ok();
+                let keep = g
+                    .manifest
+                    .packages
+                    .iter()
+                    .flat_map(|p| p.artifacts.iter())
+                    .filter(|a| {
+                        !a.chunks.is_empty()
+                            && (a.platform == self.cfg.platform || a.platform == "any")
+                            && !installed.as_ref().is_some_and(|s| s.packages.values().any(|p| p.sha256.eq_ignore_ascii_case(&a.sha256)))
+                    })
+                    .map(|a| a.sha256.to_ascii_lowercase())
+                    .collect();
+                if let Err(e) = crate::chunks::retain(&store.root.join("downloads"), &keep) {
+                    eprintln!("download cache cleanup: {e}");
+                }
                 if let Some(p) = &g.pointer {
                     st.last_sequence.insert(self.cfg.channel.clone(), p.sequence);
                 }
@@ -427,26 +443,28 @@ impl<'a> Engine<'a> {
                 let _ = std::fs::remove_file(&dest);
                 eprintln!("downloading {} ({}/{}, {} bytes)", a.package, index + 1, downloads.len(), art.size);
                 let url = source.resolve(&art.url).map_err(|e| e.to_string())?;
-                source
-                    .fetch_to_with_progress(&url, &dest, art.size, 900, |attempt| {
-                        progress(false);
-                        let path = store.root.join("download-progress.json");
-                        if let Ok(Some(mut value)) = meduza_np_runtime::fsutil::read_json::<Value>(&path, 256 * 1024) {
-                            value["attempt"] = json!(attempt.number);
-                            value["maxAttempts"] = json!(attempt.maximum);
-                            value["retryError"] = json!(attempt.error);
-                            value["retryAtUnix"] = attempt
-                                .retry_after
-                                .map(|d| {
-                                    let now =
-                                        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
-                                    json!(now + d.as_secs() + u64::from(d.subsec_nanos() > 0))
-                                })
-                                .unwrap_or(Value::Null);
-                            let _ = meduza_np_runtime::fsutil::write_json_atomic(&path, &value, 0o644);
-                        }
-                    })
-                    .map_err(|e| e.to_string())?;
+                let notify = |attempt: crate::retry::Attempt| {
+                    progress(false);
+                    let path = store.root.join("download-progress.json");
+                    if let Ok(Some(mut value)) = meduza_np_runtime::fsutil::read_json::<Value>(&path, 256 * 1024) {
+                        value["attempt"] = json!(attempt.number);
+                        value["maxAttempts"] = json!(attempt.maximum);
+                        value["retryError"] = json!(attempt.error);
+                        value["retryAtUnix"] = attempt
+                            .retry_after
+                            .map(|d| {
+                                let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                                json!(now + d.as_secs() + u64::from(d.subsec_nanos() > 0))
+                            })
+                            .unwrap_or(Value::Null);
+                        let _ = meduza_np_runtime::fsutil::write_json_atomic(&path, &value, 0o644);
+                    }
+                };
+                if self.cfg.backend == Backend::Store && !art.chunks.is_empty() {
+                    crate::chunks::download(&source, art, &dest, &store.root.join("downloads"), notify)?;
+                } else {
+                    source.fetch_to_with_progress(&url, &dest, art.size, 900, notify).map_err(|e| e.to_string())?;
+                }
             } else {
                 eprintln!("reusing verified download: {}", a.package);
             }
@@ -915,6 +933,10 @@ impl<'a> Engine<'a> {
             return Ok(());
         }
         let current = self.installed()?;
+        crate::chunks::discard_installed(
+            &store.root.join("downloads"),
+            &current.packages.values().map(|p| p.sha256.to_ascii_lowercase()).collect(),
+        )?;
         if store.current_view().is_some() && !store.installed_path().is_file() {
             return Err("current view has no installed record".into());
         }

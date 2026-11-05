@@ -687,6 +687,10 @@ test("DNS loops on a node are refused before publishing (front end, backends, up
   }), [], "disabled front end does not create a loop");
   assert.deepEqual(problems((v) => (v.mihomo.dns.respectRules = true)), [at("mihomo/dns/proxyServerNameservers")]);
   assert.deepEqual(problems((v) => {
+    v.mihomo.dns.nameservers = [];
+    v.mihomo.dns.respectRules = true;
+  }), [], "missing node upstreams inherit subscription DNS; validate its proxy resolvers after download");
+  assert.deepEqual(problems((v) => {
     v.mihomo.dns.respectRules = true;
     v.mihomo.dns.proxyServerNameservers = ["119.29.29.29"];
   }), []);

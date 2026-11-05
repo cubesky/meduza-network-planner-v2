@@ -5,8 +5,8 @@
 //!   the node's LAN are proxied, never destinations of the routing system, and a side router sends the answers of
 //!   the main router's port forwards back to it (D59).
 //! - Subscriptions are downloaded by the wrapper (`run` mode) and *normalized*: every field this project
-//!   controls (listeners, API, DNS, TUN, interface binding) is replaced, never shallow-merged, and the overridden
-//!   keys are recorded so the UI can show the final result.
+//!   controls (listeners, API, TUN, interface binding) is replaced. DNS resolution follows the subscription/core
+//!   unless node upstreams select a custom policy; effective DNS is checked before accepting the subscription.
 //! - TPROXY uses an owned `inet meduza_np_mihomo` table whose rules really reference the proxy-server set
 //!   (filled by the wrapper with resolved addresses) plus automatic exclusions for mesh/VPN/Access devices and
 //!   local destinations; fwmark and routing table numbers are reserved resources checked for conflicts.
@@ -113,7 +113,7 @@ pub struct MihomoDns {
     pub listen: SocketAddr,
     #[serde(default)]
     pub fake_ip: bool,
-    /// Upstreams for Mihomo DNS. Must not include the dnsmasq front end (loop).
+    /// Upstreams for Mihomo DNS. Empty inherits subscription DNS and core defaults; a nonempty list selects custom DNS. Must not point back at the front end.
     #[serde(default)]
     pub nameservers: Vec<String>,
     /// Plain IP resolvers used to resolve DoH/DoT names and proxy servers (bootstrap path).
@@ -438,13 +438,19 @@ fn frontend_listeners(req: &PluginRequest) -> Vec<SocketAddr> {
         return Vec::new();
     }
     let port = d.get("port").and_then(Value::as_u64).unwrap_or(53) as u16;
-    d.get("listenAddresses")
+    let listeners: Vec<_> = d
+        .get("listenAddresses")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter_map(|a| a.as_str()?.parse::<IpAddr>().ok())
         .map(|a| SocketAddr::new(a, port))
-        .collect()
+        .collect();
+    if listeners.is_empty() {
+        vec![SocketAddr::from(([0, 0, 0, 0], port)), SocketAddr::new("::".parse().unwrap(), port)]
+    } else {
+        listeners
+    }
 }
 
 pub fn validate(cfg: &MihomoConfig, req: &PluginRequest) -> Vec<ValidationError> {
@@ -593,19 +599,46 @@ pub const CONTROLLED_KEYS: &[&str] = &[
 
 /// Normalizes a subscription into the final configuration. Returns (yaml, overridden keys).
 pub fn normalize(subscription_yaml: &str, controlled: &serde_json::Map<String, Value>) -> Result<(String, Vec<String>), String> {
+    normalize_with_context(subscription_yaml, controlled, &dns::Context::default())
+}
+
+fn normalize_with_context(
+    subscription_yaml: &str,
+    controlled: &serde_json::Map<String, Value>,
+    context: &dns::Context,
+) -> Result<(String, Vec<String>), String> {
     let doc: serde_json::Value = serde_norway::from_str(subscription_yaml).map_err(|e| format!("subscription is not valid YAML: {e}"))?;
     let Value::Object(mut map) = doc else { return Err("subscription is not a YAML mapping".into()) };
     if !map.contains_key("proxies") && !map.contains_key("proxy-providers") {
         return Err("subscription contains no proxies or proxy-providers".into());
     }
     let mut overridden = Vec::new();
+    let inherit = controlled.get("dns").is_some_and(|d| d.get("enable") == Some(&Value::Bool(true)) && d.get("nameserver").is_none());
+    let mut inherited_dns =
+        if inherit { map.get("dns").and_then(Value::as_object).cloned().unwrap_or_default() } else { Default::default() };
+    if inherited_dns.remove("listen-routing-mark").is_some() {
+        overridden.push("dns.listen-routing-mark".into());
+    }
     for key in CONTROLLED_KEYS {
-        if map.remove(*key).is_some() {
+        if map.remove(*key).is_some() && (*key != "dns" || !inherit) {
             overridden.push((*key).to_string());
         }
     }
     for (k, v) in controlled {
-        map.insert(k.clone(), v.clone());
+        if k == "dns" && inherit {
+            for (key, value) in v.as_object().ok_or("controlled DNS is not an object")? {
+                if inherited_dns.contains_key(key) {
+                    overridden.push(format!("dns.{key}"));
+                }
+                inherited_dns.insert(key.clone(), value.clone());
+            }
+            map.insert(k.clone(), Value::Object(inherited_dns.clone()));
+        } else {
+            map.insert(k.clone(), v.clone());
+        }
+    }
+    if let Some(d) = map.get("dns") {
+        dns::validate_effective(d, context)?;
     }
     let yaml = serde_norway::to_string(&Value::Object(map)).map_err(|e| e.to_string())?;
     Ok((yaml, overridden))
@@ -800,6 +833,7 @@ pub fn plan(cfg: &MihomoConfig, req: &PluginRequest) -> Result<Vec<GenerationPla
     }
     // Everything the wrapper needs, including secrets, lives in a 0600 file — not in argv.
     let spec = serde_json::json!({
+        "dnsContext": {"front": frontend_listeners(req), "localIps": [cfg.api.address, cfg.dns.listen.ip()]},
         "controlled": controlled,
         "subscriptions": subs,
         "active": cfg.active_subscription,
@@ -906,6 +940,82 @@ mod tests {
     use super::*;
     use meduza_np_plugin_sdk::test_request;
     use serde_json::json;
+
+    #[test]
+    fn v1_subscription_dns_is_inherited_without_node_upstreams_and_listeners_stay_owned() {
+        let mut m = base();
+        m["mode"] = json!("proxy");
+        m["dns"] = json!({"enabled":true});
+        let r = req(m);
+        let cfg = load(&r).unwrap().unwrap();
+        assert!(validate(&cfg, &r).is_empty());
+        let context = dns::Context { front: vec!["0.0.0.0:53".parse().unwrap()], local_ips: vec!["10.42.10.12".parse().unwrap()] };
+        let subscription = "proxies: []\ndns:\n  enable: false\n  listen: 0.0.0.0:53\n  ipv6: true\n  listen-routing-mark: 1234\n  enhanced-mode: fake-ip\n  nameserver: [https://dns.example/dns-query]\n  default-nameserver: [tls://119.29.29.29]\n  fallback: [tls://1.1.1.1]\n  nameserver-policy: {example.cn: 223.5.5.5}\n  respect-rules: true\n  proxy-server-nameserver: [119.29.29.29]\n";
+        let (yaml, overridden) = normalize_with_context(subscription, &controlled_fields(&cfg, "secret"), &context).unwrap();
+        let value: Value = serde_norway::from_str(&yaml).unwrap();
+        let d = &value["dns"];
+        assert_eq!(d["nameserver"], json!(["https://dns.example/dns-query"]));
+        assert_eq!(d["default-nameserver"], json!(["tls://119.29.29.29"]));
+        assert_eq!(d["nameserver-policy"], json!({"example.cn":"223.5.5.5"}));
+        assert_eq!(d["enhanced-mode"], "fake-ip");
+        assert_eq!(d["respect-rules"], true);
+        assert_eq!(d["listen"], "127.0.0.1:1053");
+        assert_eq!(d["enable"], true);
+        assert_eq!(d["ipv6"], false);
+        assert!(d.get("listen-routing-mark").is_none());
+        assert!(overridden.contains(&"dns.listen".into()));
+        assert!(!overridden.contains(&"dns".into()));
+        let plans = plan(&cfg, &r).unwrap();
+        let spec: Value = serde_json::from_str(&plans[0].files[0].content).unwrap();
+        assert_eq!(spec["dnsContext"]["front"], json!(["10.42.1.1:53"]));
+    }
+
+    #[test]
+    fn missing_subscription_dns_preserves_core_defaults_and_explicit_custom_upstreams_win() {
+        let mut m = base();
+        m["dns"] = json!({"enabled":true});
+        let cfg = load(&req(m)).unwrap().unwrap();
+        let (yaml, _) = normalize("proxies: []\n", &controlled_fields(&cfg, "secret")).unwrap();
+        let d: Value = serde_norway::from_str(&yaml).unwrap();
+        assert!(d["dns"].get("nameserver").is_none());
+        assert!(d["dns"].get("default-nameserver").is_none());
+        let mut cfg = cfg;
+        cfg.dns.nameservers = vec!["119.29.29.29".into()];
+        let (yaml, _) = normalize(
+            "proxies: []\ndns: {nameserver: [127.0.0.1], default-nameserver: [], enhanced-mode: fake-ip}\n",
+            &controlled_fields(&cfg, "secret"),
+        )
+        .unwrap();
+        let d: Value = serde_norway::from_str(&yaml).unwrap();
+        assert_eq!(d["dns"]["nameserver"], json!(["119.29.29.29"]));
+        assert_eq!(d["dns"]["enhanced-mode"], "redir-host");
+        assert!(d["dns"].get("default-nameserver").is_none());
+    }
+
+    #[test]
+    fn inherited_dns_is_checked_before_accepting_a_subscription() {
+        let mut m = base();
+        m["dns"] = json!({"enabled":true});
+        let cfg = load(&req(m)).unwrap().unwrap();
+        let controlled = controlled_fields(&cfg, "secret");
+        let context = dns::Context { front: vec!["0.0.0.0:53".parse().unwrap()], local_ips: vec!["10.42.10.12".parse().unwrap()] };
+        for bad in [
+            "nameserver: [127.0.0.1]",
+            "nameserver: [10.42.10.12]",
+            "nameserver: [tcp://localhost:1053]",
+            "nameserver: []",
+            "default-nameserver: []",
+            "nameserver-policy: {example.com: 127.0.0.1}",
+            "default-nameserver: [dns.example]",
+            "respect-rules: true",
+            "fake-ip-range: 'fd00::/64'",
+        ] {
+            let body = format!("proxies: []\ndns:\n  {bad}\n");
+            assert!(normalize_with_context(&body, &controlled, &context).is_err(), "{bad}");
+        }
+        let good = "proxies: []\ndns: {nameserver: [https://10.42.10.12/dns-query]}\n";
+        assert!(normalize_with_context(good, &controlled, &context).is_ok(), "DoH does not reach the plain DNS listener");
+    }
 
     fn req(m: Value) -> PluginRequest {
         let mut r = test_request(

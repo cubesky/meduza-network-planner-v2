@@ -15,6 +15,8 @@ use serde_json::{json, Value};
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Spec {
+    #[serde(default)]
+    dns_context: crate::dns::Context,
     controlled: serde_json::Map<String, Value>,
     subscriptions: Vec<Sub>,
     active: Option<String>,
@@ -123,6 +125,20 @@ struct SubState {
     failures: u32,
 }
 
+fn publish_subscriptions(path: &Path, subs: &BTreeMap<String, SubState>) {
+    let mut state: Value =
+        std::fs::read(path).ok().and_then(|s| serde_json::from_slice(&s).ok()).unwrap_or_else(|| json!({"apiReady":false}));
+    state["subscriptions"] = json!(subs
+        .iter()
+        .map(|(id, s)| (
+            id.clone(),
+            json!({"status":s.status,"updatedAt":s.updated_at,"lastError":s.last_error,"overriddenKeys":s.overridden})
+        ))
+        .collect::<serde_json::Map<_, _>>());
+    state["updatedAt"] = json!(meduza_np_plugin_sdk::now_rfc3339());
+    write_atomic(path, &state.to_string(), 0o644);
+}
+
 pub fn run(args: &[String]) -> ! {
     let get = |k: &str| args.windows(2).find(|w| w[0] == k).map(|w| w[1].clone());
     let (Some(mihomo), Some(spec_path), Some(run_dir)) = (get("--mihomo"), get("--spec"), get("--run-dir")) else {
@@ -158,6 +174,8 @@ pub fn run(args: &[String]) -> ! {
         })
         .collect();
     let mut child: Option<Child> = None;
+    write_atomic(&state_path, r#"{"apiReady":false}"#, 0o644);
+    publish_subscriptions(&state_path, &subs);
     let mut last_final = String::new();
     let mut set_filled = String::new();
     let mut next_set = Instant::now();
@@ -182,6 +200,9 @@ pub fn run(args: &[String]) -> ! {
             if Instant::now() < st.next {
                 continue;
             }
+            st.status = "downloading";
+            publish_subscriptions(&state_path, &subs);
+            let st = subs.get_mut(&s.id).expect("state");
             let dest = base.join(format!("sub-{}.yaml", s.id));
             let tmp = base.join(format!(".sub-{}.download", s.id));
             let opts = meduza_np_plugin_sdk::fetch::FetchOptions {
@@ -192,7 +213,7 @@ pub fn run(args: &[String]) -> ! {
             };
             match meduza_np_plugin_sdk::fetch::fetch_to_file(&s.url, &tmp, &opts).and_then(|_| {
                 let text = std::fs::read_to_string(&tmp).map_err(|e| e.to_string())?;
-                crate::normalize(&text, &spec.controlled).map(|_| text)
+                crate::normalize_with_context(&text, &spec.controlled, &spec.dns_context).map(|_| text)
             }) {
                 Ok(_) => {
                     let _ = std::fs::rename(&tmp, &dest);
@@ -211,12 +232,13 @@ pub fn run(args: &[String]) -> ! {
                     st.next = Instant::now() + Duration::from_secs((60u64 << st.failures.min(6)).min(3600));
                 }
             }
+            publish_subscriptions(&state_path, &subs);
         }
         // 2. Build the final configuration from the active subscription.
         let active = spec.active.clone().unwrap_or_default();
         let cached = std::fs::read_to_string(base.join(format!("sub-{active}.yaml"))).ok();
         if let Some(text) = cached {
-            match crate::normalize(&text, &spec.controlled) {
+            match crate::normalize_with_context(&text, &spec.controlled, &spec.dns_context) {
                 Ok((yaml, overridden)) => {
                     if let Some(st) = subs.get_mut(&active) {
                         st.overridden = overridden;
@@ -251,7 +273,13 @@ pub fn run(args: &[String]) -> ! {
                         next_set = Instant::now();
                     }
                 }
-                Err(e) => eprintln!("active subscription unusable: {e}"),
+                Err(e) => {
+                    eprintln!("active subscription unusable: {e}");
+                    if let Some(st) = subs.get_mut(&active) {
+                        st.status = "failed";
+                        st.last_error = Some(e);
+                    }
+                }
             }
         }
         if let Some(c) = child.as_mut() {

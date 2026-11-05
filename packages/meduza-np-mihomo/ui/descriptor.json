@@ -3,7 +3,7 @@
   "package": "meduza-np-mihomo",
   "requiresCapability": "mihomo.proxy",
   "title": "Mihomo",
-  "description": "Proxy with subscriptions. Fields this project controls (listeners, API, DNS, TUN) are always overridden and shown in the subscription status. TPROXY only affects forwarded traffic from the selected sources.",
+  "description": "Proxy with subscriptions. Empty DNS upstreams inherit subscription DNS and core defaults; configured upstreams select custom DNS. Listeners, API and TUN remain controlled by this project. TPROXY only affects forwarded traffic from the selected sources.",
   "settings": [
     {
       "path": "services.mihomo",
@@ -209,7 +209,6 @@
       "text": {
         "DNS": "DNS",
         "Mihomo": "Mihomo",
-        "Proxy with subscriptions. Fields this project controls (listeners, API, DNS, TUN) are always overridden and shown in the subscription status. TPROXY only affects forwarded traffic from the selected sources.": "带订阅的代理。本项目控制的字段（监听、API、DNS、TUN）总是会被覆盖，并显示在订阅状态中。TPROXY 只影响来自所选来源的转发流量。",
         "TPROXY": "TPROXY",
         "当前订阅": "当前订阅",
         "控制 API": "控制 API",
@@ -222,7 +221,8 @@
         "立即刷新订阅": "立即刷新订阅",
         "旁路由": "旁路由",
         "DNS 解析策略": "DNS 解析策略",
-        "Fake-IP": "Fake-IP"
+        "Fake-IP": "Fake-IP",
+        "Proxy with subscriptions. Empty DNS upstreams inherit subscription DNS and core defaults; configured upstreams select custom DNS. Listeners, API and TUN remain controlled by this project. TPROXY only affects forwarded traffic from the selected sources.": "DNS 上游留空时继承订阅的解析策略和核心默认值；填写上游后使用节点自定义 DNS。监听、API 和 TUN 仍由本项目管理。TPROXY 只影响来自所选来源的转发流量。"
       },
       "fields": {
         "active": "生效",
@@ -296,7 +296,6 @@
       "text": {
         "DNS": "DNS",
         "Mihomo": "Mihomo",
-        "Proxy with subscriptions. Fields this project controls (listeners, API, DNS, TUN) are always overridden and shown in the subscription status. TPROXY only affects forwarded traffic from the selected sources.": "含訂閱的代理。本專案控制的欄位（監聽、API、DNS、TUN）一律會被覆寫，並顯示在訂閱狀態中。TPROXY 只影響來自所選來源的轉送流量。",
         "TPROXY": "TPROXY",
         "当前订阅": "目前訂閱",
         "控制 API": "控制 API",
@@ -309,7 +308,8 @@
         "立即刷新订阅": "立即重新整理訂閱",
         "旁路由": "旁路由",
         "DNS 解析策略": "DNS 解析策略",
-        "Fake-IP": "Fake-IP"
+        "Fake-IP": "Fake-IP",
+        "Proxy with subscriptions. Empty DNS upstreams inherit subscription DNS and core defaults; configured upstreams select custom DNS. Listeners, API and TUN remain controlled by this project. TPROXY only affects forwarded traffic from the selected sources.": "DNS 上游留空時繼承訂閱的解析策略和核心預設值；填寫上游後使用節點自訂 DNS。監聽、API 和 TUN 仍由本專案管理。TPROXY 只影響來自所選來源的轉送流量。"
       },
       "fields": {
         "active": "生效",

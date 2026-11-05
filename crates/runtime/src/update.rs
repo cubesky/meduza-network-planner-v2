@@ -72,7 +72,7 @@ pub fn snapshot(store: &Path, run: &Path) -> Option<Value> {
         phase = "retrying";
     }
     let current_total = progress["packageBytesTotal"].as_u64().unwrap_or(0);
-    let current_bytes = if phase == "downloading" {
+    let current_bytes = if matches!(phase, "downloading" | "retrying") {
         progress["file"]
             .as_str()
             .filter(|s| !s.is_empty() && !s.contains(['/', '\\']) && !matches!(*s, "." | ".."))
@@ -138,6 +138,12 @@ mod tests {
         assert_eq!(retry["downloadedBytes"], 200);
         assert_eq!(retry["retryError"], "TLS EOF");
         assert_eq!(retry["maxAttempts"], 4);
+        write(
+            "download-progress.json",
+            json!({"startedAt":"a","file":"frr.tar.gz","bytesTotal":1000,
+            "completedBytes":200,"packageBytesTotal":800,"retryAtUnix":456}),
+        );
+        assert_eq!(snapshot(&store, &run).unwrap()["downloadedBytes"], 500, "verified assembled chunks remain visible during retry");
         write("download-progress.json", json!({"startedAt":"a","step":"installing","completedBytes":1000,"bytesTotal":1000}));
         let p = snapshot(&store, &run).unwrap();
         assert_eq!(p["phase"], "installing", "downloaded bytes reaching 100% is not installation completion");

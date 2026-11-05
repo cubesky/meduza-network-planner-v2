@@ -522,6 +522,7 @@ jobs:
           target/release/meduza-np-release group --group-version "$TAG" --sequence ${{ needs.plan.outputs.sequence }} \
             --commit "$(git rev-parse HEAD)" --matrix in/plan/matrix.json --artifacts dist --oci oci --require-oci 1 $base \
             --url-base "https://github.com/${{ github.repository }}/releases/download/$TAG" \
+            --pages-url "$PAGES_URL" \
             --site site --channel "$CHANNEL" --key /tmp/release.key
           rm -f /tmp/release.key
       - name: Every URL and every OCI image platform of the group exists (§15.1 step 8)
@@ -536,7 +537,8 @@ jobs:
           gh release edit "$TAG" --draft=false
           # Newly published assets and their redirects can be temporarily unavailable. Keep the real curl error
           # visible; a single network failure does not prove that an immutable/reused archive is missing.
-          jq -r '.packages[].artifacts[] | select(.format != "oci") | .url' "$M" |
+          # Pages URLs are verified against the generated site locally before deploy; OpenWrt stays on Releases.
+          jq -r '.packages[].artifacts[] | select(.format == "ipk" or .format == "apk") | .url' "$M" |
             while IFS= read -r u; do curl --retry 5 --retry-all-errors --retry-delay 2 --retry-max-time 180 --connect-timeout 15 --max-time 60 -fsSIL "$u" >/dev/null || { echo "::error::Release asset URL verification failed after retries: $u"; exit 1; }; done
       - name: Pages release inventory (downloads, images, SBOMs and package metadata; no GitHub API)
         run: |

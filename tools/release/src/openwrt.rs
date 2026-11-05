@@ -357,7 +357,7 @@ pub fn write_ipk(data: &BTreeMap<String, (Src, bool)>, c: &Control, out: &Path, 
     let bytes = b.into_inner().map_err(|e| e.to_string())?.finish().map_err(|e| e.to_string())?;
     std::fs::write(out, &bytes).map_err(|e| format!("{}: {e}", out.display()))?;
     let (size, sha256) = meduza_np_updater::store::sha256_file(out)?;
-    Ok(Artifact { platform: platform.into(), format: "ipk".into(), url: String::new(), size, sha256, oci: None })
+    Ok(Artifact { platform: platform.into(), format: "ipk".into(), url: String::new(), size, sha256, chunks: vec![], oci: None })
 }
 
 /// What `artifact --stage` needs to describe the package `mkpkg.sh` produced.

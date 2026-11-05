@@ -29,6 +29,7 @@ impl Plugin for Mihomo {
             return Ok(ProbeResult::default());
         }
         let ts = meduza_np_plugin_sdk::now_rfc3339();
+        let blocked = mh::validate(&cfg, req).first().map(|e| format!("configuration rejected: {}: {}", e.path, e.message));
         let state: Value = std::fs::read_to_string(format!("{}/mihomo-main.state", req.context.run_dir.trim_end_matches('/')))
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
@@ -43,7 +44,9 @@ impl Plugin for Mihomo {
         let mut out = vec![InstanceStatus {
             id: "mihomo/main".into(),
             kind: "mihomo".into(),
-            state: if api_ready {
+            state: if blocked.is_some() {
+                ServiceState::Down
+            } else if api_ready {
                 ServiceState::Up
             } else if state.is_null() {
                 ServiceState::Starting
@@ -51,7 +54,7 @@ impl Plugin for Mihomo {
                 ServiceState::Down
             },
             observed_at: Some(ts.clone()),
-            reason: (!api_ready).then(|| "controller API not ready".into()),
+            reason: blocked.clone().or_else(|| (!api_ready).then(|| "controller API not ready".into())),
             detail,
         }];
         if cfg.dns.enabled {
@@ -76,17 +79,32 @@ impl Plugin for Mihomo {
                 }
             }
             d.insert("active".into(), Value::Bool(cfg.active_subscription.as_deref() == Some(s.id.as_str())));
+            if let Some(error) = &blocked {
+                d.insert("lastError".into(), Value::String(error.clone()));
+            }
             out.push(InstanceStatus {
                 id: format!("mihomo/main/{}", s.id),
                 kind: "mihomo-subscription".into(),
-                state: match status {
-                    "ok" => ServiceState::Up,
-                    "stale" => ServiceState::Degraded,
-                    "failed" => ServiceState::Down,
-                    _ => ServiceState::Pending,
+                state: if blocked.is_some() {
+                    ServiceState::Down
+                } else {
+                    match status {
+                        "ok" => ServiceState::Up,
+                        "stale" => ServiceState::Degraded,
+                        "failed" => ServiceState::Down,
+                        "downloading" => ServiceState::Starting,
+                        _ => ServiceState::Pending,
+                    }
                 },
                 observed_at: Some(ts.clone()),
-                reason: None,
+                reason: blocked
+                    .clone()
+                    .or_else(|| st.and_then(|v| v.get("lastError")).and_then(Value::as_str).map(str::to_string))
+                    .or_else(|| match status {
+                        "downloading" => Some("downloading subscription".into()),
+                        "pending" => Some("waiting for Mihomo subscription worker to start".into()),
+                        _ => None,
+                    }),
                 detail: d,
             });
         }
@@ -132,4 +150,41 @@ fn main() {
         mh::runner::run(&args[2..]);
     }
     run(&Mihomo, env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn subscription_rows_show_configuration_and_download_errors_instead_of_silent_pending() {
+        let root = std::env::temp_dir().join(format!("mnp-subscription-probe-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut req = meduza_np_plugin_sdk::test_request(
+            "probe",
+            json!({"services":{"mihomo":{
+            "api":{"secretRef":"api"}, "subscriptions":[{"id":"default","urlRef":"sub"}], "activeSubscription":"default"}},
+            "secrets":{"api":{"kind":"text","value":"short"},"sub":{"kind":"text","value":"https://subscription.example"}}}),
+        );
+        req.context.run_dir = root.to_string_lossy().into_owned();
+        let report = Mihomo.probe(&req).unwrap();
+        let sub = report.instances.iter().find(|i| i.kind == "mihomo-subscription").unwrap();
+        assert_eq!(sub.state, ServiceState::Down);
+        assert!(sub.reason.as_ref().unwrap().contains("configuration rejected"));
+        req.config.secrets.get_mut("api").unwrap().value = "fixture-api-secret-with-entropy".into();
+        for (status, error, expected) in [
+            ("failed", Some("DNS nameserver points back at the front end"), ServiceState::Down),
+            ("downloading", None, ServiceState::Starting),
+        ] {
+            std::fs::write(
+                root.join("mihomo-main.state"),
+                json!({"apiReady":false,"subscriptions":{"default":{"status":status,"lastError":error}}}).to_string(),
+            )
+            .unwrap();
+            let report = Mihomo.probe(&req).unwrap();
+            let sub = report.instances.iter().find(|i| i.kind == "mihomo-subscription").unwrap();
+            assert_eq!(sub.state, expected);
+            assert!(sub.reason.is_some());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

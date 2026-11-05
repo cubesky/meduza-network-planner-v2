@@ -9,6 +9,8 @@ import copy
 import hashlib
 import json
 import re
+import shutil
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError
@@ -18,6 +20,8 @@ from urllib.request import urlopen
 
 API_VERSION = 1
 MAX_METADATA = 16 * 1024 * 1024
+CHUNK_BYTES = 500_000
+MAX_SITE_BYTES = 1_000_000_000
 
 
 def label(value):
@@ -76,6 +80,88 @@ def file_digest(path):
     return size, digest.hexdigest()
 
 
+def package_files(group, base):
+    """Only content-addressed files named by signed chunk metadata belong to the Pages download tree."""
+    prefix = base_url(base) + "/"
+    for package in group["packages"]:
+        for artifact in package["artifacts"]:
+            chunks = artifact.get("chunks", [])
+            if not chunks:
+                continue
+            if artifact["format"] not in ("tar.gz", "tar.zst") or artifact["platform"].startswith("openwrt/"):
+                raise ValueError("OpenWrt/OCI artifacts cannot have Pages chunks")
+            digest = artifact["sha256"]
+            if not re.fullmatch(r"[0-9a-f]{64}", digest):
+                raise ValueError("invalid Pages artifact digest")
+            root = f"packages/{digest}/"
+            filename = asset_name(artifact["url"])
+            if not re.fullmatch(r"[A-Za-z0-9._+-]+", filename) or artifact["url"] != prefix + root + filename:
+                raise ValueError("Pages package URL does not match its content path")
+            remaining = artifact["size"]
+            if not remaining or len(chunks) != (remaining + CHUNK_BYTES - 1) // CHUNK_BYTES:
+                raise ValueError("invalid Pages chunk count")
+            for index, chunk in enumerate(chunks):
+                if chunk["url"] != f"{root}{index:06}.part" or chunk["size"] != min(remaining, CHUNK_BYTES) or not re.fullmatch(r"[0-9a-f]{64}", chunk["sha256"]):
+                    raise ValueError("invalid Pages chunk path, size or digest")
+                remaining -= chunk["size"]
+            yield artifact, root + filename
+
+
+def download_package(base, relative, destination, size, digest):
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(destination.name + ".tmp")
+    try:
+        for attempt in range(4):
+            try:
+                with urlopen(f"{base}/{relative}", timeout=60) as response, temporary.open("wb") as output:
+                    count = 0
+                    checksum = hashlib.sha256()
+                    while data := response.read(min(1024 * 1024, size - count + 1)):
+                        count += len(data)
+                        if count > size:
+                            raise ValueError(f"{relative}: exceeds signed package size")
+                        checksum.update(data)
+                        output.write(data)
+                if count != size or checksum.hexdigest() != digest:
+                    raise ValueError(f"{relative}: signed package size/SHA-256 mismatch")
+                temporary.replace(destination)
+                return
+            except (OSError, ValueError):
+                temporary.unlink(missing_ok=True)
+                if attempt == 3:
+                    raise
+                time.sleep(2 ** attempt)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def restore_packages(group, new, out, base):
+    for artifact, relative in package_files(group, base):
+        destination = out / relative
+        if not destination.exists():
+            source = new / relative
+            if source.is_file() and not source.is_symlink():
+                if file_digest(source) != (artifact["size"], artifact["sha256"]):
+                    raise ValueError(f"{relative}: package differs from signed manifest")
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, destination)
+            else:
+                download_package(base, relative, destination, artifact["size"], artifact["sha256"])
+        if file_digest(destination) != (artifact["size"], artifact["sha256"]):
+            raise ValueError(f"{relative}: package differs from signed manifest")
+        # Historical parts can be regenerated from the verified full archive, avoiding duplicate downloads.
+        with destination.open("rb") as source:
+            for chunk in artifact["chunks"]:
+                data = source.read(chunk["size"])
+                if len(data) != chunk["size"] or sha256(data) != chunk["sha256"]:
+                    raise ValueError(f"{relative}: chunk differs from signed manifest")
+                path = out / chunk["url"]
+                if not path.exists():
+                    write(path, data)
+                elif file_digest(path) != (chunk["size"], chunk["sha256"]):
+                    raise ValueError(f"{path}: immutable chunk differs")
+
+
 def asset_name(url):
     parsed = urlsplit(url)
     name = unquote(parsed.path.rsplit("/", 1)[-1])
@@ -132,6 +218,8 @@ def catalog(group, raw, repo, base):
                 raise ValueError(f"{name}: inconsistent artifact metadata")
             if artifact["platform"] not in entry["platforms"]:
                 entry["platforms"].append(artifact["platform"])
+            if artifact.get("chunks"):
+                entry["chunks"] = [{**part, "url": f"{base_url(base)}/{part['url']}"} for part in artifact["chunks"]]
     result["assets"] = sorted(assets.values(), key=lambda asset: asset["name"])
     result["images"] = list(images.values())
     return result
@@ -153,6 +241,10 @@ def release(site, version, repo, base, artifacts, sboms, root):
     raw = (directory / "manifest.json").read_bytes()
     group = load_group(raw, version)
     result = catalog(group, raw, repo, base)
+    for artifact, relative in package_files(group, base):
+        for path, size, digest in [(relative, artifact["size"], artifact["sha256"]), *[(p["url"], p["size"], p["sha256"]) for p in artifact["chunks"]]]:
+            if file_digest(site / path) != (size, digest):
+                raise ValueError(f"{path}: Pages file differs from signed manifest")
     for asset in result["assets"]:
         if file_digest(artifacts / asset["name"]) != (asset["size"], asset["sha256"]):
             raise ValueError(f"{asset['name']}: artifact differs from the signed manifest")
@@ -233,6 +325,7 @@ def build(new, out, repo, base):
         version = label(directory.name)
         raw = (directory / "manifest.json").read_bytes()
         group = load_group(raw, version)
+        restore_packages(group, new, out, base)
         path = directory / "catalog.json"
         value = json.loads(path.read_bytes()) if path.exists() else catalog(group, raw, repo, base)
         validate_catalog(value, group, raw)
@@ -269,6 +362,9 @@ def build(new, out, repo, base):
     write(out / "api/v1/channels.json", {"apiVersion": API_VERSION, "channels": channels})
     write(out / "api/v1/index.json", index)
     write(out / "index.json", index)
+    size = sum(path.stat().st_size for path in out.rglob("*") if path.is_file())
+    if size > MAX_SITE_BYTES:
+        raise ValueError(f"Pages site is {size} bytes; exceeds the 1 GB published-site limit")
     return index
 
 

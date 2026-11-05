@@ -1601,3 +1601,56 @@ Execution and capture waits stay bounded; timeout still kills the helper's proce
 also fails, report both errors. This fix requires an updated updater binary. Older deployed updaters need one
 owner-side takeover through their signed source before the new behavior is available; changing planner's
 store mount to writable is not required.
+
+## D70 ? Pages archives with resumable signed 500 KB parts
+
+The release workflow passes --pages-url to group generation. Before signing, every non-OpenWrt archive,
+including reused packages, is verified and copied to packages/<sha256>/<filename> on Pages and split into
+500,000-byte parts (only the final part may be shorter). Full-file URLs remain available to older updaters.
+The additive optional chunks array binds ordered URLs, exact sizes and SHA-256 values inside the signed group
+manifest. Group format remains version 1; older clients ignore chunks. OpenWrt ipk/apk assets stay on Releases
+with no chunk metadata, and OCI images retain registry publication. No external mirror configuration is used.
+
+The store updater downloads/retries each part with its existing bounded retry policy. Only verified regular
+.part files enter a persistent downloads/<artifact-sha256>/ cache outside disposable staging. Restarts and
+failed transactions reuse correct parts, redownload corrupt/missing parts and verify the assembled archive's
+signed size and hash before installation. RAM use stays bounded to streaming/one part. Verified assembled
+bytes remain visible during retries. Native backends and legacy groups continue complete-file downloads.
+
+Successful installations discard their part cache. New verified groups retain only relevant uninstalled
+platform artifacts, pruning obsolete owned part/temp files; unknown files and symlinked directories are not
+traversed. Pending handoffs remain protected. All download/cache work shares the updater operation lock.
+
+Pages history merging preserves immutable signed metadata and all referenced download files, deduplicates
+content paths, verifies new files locally and restores historical chunks from their verified full archives.
+Catalogs expose part URLs without GitHub API requests. The builder refuses a site above 1,000,000,000 bytes
+before upload rather than silently dropping old assets. GitHub's published-site limit is documented at
+https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits.
+
+## D71 — Restore v1 subscription DNS inheritance and core bootstrap defaults
+
+Compared the actual v1 generators/gen_clash.py and clash/base.yaml: v1 downloads the chosen subscription,
+keeps its DNS object, and lets missing resolver fields use Mihomo defaults. V2 instead rejected empty node
+nameservers before downloading and replaced subscription DNS with an empty controlled object. It also emitted
+default-nameserver: [] even for literal custom upstreams, suppressing core defaults and causing another startup
+failure. The live subscription already contains DoH upstreams, fallback and proxy-server resolvers.
+
+Empty node upstreams now select subscription/core DNS resolution. Nonempty upstreams keep the existing fully
+node-owned custom policy. Nonempty optional settings/positive flags may override inherited defaults. Enable,
+listen and IPv6 remain project-owned; strip a subscription's listen-routing-mark. Missing nameserver and
+bootstrap keys remain absent so core defaults work; explicit empty lists in a subscription are rejected.
+No public resolvers are silently inserted by the adapter. This changes normalization, not node DNS policy.
+
+Carry front-end listeners/local endpoints in the private worker spec and validate effective DNS before
+accepting a new subscription or rebuilding from cache. Read local interface addresses without spawning native
+commands so wildcard front ends also protect the node's own LAN IP. Refuse self/front-end loops, malformed
+resolver/policy lists, invalid Fake-IP ranges and missing respect-rules proxy resolvers. Old cache/final config
+survive a bad refresh. Local node override validation remains early; Manager compilation defers inherited-only
+resolver requirements to the node after download.
+
+The worker publishes initial/downloading/result states before and after network I/O. Probe rows carry specific
+download/configuration errors (including existing lastError columns), and invalid local configuration reports
+Down rather than indefinite Pending. Updated plugin/schema/descriptor and Manager are required; no production
+binary or revision is replaced by this source change. Core-default behavior was verified with the installed
+Mihomo v1.19.33 in -t mode, consistent with its pinned upstream DefaultRawConfig/parseDNS implementation:
+https://raw.githubusercontent.com/MetaCubeX/mihomo/v1.19.33/config/config.go.

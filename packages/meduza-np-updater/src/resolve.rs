@@ -275,6 +275,7 @@ pub(crate) mod tests {
                 url: format!("packages/{name}-{version}.tar.gz"),
                 size: 100,
                 sha256: format!("{:0>64}", hex::encode(version.as_bytes())),
+                chunks: vec![],
                 oci: None,
             }],
             upstream: None,

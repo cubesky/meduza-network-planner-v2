@@ -95,7 +95,7 @@ export function dnsLoopProblems(nodeId: string, services: Rec): Problem[] {
         else for (const n of strings(value)) resolver(path, n);
       }
     }
-    if (d.respectRules === true && !strings(d.proxyServerNameservers).length) problems.push({
+    if (d.respectRules === true && strings(d.nameservers).length && !strings(d.proxyServerNameservers).length) problems.push({
       path: `${base}/mihomo/dns/proxyServerNameservers`, node: nodeId, message: "respectRules requires independent proxy-server nameservers",
     });
   }

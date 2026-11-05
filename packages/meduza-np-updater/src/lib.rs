@@ -2,6 +2,7 @@
 //! resolves the node's subset, stages verified packages and switches them under a planner maintenance lock with
 //! health verification and a one-generation rollback.
 
+pub mod chunks;
 pub mod config;
 pub mod engine;
 pub mod handoff;

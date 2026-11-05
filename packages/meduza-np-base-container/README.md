@@ -211,6 +211,29 @@ Set `MEDUZA_NP_ENROLL_URL` and `MEDUZA_NP_ENROLL_TOKEN_FILE` (mount the token fi
 container) for the first start, or later: `podman exec meduza-np-planner meduza-np enroll …` (needs the `cli`
 component). The identity is kept in the node volume and survives container re-creation.
 
+## Pages package downloads and resuming
+
+New release groups publish every non-OpenWrt archive to the configured Pages source, including unchanged
+package versions reused by that group. Each archive also has ordered parts of **500,000 bytes**, except its
+last shorter part. Full files and parts share content-addressed `packages/<sha256>/` paths across releases.
+The signed group manifest binds every part's URL, size and SHA-256 as well as the full archive digest.
+OCI runtime/distribution images keep their existing registry publication; OpenWrt `.ipk`/`.apk` files keep
+their complete-file Release downloads.
+
+The store updater reuses only verified parts in `<data>/store/downloads/<sha256>/`, retries missing/failed
+parts independently, and checks the assembled archive again before installing it. Failed transactions and
+restarts preserve verified parts for the current target; successful installation and a newer verified target
+collect obsolete owned parts. Unknown files and redirected cache directories are preserved. Progress includes
+verified assembled parts during downloads and retries. No mirror setting or GitHub API is required.
+
+Old updaters ignore the additional part metadata and download the complete archive from Pages. Old groups
+without part metadata and OpenWrt native backends still use full downloads. The first upgrade to a new updater
+can therefore use the existing process. Keep the whole Pages layout when preparing an offline import.
+
+The deployment preserves historical signed manifests and their package files, reuses identical content and
+verifies both complete files and parts before deployment. It refuses a site exceeding GitHub Pages' published
+1 GB size limit; it does not silently remove historical download files.
+
 ## Offline import
 
 Copy a release site directory (`channels/`, `releases/`, `packages/` — the same layout as the Pages site, produced by

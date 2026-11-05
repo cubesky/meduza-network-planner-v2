@@ -7,7 +7,7 @@
 //! package --package P --version V --platform PL --out DIR [--bin-dir D] [--tree D]
 //!                                                           → DIR/<P>_<V>_<platform>.tar.gz + .json (BuiltArtifact)
 //! group --group-version V --sequence N --commit C --matrix M --artifacts DIR --url-base U --site DIR
-//!       [--baseline M] [--channel stable] [--expires-days 30] [--platforms a,b] [--notes TEXT] --key KEYFILE...
+//!       [--pages-url URL] [--baseline M] [--channel stable] [--expires-days 30] [--platforms a,b] [--notes TEXT] --key KEYFILE...
 //!                                                           → DIR/releases/V/manifest.json(.sig), DIR/channels/<ch>.json(.sig)
 //! sign-pointer --site DIR --channel C --group-version V --sequence N [--expires-days 30] --key KEYFILE...
 //!                                                           → re-sign the channel pointer (expiry refresh, §13.4)
@@ -35,6 +35,7 @@ mod fingerprint;
 mod mihomo_assets;
 mod oci;
 mod openwrt;
+mod pages;
 mod sbom;
 mod trust;
 
@@ -268,6 +269,7 @@ fn main() {
                 url: String::new(),
                 size,
                 sha256,
+                chunks: vec![],
                 oci: None,
             };
             let built = archive::BuiltArtifact { package: info.package, version: info.version, file: info.file.clone(), artifact };
@@ -471,6 +473,13 @@ fn group(a: &Args, repo: &Path) {
     problems.extend(images.keys().map(|p| format!("{p}: OCI record for a package outside the matrix")));
     if !problems.is_empty() {
         fail(format!("group incomplete (nothing published):\n  {}", problems.join("\n  ")));
+    }
+    if let Some(base) = a.opt("pages-url") {
+        for package in &mut packages {
+            for artifact in &mut package.artifacts {
+                pages::publish(artifact, Path::new(art_dir), &site, base).unwrap_or_else(|e| fail(e));
+            }
+        }
     }
     let now = now_unix();
     let days: u64 = a.opt("expires-days").and_then(|v| v.parse().ok()).unwrap_or(30);

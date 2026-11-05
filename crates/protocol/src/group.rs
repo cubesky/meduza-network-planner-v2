@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::manifest::ApiRange;
 
 pub const GROUP_FORMAT_VERSION: u32 = 1;
+/// Decimal 500 KB; all but the last chunk have exactly this size.
+pub const ARTIFACT_CHUNK_BYTES: u64 = 500_000;
 
 /// `/channels/<channel>.json` — the signed pointer that makes a complete group visible (§15.1 step 9).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -80,6 +82,17 @@ pub struct Artifact {
     pub sha256: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub oci: Option<String>,
+    /// Ordered, signed Pages chunks for non-OpenWrt file artifacts. Older clients use `url` as a full download.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chunks: Vec<ArtifactChunk>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactChunk {
+    pub url: String,
+    pub size: u64,
+    pub sha256: String,
 }
 
 impl GroupManifest {
