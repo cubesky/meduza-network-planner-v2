@@ -1,9 +1,10 @@
 //! Rule file refresh and the MosDNS wrapper (`run` mode). Downloads go to a temp file in the same directory,
-//! are validated (text, size, every entry a domain rule), then atomically replace the previous version; on any
+//! are validated (text, size, domain/regexp or IP/CIDR entries), then atomically replace the previous version; on any
 //! failure the previous file stays in use and the error is reported. MosDNS is restarted only when a rule file
 //! really changed.
 
 use std::collections::BTreeMap;
+use std::net::IpAddr;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 
@@ -16,16 +17,50 @@ use crate::{rule_path, valid_domain_entry, DownloadPolicy, RuleFile, RunnerSpec}
 
 pub const MAX_LINES: usize = 1_000_000;
 
-/// Validates downloaded rule text. Returns the number of entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuleKind {
+    Domain,
+    Ip,
+}
+
+fn valid_ip_entry(line: &str) -> bool {
+    match line.split_once('/') {
+        Some((ip, prefix)) => {
+            !prefix.is_empty()
+                && prefix.bytes().all(|b| b.is_ascii_digit())
+                && ip
+                    .parse::<IpAddr>()
+                    .ok()
+                    .zip(prefix.parse::<u8>().ok())
+                    .is_some_and(|(ip, prefix)| prefix <= if ip.is_ipv4() { 32 } else { 128 })
+        }
+        None => line.parse::<IpAddr>().is_ok(),
+    }
+}
+
+/// Validates a homogeneous domain/regexp or IP/CIDR file. Custom pipelines choose the appropriate MosDNS
+/// consumer; never mix IP entries into domain lists. The structured pipeline always requires domain rules.
 pub fn validate_rules(text: &str) -> Result<usize, String> {
+    validate_rule_text(text, true)
+}
+
+fn validate_rule_text(text: &str, allow_ip: bool) -> Result<usize, String> {
     let mut n = 0;
+    let mut kind = None;
     for (i, raw) in text.lines().enumerate() {
-        let line = raw.trim();
-        if line.is_empty() || line.starts_with('#') {
+        // MosDNS's text readers strip inline comments as well as whole comment lines.
+        let line = raw.split('#').next().unwrap_or_default().trim();
+        if line.is_empty() {
             continue;
         }
-        if !valid_domain_entry(line) {
-            return Err(format!("line {}: not a domain rule", i + 1));
+        let expected = *kind.get_or_insert_with(|| if allow_ip && valid_ip_entry(line) { RuleKind::Ip } else { RuleKind::Domain });
+        let valid = match expected {
+            RuleKind::Domain => valid_domain_entry(line),
+            RuleKind::Ip => valid_ip_entry(line),
+        };
+        if !valid {
+            let description = if expected == RuleKind::Ip { "an IP/CIDR" } else { "a domain/regexp" };
+            return Err(format!("line {}: not {description} rule", i + 1));
         }
         n += 1;
         if n > MAX_LINES {
@@ -69,7 +104,7 @@ pub fn refresh(rule: &RuleFile, spec: &RunnerSpec) -> Result<bool, String> {
         let _ = std::fs::remove_file(&tmp);
         format!("not UTF-8 text: {e}")
     })?;
-    if let Err(e) = validate_rules(&text) {
+    if let Err(e) = validate_rule_text(&text, spec.custom_pipeline) {
         let _ = std::fs::remove_file(&tmp);
         return Err(e);
     }
@@ -243,5 +278,127 @@ mod tests {
         assert!(validate_rules("<html>error page</html>\n").is_err(), "HTML error pages never replace rules");
         assert!(validate_rules("# only comments\n").is_err());
         assert!(validate_rules("good.example\nbad entry\n").is_err());
+    }
+
+    #[test]
+    fn exported_geosite_sources_accept_their_regexp_entries() {
+        // Public rule entries rejected by v2's previous domain-only character filter (2026-11-08).
+        for (name, text, count) in [
+            ("geosite-category-ads", "domain:ads.example\nregexp:^speed\\.(coe|open)\\.ad\\.[a-z]{2,6}\\.prod\\.hosts\\.ooklaserver\\.net$\n", 2),
+            ("geosite-geolocation-cn", "regexp:.+\\.awsdns-cn-[0-9][0-9]\\.(biz|com|net|top)$\nregexp:.+\\.awsdns-cn-[0-9][a-e0-9]\\.cn$\nregexp:^.+-mihayo\\.akamaized\\.net$\n", 3),
+            ("geosite-private", "domain:local\nregexp:^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$\n", 2),
+        ] {
+            assert_eq!(validate_rule_text(text, false).unwrap_or_else(|e| panic!("{name}: {e}")), count);
+        }
+    }
+
+    #[test]
+    fn ip_rules_are_homogeneous_and_only_allowed_for_custom_pipelines() {
+        let ips = "# geoip-cn\n1.0.1.0/24\n1.0.2.0/23 # CN\n2001:db8::/32\n192.0.2.1\n::1\n";
+        assert_eq!(validate_rules(ips).unwrap(), 5);
+        assert!(validate_rule_text(ips, false).is_err(), "do not feed CIDRs to generated domain sets");
+        for text in
+            ["1.2.3.0/33", "2001:db8::/129", "1.2.3.0/-1", "1.2.3.0/+1", "999.0.0.0/8", "1.2.3.0/24\nexample.com", "domain:cn\n1.2.3.0/24"]
+        {
+            assert!(validate_rules(text).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn malformed_or_unbounded_regex_never_replaces_rules() {
+        for entry in ["regexp:[", "regexp:(unclosed", "regexp:*", "regexp:(?=lookahead)", "regexp:", "regexp:bad\nentry"] {
+            assert!(!valid_domain_entry(entry), "{entry}");
+        }
+        assert!(!valid_domain_entry(&format!("regexp:{}", "x".repeat(4097))));
+        assert!(!valid_domain_entry(&format!("regexp:{}x{}", "(".repeat(100), ")".repeat(100))));
+        assert!(valid_domain_entry(&format!("regexp:^{}$", "x".repeat(254))), "regex is not limited to 253 domain characters");
+    }
+
+    #[test]
+    fn comments_match_mosdns_text_readers() {
+        assert_eq!(validate_rules("# header\ndomain:example.com # note\nregexp:^example\\.org$ # note\n").unwrap(), 2);
+        assert!(validate_rules("domain:good\nregexp:[ # bad\n").unwrap_err().starts_with("line 2:"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn downloads_install_valid_rules_and_preserve_previous_bytes_on_errors() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+
+        struct Temp(std::path::PathBuf);
+        impl Drop for Temp {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let tmp = Temp(std::env::temp_dir().join(format!(
+            "meduza-mosdns-rules-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+        )));
+        std::fs::create_dir_all(&tmp.0).unwrap();
+        let good_ip = "1.0.1.0/24\n1.0.2.0/23\n";
+        let good_domain = "domain:local\nregexp:^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$\n";
+        let bodies = [
+            good_ip,
+            "1.0.1.0/24\n1.0.2.0/33\n",
+            good_domain,
+            "domain:local\nregexp:[\n",
+            "<html>Bad gateway</html>\n",
+            good_domain,
+            good_ip,
+        ];
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}/rules", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            listener.set_nonblocking(true).unwrap();
+            for body in bodies {
+                let deadline = Instant::now() + Duration::from_secs(15);
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline => {
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(e) => panic!("test download not received: {e}"),
+                    }
+                };
+                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap() == 0 || line == "\r\n" {
+                        break;
+                    }
+                }
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+        });
+        let mut spec = RunnerSpec {
+            rules: vec![],
+            download: DownloadPolicy::default(),
+            state_dir: tmp.0.to_str().unwrap().into(),
+            custom_pipeline: true,
+        };
+        let mut rule: RuleFile = serde_json::from_value(serde_json::json!({"id":"geoip-cn", "url":url})).unwrap();
+        let ip_dest = rule_path(&spec.state_dir, rule.id.as_str());
+        assert!(refresh(&rule, &spec).unwrap());
+        assert!(refresh(&rule, &spec).is_err());
+        assert_eq!(std::fs::read_to_string(&ip_dest).unwrap(), good_ip);
+        rule.id = meduza_np_protocol::ids::StableId::new("geosite-private").unwrap();
+        let domain_dest = rule_path(&spec.state_dir, rule.id.as_str());
+        assert!(refresh(&rule, &spec).unwrap());
+        for _ in 0..2 {
+            assert!(refresh(&rule, &spec).is_err());
+            assert_eq!(std::fs::read_to_string(&domain_dest).unwrap(), good_domain);
+            assert!(!tmp.0.join("mosdns/rules/.geosite-private.download").exists());
+        }
+        assert!(!refresh(&rule, &spec).unwrap(), "unchanged bytes do not restart MosDNS");
+        spec.custom_pipeline = false;
+        rule.id = meduza_np_protocol::ids::StableId::new("geoip-cn").unwrap();
+        assert!(refresh(&rule, &spec).is_err(), "structured domain sets cannot consume IP lists");
+        assert_eq!(std::fs::read_to_string(&ip_dest).unwrap(), good_ip);
+        server.join().unwrap();
     }
 }

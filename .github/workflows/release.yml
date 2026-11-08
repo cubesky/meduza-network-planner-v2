@@ -498,21 +498,13 @@ jobs:
       - name: Create or update the GitHub Release (draft until the group is complete)
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
-          if ! existing=$(gh release view "$TAG" --json assets -q '.assets[].name'); then
-            gh release create "$TAG" --draft --title "$TAG" --notes "Meduza NP package group $TAG"
-            existing=""
-          fi
           # Preserve SBOMs of unchanged versions as well as their package bytes.
           if [ -f in/plan/baseline.json ]; then
             python3 tools/pages-api.py reuse-sboms --baseline in/plan/baseline.json --matrix in/plan/matrix.json \
               --out sbom --repository "$GITHUB_REPOSITORY" --base-url "$PAGES_URL"
           fi
-          for f in dist/*.tar.gz dist/*.ipk dist/*.apk sbom/*.cdx.json; do
-            [ -f "$f" ] || continue
-            # immutable: an asset already uploaded by an earlier run of this tag is never replaced
-            echo "$existing" | grep -qx "$(basename "$f")" && continue
-            gh release upload "$TAG" "$f"
-          done
+          python3 -B tools/release-publish.py upload --repository "$GITHUB_REPOSITORY" --tag "$TAG" \
+            --directory dist --directory sbom
       - name: Group manifest + channel pointer (signed)
         env:
           KEY: ${{ secrets.MEDUZA_NP_RELEASE_KEY }}
@@ -534,7 +526,7 @@ jobs:
             skopeo inspect --raw "docker://$ref" > /tmp/index.json
             target/release/meduza-np-release oci-check --manifest "$M" --ref "$ref" --raw /tmp/index.json
           done
-          gh release edit "$TAG" --draft=false
+          python3 -B tools/release-publish.py finalize --repository "$GITHUB_REPOSITORY" --tag "$TAG"
           # Newly published assets and their redirects can be temporarily unavailable. Keep the real curl error
           # visible; a single network failure does not prove that an immutable/reused archive is missing.
           # Pages URLs are verified against the generated site locally before deploy; OpenWrt stays on Releases.

@@ -1654,3 +1654,40 @@ Down rather than indefinite Pending. Updated plugin/schema/descriptor and Manage
 binary or revision is replaced by this source change. Core-default behavior was verified with the installed
 Mihomo v1.19.33 in -t mode, consistent with its pinned upstream DefaultRawConfig/parseDNS implementation:
 https://raw.githubusercontent.com/MetaCubeX/mihomo/v1.19.33/config/config.go.
+
+## D72 — Retry and reconcile GitHub Release mutations
+
+The v0.2.4 publish job failed when release creation returned HTTP 500. Replace one-shot view/create/upload/edit
+commands with tools/release-publish.py, using the authenticated gh CLI. Only a confirmed missing release permits
+creation; temporary query errors do not. Each operation has six bounded attempts, a 180-second command deadline
+and exponential backoff/jitter (longer for rate limiting). Permission/validation errors stop immediately.
+Require an existing tag, and create a draft until the existing manifest/image validation reaches finalization.
+
+After an ambiguous creation/upload/edit result, inspect the remote state before repeating the mutation. Paginate
+asset inventory, verify existing uploaded assets by size and SHA-256 (download legacy assets lacking a digest),
+and skip accepted uploads after lost responses or duplicate-name conflicts. Never overwrite/delete a remote
+asset; incomplete or mismatched existing files fail explicitly. A published release needs no repeated edit.
+Retry exhaustion remains a failure, preserving the real diagnostic. Tests use a fake gh transport and never
+modify a remote release. Existing Actions re-runs keep their original workflow/ref; committing this helper does
+not retrofit an already-created run.
+
+## D73 — Preserve v1 MosDNS IP/CIDR and geosite regexp rule files
+
+Compared the v1 generator/downloader and scripts/etcd.redacted.json with v2's importer, file rewriting and
+download validator. The importer preserves the custom plugins pipeline and named rule files; v2 incorrectly
+validated every downloaded entry as a simple domain. All four public URLs still download successfully:
+geoip-cn contains 5,568 CIDRs; category-ads, geolocation-cn and private contain respectively 1, 3 and 1 regexp
+entries rejected by the old character filter. This is a plugin regression, not an export/source outage.
+
+Accept bounded regexp expressions using regex-syntax (syntax parsing, no matching engine), including octal
+escapes. Custom pluginsYaml/advancedYaml runner specs permit homogeneous IP/CIDR files with checked IPv4/IPv6
+prefix lengths. Structured generated domain sets remain domain-only. Keep the existing configuration shape;
+already imported custom pipelines do not need to be imported again. Strip comments as the pinned MosDNS v5.3.4
+text readers do; preserve original downloaded bytes and atomic replacement/unchanged-content behavior.
+Malformed regex, mixed domain/IP lists, bad prefixes, empty data and HTML remain failures and retain old rules.
+
+Verified all four complete public files (5,568 / 845 / 4,796 / 131 entries), plugin/schema/manifest checks, strict
+Clippy and real local HTTP downloads covering valid replacement, invalid refresh preservation and unchanged
+bytes. No production package/configuration was replaced; release the updated meduza-np-mosdns plugin.
+Upstream parsing references: pkg/matcher/domain/{matcher,load_helper}.go and pkg/matcher/netlist/load_helper.go
+at https://github.com/IrineSistiana/mosdns/tree/v5.3.4/pkg/matcher.

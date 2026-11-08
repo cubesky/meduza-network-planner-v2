@@ -1210,3 +1210,21 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   helper in temporary Git repositories and verify both check/fix behavior, script paths with spaces, spaced/tab
   shebangs and unchanged Rust modes. All pass; the actual project --check and git diff --check pass as well.
   Log: target/check-exec-bits.log. The project's Git index was not modified; submission remains with the user.
+- 2026-11-06 (per the user) Make GitHub Release publishing recover from HTTP 500 and ambiguous replies (D72).
+  Add a bounded gh-based publisher for draft creation, file upload and finalization. Distinguish confirmed
+  missing releases from transient query errors; re-read remote state after uncertain writes. Paginate assets,
+  verify size/hash before reuse (including legacy no-digest downloads), and refuse mismatched/incomplete files
+  without overwriting/deleting them. Six attempts, command deadlines, exponential jitter and rate-limit delays
+  cover transient service/network faults; permission/validation errors stop. Workflow now uses the helper after
+  SBOM inputs are prepared. All 47 release tests and executable-bit checks pass, including 18 publisher fault
+  tests covering the reported v0.2.4 failure, lost responses, visibility delays, pagination and immutable reuse.
+  Log: target/check-release-publish-final.log. Source-only; no remote release/run or Git index was modified.
+- 2026-11-08 (per the user) Fix MosDNS rule-format regressions against v1 and its exported JSON (D73).
+  Downloaded the four public sources: geoip-cn's CIDRs and the three geosite sources' regexp entries were
+  incorrectly rejected by v2's simple-domain validator. Add bounded regexp syntax validation and homogeneous
+  IPv4/IPv6/CIDR support for custom pipelines; generated domain sets remain domain-only. Keep imported config
+  unchanged and preserve old files on failed refresh. All four complete sources pass (5,568 / 845 / 4,796 / 131
+  rules). Fourteen plugin/manifest tests and strict Clippy pass, including real local HTTP download preservation.
+  Also passed the actual Manager import of the v1 export: 19 files, generated path rewrites, geoip resp_ip
+  binding and custom worker selection. Log: target/check-mosdns-rules-final.log. Source-only; release
+  meduza-np-mosdns to update deployed nodes.

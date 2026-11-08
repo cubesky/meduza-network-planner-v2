@@ -3,8 +3,8 @@
 //! The structured model always renders a complete, runnable configuration: domain sets (local, block, ddns,
 //! global), local/remote forwarders, cache, the full processing `sequence` and UDP+TCP listeners. Remote rule
 //! files are refreshed by the wrapper (`run` mode) into the persistent state directory with temp file +
-//! validation + atomic rename and bounded retries; on failure the previous rules stay in use. Every rule file is
-//! referenced by a domain set, so a configured list is always in effect.
+//! validation + atomic rename and bounded retries; on failure the previous rules stay in use. Structured rules
+//! extend domain sets; custom pipelines can also load IP/CIDR files through `ip_set`, `resp_ip` or `client_ip`.
 //!
 //! Custom plugins (`pluginsYaml`, D30): an operator-written MosDNS v5 `plugins:` list, for routing pipelines the
 //! structured model does not express. It refers to files as `/etc/mosdns/<name>`: the four inline lists are
@@ -171,6 +171,14 @@ fn valid_upstream(u: &str) -> bool {
 }
 
 pub fn valid_domain_entry(d: &str) -> bool {
+    if let Some(expr) = d.strip_prefix("regexp:") {
+        // Bound parser work without compiling a regex engine into the node plugin. MosDNS uses Go/RE2-style
+        // expressions; octal escapes are valid there. Domain-length limits do not apply to regex expressions.
+        return !expr.is_empty()
+            && expr.len() <= 4096
+            && !expr.chars().any(char::is_control)
+            && regex_syntax::ParserBuilder::new().octal(true).nest_limit(64).build().parse(expr).is_ok();
+    }
     let body = d.strip_prefix("domain:").or_else(|| d.strip_prefix("full:")).or_else(|| d.strip_prefix("keyword:")).unwrap_or(d);
     !body.is_empty() && body.len() <= 253 && body.bytes().all(|b| b.is_ascii_alphanumeric() || b"-._*".contains(&b))
 }
@@ -394,6 +402,9 @@ pub struct RunnerSpec {
     pub rules: Vec<RuleFile>,
     pub download: DownloadPolicy,
     pub state_dir: String,
+    /// Custom MosDNS pipelines can reference IP/CIDR lists; the structured pipeline only loads domain sets.
+    #[serde(default)]
+    pub custom_pipeline: bool,
 }
 
 pub fn plan(cfg: &MosdnsConfig, req: &PluginRequest) -> Result<Vec<GenerationPlan>, PluginError> {
@@ -418,6 +429,7 @@ pub fn plan(cfg: &MosdnsConfig, req: &PluginRequest) -> Result<Vec<GenerationPla
         rules: cfg.rule_files.iter().filter(|r| r.enabled).cloned().collect(),
         download: cfg.download.clone(),
         state_dir: req.context.state_dir.clone(),
+        custom_pipeline: cfg.plugins_yaml.is_some() || cfg.advanced_yaml.is_some(),
     };
     let spec_json = serde_json::to_string(&spec).map_err(|e| PluginError::new("internal", e.to_string()))?;
     let libexec = req.context.libexec_dir.trim_end_matches('/');
@@ -507,6 +519,9 @@ mod tests {
         let plans = plan(&cfg, &r).unwrap();
         assert!(plans[0].validate().is_empty(), "{:?}", plans[0].validate().errors());
         assert_eq!(plans[0].files.iter().find(|f| f.path.ends_with("local_domains.txt")).unwrap().content, "domain:lan\n");
+        let argv = &plans[0].processes[0].argv;
+        let spec: RunnerSpec = serde_json::from_str(argv.last().unwrap()).unwrap();
+        assert!(!spec.custom_pipeline, "the generated domain sets must not load IP rules");
     }
 
     #[test]
@@ -537,22 +552,29 @@ mod tests {
 
     #[test]
     fn custom_plugins_resolve_file_references() {
-        let plugins = "  - tag: geo\n    type: domain_set\n    args:\n      files: [\"/etc/mosdns/geosite-cn.txt\"]\n  - tag: main\n    type: sequence\n    args:\n      - matches: qname &/etc/mosdns/etcd_local.txt\n        exec: reject\n  - tag: server\n    type: udp_server\n    args:\n      entry: main\n      listen: 0.0.0.0:1153\n";
+        let plugins = "  - tag: geo\n    type: domain_set\n    args:\n      files: [\"/etc/mosdns/geosite-cn.txt\"]\n  - tag: main\n    type: sequence\n    args:\n      - matches: qname &/etc/mosdns/etcd_local.txt\n        exec: reject\n      - matches: \"resp_ip &/etc/mosdns/geoip-cn.txt\"\n        exec: accept\n  - tag: server\n    type: udp_server\n    args:\n      entry: main\n      listen: 0.0.0.0:1153\n";
         let cfg_json = serde_json::json!({
             "listen": "0.0.0.0", "port": 1153, "pluginsYaml": plugins,
-            "domains": {"local": ["domain:example.cn"]},
-            "ruleFiles": [{"id": "geosite-cn", "fileName": "geosite-cn.txt", "url": "https://rules.example.test/cn"}]
+            "domains": {"local": ["domain:example.cn"], "block": ["regexp:^ad[0-9]+\\.example$"]},
+            "ruleFiles": [
+                {"id": "geosite-cn", "fileName": "geosite-cn.txt", "url": "https://rules.example.test/cn"},
+                {"id": "geoip-cn", "fileName": "geoip-cn.txt", "url": "https://rules.example.test/ip-cn"}
+            ]
         });
         let cfg: MosdnsConfig = serde_json::from_value(cfg_json.clone()).unwrap();
         assert!(cfg.local_upstreams.is_empty() && cfg.rule_files[0].category == Category::Local, "defaults for custom mode");
-        assert_eq!(referenced_files(plugins), ["geosite-cn.txt", "etcd_local.txt"]);
-        let r = test_request("plan", serde_json::json!({"services": {"mosdns": cfg_json}}));
+        assert_eq!(referenced_files(plugins), ["geosite-cn.txt", "etcd_local.txt", "geoip-cn.txt"]);
+        let r = req(cfg_json);
         let y = render(&cfg, &r);
         assert!(!y.contains("/etc/mosdns/"), "{y}");
         assert!(y.contains(&rule_path(&r.context.state_dir, "geosite-cn")), "{y}");
+        assert!(y.contains(&format!("resp_ip &{}", rule_path(&r.context.state_dir, "geoip-cn"))), "{y}");
         assert!(y.contains("local_domains.txt"), "{y}");
         assert!(y.starts_with("# Meduza NP MosDNS v5 configuration — custom plugins") && y.contains("\nplugins:\n  - tag: geo"), "{y}");
-        assert!(validate(&cfg, &r).iter().all(|e| e.path != "/pluginsYaml" && e.path != "/localUpstreams"), "{:?}", validate(&cfg, &r));
+        assert!(validate(&cfg, &r).is_empty(), "{:?}", validate(&cfg, &r));
+        let plans = plan(&cfg, &r).unwrap();
+        let spec: RunnerSpec = serde_json::from_str(plans[0].processes[0].argv.last().unwrap()).unwrap();
+        assert!(spec.custom_pipeline, "v1 custom pipelines may consume IP lists");
         let mut bad = cfg.clone();
         bad.plugins_yaml = Some(plugins.replace("geosite-cn.txt", "missing.txt"));
         assert!(validate(&bad, &r).iter().any(|e| e.path == "/pluginsYaml" && e.message.contains("missing.txt")));
