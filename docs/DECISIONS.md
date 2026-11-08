@@ -1691,3 +1691,21 @@ Clippy and real local HTTP downloads covering valid replacement, invalid refresh
 bytes. No production package/configuration was replaced; release the updated meduza-np-mosdns plugin.
 Upstream parsing references: pkg/matcher/domain/{matcher,load_helper}.go and pkg/matcher/netlist/load_helper.go
 at https://github.com/IrineSistiana/mosdns/tree/v5.3.4/pkg/matcher.
+
+## D74 — Query wildcard DNS listeners through loopback
+
+After the MosDNS rule-format fix, all 19 rule downloads report OK but mosdns/main still reports DNS timeout
+with listen 0.0.0.0:1153. The shared plugin DNS probe sent to the wildcard address and compared recv_from's
+source against that same wildcard address. Healthy replies from 127.0.0.1 were discarded. IPv6 :: has the same
+problem. Reproduced both failures with local UDP responders before changing the implementation.
+
+Normalize an unspecified probe target to its own address family's loopback before sending and comparing replies.
+Keep configured listener/port and strict source/transaction-ID/response-code checks unchanged. Apply this in the
+shared SDK so MosDNS, Mihomo, OpenClash and other DNS checks agree; dnsmasq already normalizes its own targets.
+Tests cover IPv4 and IPv6 wildcard replies, literal listeners and real silence, plus a MosDNS plugin probe that
+must report Up after a valid answer while still displaying the original wildcard listener.
+
+The source fix does not itself establish the deployed resolver's real upstream health. The initial live SSH
+verification was refused by the 1Password agent; no deployed binary or configuration was changed. Updated
+consumer packages must be released to include the SDK fix. Do not narrow the actual listener to work around a
+monitoring defect.

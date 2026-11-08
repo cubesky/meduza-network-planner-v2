@@ -1,7 +1,7 @@
 //! Minimal DNS probing used by health checks (Anycast guard, DNS front end): one A query over UDP with a
 //! timeout. A NOERROR or NXDOMAIN answer to our id proves the resolver answers queries.
 
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
 use std::time::Duration;
 
 /// A query for `name`, type A, class IN, recursion desired.
@@ -27,8 +27,14 @@ fn query_id() -> u16 {
     (nanos as u16) ^ (std::process::id() as u16)
 }
 
-/// Sends one query and waits up to `timeout` for a matching answer.
-pub fn probe(server: SocketAddr, name: &str, timeout: Duration) -> Result<(), String> {
+/// Sends one query and waits up to `timeout` for a matching answer. Wildcard listener addresses describe a
+/// local bind, not a remote endpoint: query their matching loopback address and validate replies against it.
+pub fn probe(mut server: SocketAddr, name: &str, timeout: Duration) -> Result<(), String> {
+    match server.ip() {
+        IpAddr::V4(ip) if ip.is_unspecified() => server.set_ip(Ipv4Addr::LOCALHOST.into()),
+        IpAddr::V6(ip) if ip.is_unspecified() => server.set_ip(Ipv6Addr::LOCALHOST.into()),
+        _ => {}
+    }
     let bind = if server.is_ipv4() { "0.0.0.0:0" } else { "[::]:0" };
     let sock = UdpSocket::bind(bind).map_err(|e| e.to_string())?;
     sock.set_read_timeout(Some(timeout)).map_err(|e| e.to_string())?;
@@ -83,5 +89,32 @@ mod tests {
         t.join().unwrap();
         let silent = UdpSocket::bind("127.0.0.1:0").unwrap();
         assert_eq!(probe(silent.local_addr().unwrap(), "example.test", Duration::from_millis(200)), Err("timeout".into()));
+    }
+
+    fn probe_wildcard_listener(ip: &str) {
+        let server = UdpSocket::bind(ip).unwrap();
+        server.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let addr = server.local_addr().unwrap();
+        let t = std::thread::spawn(move || {
+            let mut buf = [0u8; 512];
+            let (n, from) = server.recv_from(&mut buf).unwrap();
+            let mut resp = buf[..n].to_vec();
+            resp[2] = 0x81;
+            resp[3] = 0x80;
+            server.send_to(&resp, from).unwrap();
+        });
+        let result = probe(addr, "example.test", Duration::from_millis(300));
+        t.join().unwrap();
+        assert_eq!(result, Ok(()), "a wildcard listener must be queried through loopback");
+    }
+
+    #[test]
+    fn probe_ipv4_wildcard_listener() {
+        probe_wildcard_listener("0.0.0.0:0");
+    }
+
+    #[test]
+    fn probe_ipv6_wildcard_listener() {
+        probe_wildcard_listener("[::]:0");
     }
 }

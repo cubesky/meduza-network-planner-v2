@@ -95,3 +95,42 @@ fn main() {
     }
     run(&Mosdns, env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::UdpSocket;
+
+    #[test]
+    fn wildcard_listener_reports_up_after_a_real_dns_answer() {
+        let server = UdpSocket::bind("0.0.0.0:0").unwrap();
+        server.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let port = server.local_addr().unwrap().port();
+        let t = std::thread::spawn(move || {
+            let mut buf = [0u8; 512];
+            let (n, from) = server.recv_from(&mut buf).unwrap();
+            let mut resp = buf[..n].to_vec();
+            resp[2] = 0x81;
+            resp[3] = 0x80;
+            server.send_to(&resp, from).unwrap();
+        });
+        let mut req =
+            meduza_np_plugin_sdk::test_request("probe", serde_json::json!({"services":{"mosdns":{"listen":"0.0.0.0", "port":port}}}));
+        // Avoid reading a real node's state file; this fixture has no remote rules.
+        req.context.run_dir = std::env::temp_dir()
+            .join(format!(
+                "meduza-mosdns-probe-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+            ))
+            .to_str()
+            .unwrap()
+            .into();
+        let result = Mosdns.probe(&req);
+        t.join().unwrap();
+        let report = result.unwrap();
+        assert_eq!(report.instances[0].state, ServiceState::Up);
+        assert_eq!(report.instances[0].reason, None);
+        assert_eq!(report.instances[0].detail["listen"], format!("0.0.0.0:{port}"));
+    }
+}

@@ -1228,3 +1228,9 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   Also passed the actual Manager import of the v1 export: 19 files, generated path rewrites, geoip resp_ip
   binding and custom worker selection. Log: target/check-mosdns-rules-final.log. Source-only; release
   meduza-np-mosdns to update deployed nodes.
+- 2026-11-08 (per the user) Fix false DNS timeouts for MosDNS wildcard listeners (D74).
+  Reproduced 0.0.0.0 and :: healthy UDP replies being discarded because the shared probe expected a wildcard
+  reply source. Query matching loopback instead and retain strict response validation/original listener config.
+  Added IPv4/IPv6 regressions and a MosDNS probe-to-status test. All 45 SDK/MosDNS/Mihomo/dnsmasq tests and
+  strict SDK/MosDNS Clippy pass; log: target/check-dns-probe-after.log. Initial live SSH verification was refused
+  by the 1Password agent. Source-only; deployed binaries/configuration were not replaced.
