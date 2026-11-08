@@ -1,4 +1,5 @@
 import { useState } from "preact/hooks";
+import { InstanceTree } from "@meduza-np/ui-kit/instance-tree";
 import { BinaryProgress, PackageProgress, progressFromStatus } from "@meduza-np/ui-kit/package-progress";
 import { PackageResourceCard, type PackageResources } from "@meduza-np/ui-kit/package-resources";
 import { Badge, Button, Card, Field, Loadable, StateBadge, Table, TextInput, NumberInput, Checkbox, bytes, relativeTime, toast, useAsync } from "@meduza-np/ui-kit";
@@ -238,16 +239,7 @@ export function InstancesPage(props: { session: Session }) {
       <Card title="状态 / 邻居">
         <Loadable state={report} empty={(r) => r.instances.length === 0}>
           {(r) => (
-            <Table
-              rowKey={(x) => String(x.id)}
-              rows={r.instances as never}
-              columns={[
-                { key: "id", label: "对象" },
-                { key: "kind", label: "类型" },
-                { key: "state", label: "状态", render: (x: { state: string }) => <StateBadge state={x.state} /> },
-                { key: "reason", label: "说明" },
-              ] as never}
-            />
+            <InstanceTree items={r.instances} />
           )}
         </Loadable>
       </Card>

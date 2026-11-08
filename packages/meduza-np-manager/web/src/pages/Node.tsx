@@ -11,6 +11,7 @@ import { NodeSettings } from "./NodeSettings.tsx";
 import { BinaryProgress, type BinaryTransferProgress } from "@meduza-np/ui-kit/package-progress";
 import { NodeUpdates } from "./NodeUpdates.tsx";
 import { PackageResourceCard } from "@meduza-np/ui-kit/package-resources";
+import { InstanceTree, withWireGuardNames, type RuntimeStatus } from "@meduza-np/ui-kit/instance-tree";
 
 type Role = "admin" | "operator" | "viewer";
 
@@ -24,7 +25,7 @@ export interface NodeDetail extends NodeSummary {
   jobs: Array<Record<string, unknown>>;
 }
 
-type Inst = { id: string; kind: string; state: string; reason?: string; observedAt?: string; [k: string]: unknown };
+type Inst = RuntimeStatus;
 
 const ROUTING = new Set(["bgp-neighbor", "bfd-peer", "ospf-neighbor", "anycast"]);
 const CONNECTIONS = new Set(["tinc-peer", "wireguard-peer", "openvpn-client", "openvpn-site2site", "openvpn-access"]);
@@ -60,10 +61,9 @@ export function NodePage(props: { id: string; tab?: string; role: Role }) {
     <div>
       <Loadable state={state}>
         {(n) => {
-          const instances = ((n.report?.instances ?? []) as Inst[]).filter((i) => i && i.id);
+          const instances = withWireGuardNames(((n.report?.instances ?? []) as Inst[]).filter((i) => i && i.id), cfg.published.nodes[n.id]?.services?.wireguard);
           const routing = instances.filter((i) => ROUTING.has(i.kind));
           const connections = instances.filter((i) => CONNECTIONS.has(i.kind));
-          const services = instances.filter((i) => !ROUTING.has(i.kind) && !CONNECTIONS.has(i.kind));
           const restart = (instance: string, process?: string, label?: string) =>
             void job("restart-instance", { instance, ...(process ? { params: { process } } : {}) }, t("Restart of {name} queued", { name: label ?? instance }));
           return (
@@ -98,7 +98,7 @@ export function NodePage(props: { id: string; tab?: string; role: Role }) {
                 active={tab}
                 onChange={go}
               />
-              {tab === "status" && <StatusTab n={n} services={services} canAct={canAct} restart={restart} />}
+              {tab === "status" && <StatusTab key={n.id} n={n} instances={instances} canAct={canAct} restart={restart} />}
               {tab === "routing" && <RoutingTab items={routing} canAct={canAct} restart={restart} />}
               {tab === "connections" && <ConnectionsTab items={connections} canAct={canAct} restart={restart} />}
               {tab === "settings" && <NodeSettings id={props.id} detail={n} role={props.role} />}
@@ -113,7 +113,7 @@ export function NodePage(props: { id: string; tab?: string; role: Role }) {
 
 // ---- status ----------------------------------------------------------------------------------------------
 
-function StatusTab(props: { n: NodeDetail; services: Inst[]; canAct: boolean; restart: (instance: string, process?: string, label?: string) => void }) {
+function StatusTab(props: { n: NodeDetail; instances: Inst[]; canAct: boolean; restart: (instance: string, process?: string, label?: string) => void }) {
   const n = props.n;
   const features = ((n.report?.features ?? []) as Array<Record<string, any>>).filter((f) => f.enabled);
   return (
@@ -147,53 +147,24 @@ function StatusTab(props: { n: NodeDetail; services: Inst[]; canAct: boolean; re
         </Card>
       )}
       <Card title={t("Services")}>
-        <Table
-          rows={props.services as unknown as Record<string, unknown>[]}
-          rowKey={(r) => String(r.id)}
+        <InstanceTree
+          items={props.instances}
           empty={n.report ? t("No services reported") : t("The node has not reported yet")}
-          columns={[
-            {
-              key: "id",
-              label: t("Service"),
-              render: (r) => {
-                const i = r as Inst;
-                const parts = i.id.split("/");
-                const name = i.kind === "process" ? parts[parts.length - 2] : parts.slice(1).join("/") || i.id;
-                return (
-                  <span class="row" style={{ gap: "8px", flexWrap: "nowrap" }}>
-                    <StatusDot state={i.state} />
-                    <span><strong>{name}</strong> <span class="faint small">{parts[0]}{i.kind !== "process" ? ` · ${i.kind}` : ""}</span></span>
-                  </span>
-                );
-              },
-            },
-            { key: "state", label: t("State"), render: (r) => <StateBadge state={String(r.state)} /> },
-            {
-              key: "restarts",
-              label: t("Restarts"),
-              render: (r) => (r.kind === "process" ? String(r.restarts ?? 0) : <span class="faint">—</span>),
-            },
-            {
-              key: "actions",
-              label: "",
-              render: (r) => {
-                const i = r as Inst;
-                const binaryResource = i.kind.endsWith("-provider");
-                const parts = i.id.split("/");
-                // a process restarts alone through its instance; a feature instance (pkg/inst) restarts as a whole
-                const target = binaryResource ? undefined : i.kind === "process" ? (i.instance as string | undefined) : parts.length >= 2 ? `${parts[0]}/${parts[1]}` : undefined;
-                const proc = i.kind === "process" ? parts.slice(0, -1).join("/") : undefined;
-                return (
-                  <span class="row" style={{ justifyContent: "flex-end", flexWrap: "nowrap" }}>
-                    <DetailsButton item={i} />
-                    {props.canAct && target && (
-                      <Button small onClick={async () => (await ask(t("Restart {name}?", { name: proc ?? target }), { ok: t("Restart") })) && props.restart(target, proc, proc ?? target)}>{t("Restart")}</Button>
-                    )}
-                  </span>
-                );
-              },
-            },
-          ]}
+          actions={(i) => {
+            const binaryResource = i.kind.endsWith("-provider");
+            const parts = i.id.split("/");
+            // A process restarts alone through its instance; a feature instance restarts as a whole.
+            const target = binaryResource ? undefined : i.kind === "process" ? (i.instance as string | undefined) : parts.length >= 2 ? `${parts[0]}/${parts[1]}` : undefined;
+            const proc = i.kind === "process" ? parts.slice(0, -1).join("/") : undefined;
+            return (
+              <span class="row" style={{ justifyContent: "flex-end", flexWrap: "nowrap" }}>
+                <DetailsButton item={i} />
+                {props.canAct && target && (
+                  <Button small onClick={async () => (await ask(t("Restart {name}?", { name: proc ?? target }), { ok: t("Restart") })) && props.restart(target, proc, proc ?? target)}>{t("Restart")}</Button>
+                )}
+              </span>
+            );
+          }}
         />
       </Card>
       <PackageResourceCard packages={n.report?.resources?.packages} reportedAt={n.report?.observedAt} />
@@ -364,7 +335,7 @@ function ConnectionsTab(props: { items: Inst[]; canAct: boolean; restart: (insta
             rows={wg}
             rowKey={(r) => String(r.id)}
             columns={[
-              { key: "id", label: t("Peer"), render: (r) => <span><strong>{last(String(r.id))}</strong> <span class="faint small">{String(r.id).split("/")[1]}</span></span> },
+              { key: "id", label: t("Peer"), render: (r) => <span title={String(r.id)}><strong>{String(r.name || last(String(r.id)))}</strong> <span class="faint small">{String(r.interfaceName || String(r.id).split("/")[1])}</span></span> },
               { key: "endpoint", label: t("Endpoint"), render: (r) => <span class="mono">{String(r.endpoint ?? r.configuredEndpoint ?? "—")}</span> },
               { key: "state", label: t("State"), render: (r) => <div>{stateCell(r, r.reasonCode ? t(String(r.reasonCode)) : undefined)}{r.reason != null && <div class="small muted">{String(r.reason)}</div>}</div> },
               { key: "latestHandshake", label: t("Last handshake"), render: (r) => relativeTime(r.latestHandshake as string | undefined) },

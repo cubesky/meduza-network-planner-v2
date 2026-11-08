@@ -1234,3 +1234,32 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   Added IPv4/IPv6 regressions and a MosDNS probe-to-status test. All 45 SDK/MosDNS/Mihomo/dnsmasq tests and
   strict SDK/MosDNS Clippy pass; log: target/check-dns-probe-after.log. Initial live SSH verification was refused
   by the 1Password agent. Source-only; deployed binaries/configuration were not replaced.
+- 2026-11-08 (per the user) Fix Manager showing applied rev-000011 as a configuration failure (D75).
+  The supplied report confirms in-sync; its /jobs HTTP 429 is a separate transport diagnostic. Successful
+  ACKs and accepted in-sync reports now reconcile active failure metadata/publish results while retaining ACK
+  history, newer failures, real same-revision reapply failures and recovery warnings. Guard late intermediate,
+  older-revision and retired-boot ACKs. Existing stale rows heal on the next healthy report; no new revision,
+  node restart or production database edit is needed after updating Manager. Source changes remain unsubmitted.
+  Manager TypeScript compilation and all server tests pass (51 passed; 3 environment-dependent tests skipped).
+  Log: target/check-manager-apply-status-full.log; focused status regressions: target/check-manager-apply-status-final.log.
+- 2026-11-08 (per the user) Replace repetitive flat status rows with a shared explorer-style tree (D76).
+  Manager/Dashboard group services, interfaces/instances, peers, processes and probes by stable identity and
+  explicit process owner. WireGuard reports interface/peer names; Manager also fills names absent from older
+  reports using published config and shows them in connection rows. Preserve independent process/protocol
+  health, original row restart targets and permissions. Collapsed branches retain problem counts and report
+  reloads retain expansion choices. Three hierarchy regressions plus i18n checks pass; actual Manager/Dashboard
+  Chrome checks verify both repeated helpers, names, expand/collapse, hidden errors, refresh, restart payload
+  and viewer permissions. All 14 WireGuard tests, strict Clippy, type checks and production builds pass.
+  Logs: target/check-status-tree-{rust,browser,build}.log; screenshots: target/status-tree-{manager,dashboard}.png.
+  Source-only; release Manager, Dashboard and WireGuard for deployment. No Git submission or production changes.
+- 2026-11-08 (per the user) Fix topology IP/label flicker and viewport overflow (D77).
+  Keep deterministic per-vertex label placement through hover, selection and depth ties; crowded labels use
+  additional slots/leader lines. Compare link identities rather than heartbeat array order so status refreshes
+  do not reheat settled layouts. Bound the topology route to the actual viewport and give the graph remaining
+  flex space; selection details stay in a bounded pane. Resize redraws immediately, refits the framed graph or
+  proportionally preserves a manual camera, and ignores unchanged bitmap dimensions. Three regressions fail
+  before and pass after; all 9 topology tests plus 3 i18n tests pass. Actual Manager Chrome verification passes
+  six viewport transitions from 1500x900 down to 390x680 and back with no document overflow, visible framed
+  vertices, matching canvas/DPR sizes, stable labels and bounded selected-router details. Shared/Manager/
+  Dashboard type checks and Manager production build pass. Logs: target/check-topology-stability-{before,
+  final,browser,types,build}.log; screenshot: target/topology-stability.png. Source-only; update Manager to deploy.

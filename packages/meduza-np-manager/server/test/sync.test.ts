@@ -4,6 +4,7 @@ import { WebSocket } from "ws";
 import { adminHeaders, startManager, NodeIdentity } from "./helpers.js";
 import { sessionSigningInput } from "../src/nodes.js";
 import { canonicalDigest, canonicalJson } from "../src/canonical.js";
+import { overview } from "../src/views.js";
 
 async function enrolledNode(ctx: Awaited<ReturnType<typeof startManager>>, nodeId: string, behavior: "static" | "roaming" = "static") {
   const { app, s } = ctx;
@@ -109,6 +110,112 @@ test("publish → config pull with ETag → ACKs → unchanged republish → rol
   const old = await app.inject({ method: "GET", url: "/api/v1/nodes/self/config?revision=rev-000001", headers: auth });
   assert.equal(old.json().config.networks.lan[0], "10.42.10.0/24", "published snapshots stay immutable");
   await app.close();
+});
+
+test("configuration status: successful ACK clears same-revision failures without losing ACK history", async (t) => {
+  const ctx = await startManager();
+  t.after(() => ctx.app.close());
+  const { s } = ctx;
+  await enrolledNode(ctx, "gw-a");
+  s.config.publish({ schemaVersion: 1, nodes: { "gw-a": {} } }, "test");
+  const desired = s.config.desired("gw-a")!;
+  const ack = { revision: desired.revision, configDigest: desired.digest, bootId: "b1" };
+  s.nodes.ack("gw-a", { ...ack, stage: "failed", errorCode: "process-failed", message: "old failure" });
+  assert.equal(overview(s).nodes[0]!.inSync, false);
+  s.nodes.ack("gw-a", { ...ack, stage: "applied" });
+  const state = s.nodes.syncState("gw-a")!;
+  assert.equal(state.applied_revision, desired.revision);
+  assert.equal(state.failed_revision, null);
+  assert.equal(state.last_error, null);
+  assert.equal(overview(s).nodes[0]!.inSync, true);
+  assert.equal(s.db.all("SELECT * FROM acks WHERE node_id = ? AND stage = 'failed'", "gw-a").length, 1, "history is retained");
+  for (const stage of ["validated", "received"]) s.nodes.ack("gw-a", { ...ack, stage });
+  assert.equal(s.config.publishResults(desired.revision)[0]!.stage, "applied", "late intermediate ACKs cannot regress terminal status");
+  assert.equal(s.nodes.ack("gw-a", { ...ack, stage: "applied" }).duplicate, true);
+});
+
+test("configuration status: older success and intermediate ACKs cannot erase a newer failure", async (t) => {
+  const ctx = await startManager();
+  t.after(() => ctx.app.close());
+  const { s } = ctx;
+  await enrolledNode(ctx, "gw-a");
+  s.config.publish({ schemaVersion: 1, nodes: { "gw-a": { networks: { lan: ["192.0.2.0/24"] } } } }, "test");
+  const old = s.config.desired("gw-a")!;
+  s.config.publish({ schemaVersion: 1, nodes: { "gw-a": { networks: { lan: ["198.51.100.0/24"] } } } }, "test");
+  const next = s.config.desired("gw-a")!;
+  const newer = { revision: next.revision, configDigest: next.digest, bootId: "b1" };
+  s.nodes.ack("gw-a", { ...newer, stage: "failed", errorCode: "apply", message: "new failure" });
+  const previous = { revision: old.revision, configDigest: old.digest, bootId: "b1" };
+  for (const stage of ["received", "validated", "applied"]) s.nodes.ack("gw-a", { ...previous, stage });
+  s.nodes.ack("gw-a", { ...newer, stage: "received" });
+  assert.equal(s.nodes.syncState("gw-a")!.failed_revision, next.revision);
+  assert.equal(s.nodes.syncState("gw-a")!.last_error, "apply: new failure");
+  assert.equal(s.config.publishResults(next.revision)[0]!.stage, "failed");
+  assert.equal(overview(s).nodes[0]!.inSync, false);
+  s.nodes.ack("gw-a", { ...newer, stage: "applied" });
+  s.nodes.ack("gw-a", { ...previous, stage: "rejected", errorCode: "old", message: "late rejection" });
+  assert.equal(s.nodes.syncState("gw-a")!.failed_revision, null);
+  assert.equal(s.nodes.syncState("gw-a")!.last_error, null);
+  assert.equal(overview(s).nodes[0]!.inSync, true);
+});
+
+test("configuration status: in-sync reports heal legacy failures despite an unrelated jobs HTTP 429", async (t) => {
+  const ctx = await startManager();
+  t.after(() => ctx.app.close());
+  const { app, s } = ctx;
+  const { auth } = await enrolledNode(ctx, "gw-a");
+  s.config.publish({ schemaVersion: 1, nodes: { "gw-a": {} } }, "test");
+  const desired = s.config.desired("gw-a")!;
+  const ack = { revision: desired.revision, configDigest: desired.digest, bootId: "b1" };
+  s.nodes.ack("gw-a", { ...ack, stage: "failed", message: "legacy failure" });
+  s.nodes.ack("gw-a", { ...ack, stage: "applied" });
+  // Simulate rows persisted by the previous Manager; the original applied ACK is already deduplicated.
+  s.db.run("UPDATE node_sync SET failed_revision = ?, last_error = ? WHERE node_id = ?", desired.revision, "legacy failure", "gw-a");
+  s.db.run("UPDATE publish_results SET stage = 'failed', message = 'legacy failure' WHERE node_id = ?", "gw-a");
+  const transportError = "manager unavailable: HTTP 429 on /api/v1/nodes/self/jobs";
+  const synced = {
+    ...report("gw-a", "b1", 2),
+    sync: { ...report("gw-a", "b1", 2).sync, desiredRevision: desired.revision, appliedRevision: desired.revision,
+      lastError: transportError, backoff: { failureLevel: 2, windowSeconds: 8, lastFailure: "HTTP 429 on /api/v1/nodes/self/jobs", probing: false } },
+  };
+  const post = (r: unknown) => app.inject({ method: "POST", url: "/api/v1/nodes/self/reports", headers: auth, payload: r as Record<string, unknown> });
+  await post({ ...synced, sequence: 1, sync: { ...synced.sync, desiredRevision: "rev-999999", appliedRevision: "rev-999999" } });
+  assert.equal(s.nodes.syncState("gw-a")!.failed_revision, desired.revision, "unpublished snapshots cannot reconcile success");
+  const response = await post(synced);
+  assert.equal(response.statusCode, 200, response.body);
+  assert.equal(response.json().accepted, true);
+  assert.equal(s.nodes.syncState("gw-a")!.failed_revision, null);
+  assert.equal(s.nodes.syncState("gw-a")!.last_error, null);
+  assert.equal(s.config.publishResults(desired.revision)[0]!.stage, "applied");
+  const node = overview(s).nodes[0]!;
+  assert.equal(node.failedRevision, null);
+  assert.equal(node.inSync, true);
+  assert.equal(node.sync.lastError, transportError, "transport diagnostics remain available");
+  assert.equal(node.sync.backoff.failureLevel, 2);
+  assert.equal((await post({ ...synced, sequence: 1 })).json().accepted, false);
+
+  // A genuine failed reapply at the exact same revision must remain visible.
+  s.nodes.ack("gw-a", { ...ack, bootId: "b2", stage: "failed", errorCode: "apply", message: "real new failure" });
+  await post({ ...synced, bootId: "b2", sequence: 1, sync: { ...synced.sync, state: "apply-failed", lastError: "real new failure" } });
+  assert.equal(overview(s).nodes[0]!.failedRevision, desired.revision);
+  assert.equal(overview(s).nodes[0]!.inSync, false);
+  await post({ ...synced, bootId: "b2", sequence: 2, sync: { ...synced.sync, recoveryError: "partial restore" } });
+  assert.equal(s.nodes.syncState("gw-a")!.failed_revision, desired.revision, "partial recovery is not full success");
+  await post({ ...synced, bootId: "b2", sequence: 3 });
+  assert.equal(overview(s).nodes[0]!.inSync, true);
+  s.nodes.ack("gw-a", { ...ack, bootId: "b1", stage: "rejected", message: "old boot" });
+  assert.equal(s.nodes.syncState("gw-a")!.failed_revision, null, "known old-boot ACKs only enter history");
+  await post({ ...synced, bootId: "b2", sequence: 4, sync: { ...synced.sync, state: "apply-failed", lastError: "failed without ACK" } });
+  assert.equal(overview(s).nodes[0]!.failedRevision, desired.revision, "a current failed report also counts when its ACK is lost");
+  assert.equal(overview(s).nodes[0]!.lastError, "failed without ACK");
+  assert.equal(overview(s).nodes[0]!.inSync, false);
+  s.db.run("UPDATE node_sync SET failed_revision = ?, last_error = 'restore failed' WHERE node_id = ?", desired.revision, "gw-a");
+  await post({ ...synced, bootId: "b2", sequence: 5, sync: { ...synced.sync, applyStage: "degraded: restore-error" } });
+  assert.equal(overview(s).nodes[0]!.sync.applyStage, "degraded: restore-error");
+  assert.equal(s.nodes.syncState("gw-a")!.failed_revision, desired.revision);
+  assert.equal(overview(s).nodes[0]!.inSync, false);
+  await post({ ...synced, bootId: "b2", sequence: 6 });
+  assert.equal(overview(s).nodes[0]!.inSync, true);
 });
 
 test("reports: stale sequences and old boots never overwrite newer state", async () => {

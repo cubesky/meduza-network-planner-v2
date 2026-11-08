@@ -98,7 +98,7 @@ function App() {
       content = <OverviewPage />;
   }
   return (
-    <div class="layout">
+    <div class={`layout${page === "topology" ? " topology-layout" : ""}`}>
       <nav class="nav">
         <div class="brand">Meduza NP</div>
         {NAV.map(([href, label]) =>
@@ -128,7 +128,7 @@ function App() {
           }}>{t("Sign out")}</Button>
         </div>
       </nav>
-      <main class="main">
+      <main class={`main${page === "topology" ? " topology-main" : ""}`}>
         <div class="topstrip">
           <ChangesButton onOpen={() => setChangesOpen(true)} />
         </div>

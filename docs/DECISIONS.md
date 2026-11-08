@@ -1709,3 +1709,69 @@ The source fix does not itself establish the deployed resolver's real upstream h
 verification was refused by the 1Password agent; no deployed binary or configuration was changed. Updated
 consumer packages must be released to include the SDK fix. Do not narrow the actual listener to work around a
 monitoring defect.
+
+## D75 — Reconcile active configuration failures with successful ACKs and reports
+
+The node reports rev-000011 desired/applied/lastSuccessful and state in-sync, but Manager still labels that
+revision as an apply failure. node_sync kept failed_revision after an applied ACK cleared last_error and
+advanced applied_revision; the UI independently favored the old failure pointer. The report's lastError is a
+/nodes/self/jobs HTTP 429 transport failure, not evidence that configuration application failed.
+
+An applied ACK clears active failures at the same/older revision, preserving newer failures and immutable ACK
+history. Accepted, ordered in-sync reports whose desired/applied revision matches a published node snapshot
+also reconcile success, healing existing databases and lost/deduplicated success ACKs without republishing.
+Do not require an empty report lastError: keep transport diagnostics/backoff intact in the raw sync report.
+Recovery errors or an active/degraded apply stage prevent this success reconciliation. Unchanged healthy
+reports do not rewrite apply timestamps.
+
+Late intermediate ACKs do not erase errors or regress terminal publish results. Older-revision failures and
+known retired-boot ACKs cannot replace newer active outcomes. A genuine failed reapply at the same revision
+remains a failure; the overview also recognizes an explicit current failed report when its ACK is missing.
+Revision equality alone is insufficient for inSync. Source-only; update Manager and let the next node report
+repair persisted stale status. No deployed database/configuration or Git index is modified.
+
+## D76 — Show reported status as a named service/instance tree
+
+Flat service rows shortened every WireGuard endpoint worker to endpoints and repeated wireguard without its
+owning interface. Both Manager and the node Dashboard now share an expandable status tree. Service folders
+contain interfaces/instances, then peers, processes and other probes. Use stable report ids and explicit process
+ownership; frr/bgpd belongs to frr/main, and a peer named endpoints remains distinct from the endpoint worker.
+Missing parent probes produce virtual folders, not invented healthy states. Include connection/routing probes
+in Manager's status tree while preserving their detailed tabs. Retain each independent health result and reason.
+
+WireGuard reports interface/peer name, peer owner and interfaceName. Manager fills missing names in older
+reports from published configuration, never from unsaved drafts. Display names do not alter restart targets,
+and WireGuard's connection rows also show peer/interface names. Per-row restart confirmation and operator/viewer
+permissions remain intact. Expand/collapse choices survive report refreshes; collapsed branches retain issue
+counts so a running interface or helper cannot conceal a failed peer.
+
+Validated the shared hierarchy against repeated helpers, colliding peer/process ids, missing parents, explicit
+ownership and reordered reports. Actual Manager/Dashboard browser checks cover names, collapse/expand, hidden
+failure counts, refresh persistence, original process restart payload and viewer permissions. WireGuard's 14
+tests, strict Clippy, shared/frontend type checks and both production builds pass. Source-only; release Manager,
+Dashboard and WireGuard to deploy the complete change. Git submission remains with the user.
+
+## D77 — Keep topology labels stable and fit the available viewport
+
+Topology labels were greedily repositioned or hidden every frame in depth/hover order, so tiny depth crossings
+and inspecting a router made IP labels jump or flicker. Keep a stable candidate slot per vertex id, fixed text
+metrics and deterministic placement order. Hover/selection changes paint emphasis only. Offer additional nearby
+slots with leader lines for crowded clusters instead of silently dropping visible routers' labels. Remove slots
+for deleted vertices and recompute on explicit fit/focus or viewport changes.
+
+Compare topology links by identity/endpoints/physical parameters rather than array index. Canonicalize iteration
+order; color/name/report-order updates keep settled coordinates and do not reheat the force simulation. Actual
+link additions/removals still update layout, and report refresh still preserves a dragged vertex's identity.
+
+The previous 520px graph minimum plus viewport-based height and page padding overflowed small windows. Give the
+topology route a bounded dynamic-viewport flex/grid layout, an independently sized canvas and a bounded details
+pane. Short windows keep the toolbar accessible in its own scrolling area. Ordinary routes retain their existing
+layout. A real resize updates the bitmap and redraws immediately; unchanged ResizeObserver callbacks do not
+clear it. Refit the full graph/current focused selection, or scale the existing manual camera proportionally
+without losing target/orientation or accumulating resize drift.
+
+Three regressions reproduced failures before the fix; all nine graph tests and three i18n tests now pass.
+Actual Manager Chrome checks exercise six viewport transitions (1500x900 down to 390x680 and back), canvas/DPR
+dimensions, every framed node staying visible, a bounded selected-router pane, label stability and reordered
+heartbeats. Shared UI/Manager/Dashboard type checks and the Manager production build pass. Source-only; updating
+Manager deploys this change, with no node-side package/configuration changes required.

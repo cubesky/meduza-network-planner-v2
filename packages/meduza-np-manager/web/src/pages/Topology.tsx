@@ -223,7 +223,7 @@ const loadSpacing = () => {
 export function TopologyPage() {
   const topo = useAsync(() => get<Topology>("/api/v1/topology"), [], 10_000);
   return (
-    <div>
+    <div class="topology-page">
       <PageHead title={t("Topology")} sub={t("BGP sessions between the nodes, from the published configuration and the nodes' FRR reports.")} />
       <Loadable state={topo}>{(data) => <TopologyView topo={data} />}</Loadable>
     </div>
@@ -281,46 +281,48 @@ function TopologyView(props: { topo: Topology }) {
   const hasPaths = props.topo.links.some((l) => l.kind === "path");
 
   return (
-    <>
-      <div class="graph-controls">
-        <Checkbox label={t("iBGP")} checked={show.ibgp} onChange={(v) => setShow({ ...show, ibgp: v })} />
-        <Checkbox label={t("eBGP")} checked={show.ebgp} onChange={(v) => setShow({ ...show, ebgp: v })} />
-        {hasPaths && <Checkbox label={t("Remote ASes (from AS paths)")} checked={show.paths} onChange={(v) => setShow({ ...show, paths: v })} />}
-        <Checkbox label={t("Collapse external ASes")} checked={collapse} onChange={toggleCollapse} />
-        <Checkbox label={t("Rotate automatically")} checked={rotate} onChange={setRotate} />
-      </div>
-      <div class="graph-controls graph-navigation">
-        <label class="graph-spacing">
-          <span>{t("Cluster spacing")}</span>
-          <input type="range" min="1" max="3" step="0.1" value={spacing} onInput={(e) => setSpacing(e.currentTarget.valueAsNumber)} />
-          <output>{spacing.toFixed(1)}×</output>
-        </label>
-        <span class="spacer" />
-        <Button small onClick={() => graph.current?.zoomBy(0.8)}>{t("Zoom in")}</Button>
-        <Button small onClick={() => graph.current?.zoomBy(1.25)}>{t("Zoom out")}</Button>
-        <Button small disabled={!selected} onClick={() => selected && graph.current?.focus(selected)}>{t("Focus selection")}</Button>
-        <Button small onClick={() => graph.current?.fitGraph()}>{t("Fit graph")}</Button>
-        <Button small onClick={() => graph.current?.resetView()}>{t("Reset view")}</Button>
-      </div>
-      <p class="graph-help muted small" id="topology-controls">{t("Drag the background to rotate; Shift-drag or right-drag to pan; scroll to zoom. Double-click a cluster to focus. Touch: pinch to zoom, two fingers to pan. Keyboard: arrows to rotate, Shift+arrows to pan, +/− to zoom, 0 to reset.")}</p>
-      <div class="graph-legend">
-        <span><span class="swatch" style={{ borderColor: "var(--accent)" }} />{t("iBGP (Tinc mesh)")} · {up(counts.ibgp)}/{counts.ibgp.length}</span>
-        <span><span class="swatch" style={{ borderColor: "var(--ebgp)" }} />{t("eBGP (to the remote AS)")} · {up(counts.ebgp)}/{counts.ebgp.length}</span>
-        {hasPaths && <span><span class="swatch dotted" style={{ borderColor: "var(--faint)" }} />{t("AS path (learned routes)")}</span>}
-        <span><span class="swatch dashed" style={{ borderColor: "var(--bad)" }} />{t("down")}</span>
-        <span><span class="swatch dashed" style={{ borderColor: "var(--faint)" }} />{t("no report")}</span>
-      </div>
-      <div class="graph-legend">
-        <span>◯ {t("AS cluster")}</span>
-        <span>● {t("node (ring: freshness, dashed: roaming)")}</span>
-        <span>■ {t("edge router")}</span>
-        <span>▲ {t("external router (direct neighbor)")}</span>
-        <span>◆ {t("remote AS (only its number is known)")}</span>
+    <div class="topology-view">
+      <div class="graph-toolbar">
+        <div class="graph-controls">
+          <Checkbox label={t("iBGP")} checked={show.ibgp} onChange={(v) => setShow({ ...show, ibgp: v })} />
+          <Checkbox label={t("eBGP")} checked={show.ebgp} onChange={(v) => setShow({ ...show, ebgp: v })} />
+          {hasPaths && <Checkbox label={t("Remote ASes (from AS paths)")} checked={show.paths} onChange={(v) => setShow({ ...show, paths: v })} />}
+          <Checkbox label={t("Collapse external ASes")} checked={collapse} onChange={toggleCollapse} />
+          <Checkbox label={t("Rotate automatically")} checked={rotate} onChange={setRotate} />
+        </div>
+        <div class="graph-controls graph-navigation">
+          <label class="graph-spacing">
+            <span>{t("Cluster spacing")}</span>
+            <input type="range" min="1" max="3" step="0.1" value={spacing} onInput={(e) => setSpacing(e.currentTarget.valueAsNumber)} />
+            <output>{spacing.toFixed(1)}×</output>
+          </label>
+          <span class="spacer" />
+          <Button small onClick={() => graph.current?.zoomBy(0.8)}>{t("Zoom in")}</Button>
+          <Button small onClick={() => graph.current?.zoomBy(1.25)}>{t("Zoom out")}</Button>
+          <Button small disabled={!selected} onClick={() => selected && graph.current?.focus(selected)}>{t("Focus selection")}</Button>
+          <Button small onClick={() => graph.current?.fitGraph()}>{t("Fit graph")}</Button>
+          <Button small onClick={() => graph.current?.resetView()}>{t("Reset view")}</Button>
+        </div>
+        <p class="graph-help muted small" id="topology-controls">{t("Drag the background to rotate; Shift-drag or right-drag to pan; scroll to zoom. Double-click a cluster to focus. Touch: pinch to zoom, two fingers to pan. Keyboard: arrows to rotate, Shift+arrows to pan, +/− to zoom, 0 to reset.")}</p>
+        <div class="graph-legend">
+          <span><span class="swatch" style={{ borderColor: "var(--accent)" }} />{t("iBGP (Tinc mesh)")} · {up(counts.ibgp)}/{counts.ibgp.length}</span>
+          <span><span class="swatch" style={{ borderColor: "var(--ebgp)" }} />{t("eBGP (to the remote AS)")} · {up(counts.ebgp)}/{counts.ebgp.length}</span>
+          {hasPaths && <span><span class="swatch dotted" style={{ borderColor: "var(--faint)" }} />{t("AS path (learned routes)")}</span>}
+          <span><span class="swatch dashed" style={{ borderColor: "var(--bad)" }} />{t("down")}</span>
+          <span><span class="swatch dashed" style={{ borderColor: "var(--faint)" }} />{t("no report")}</span>
+        </div>
+        <div class="graph-legend">
+          <span>◯ {t("AS cluster")}</span>
+          <span>● {t("node (ring: freshness, dashed: roaming)")}</span>
+          <span>■ {t("edge router")}</span>
+          <span>▲ {t("external router (direct neighbor)")}</span>
+          <span>◆ {t("remote AS (only its number is known)")}</span>
+        </div>
       </div>
       <div class="graph-wrap">
         <canvas ref={canvas} tabIndex={0} aria-label={t("Interactive routing topology")} aria-describedby="topology-controls" />
         {tip && (
-          <div class="graph-tip" style={{ left: `${Math.min(tip.x + 14, (canvas.current?.clientWidth ?? 600) - 330)}px`, top: `${tip.y + 14}px` }}>
+          <div class="graph-tip" style={{ left: `${Math.max(8, Math.min(tip.x + 14, (canvas.current?.clientWidth ?? 600) - 330))}px`, top: `${Math.max(8, Math.min(tip.y + 14, (canvas.current?.clientHeight ?? 400) - 110))}px` }}>
             {tip.item.kind === "group" && tip.item.id === NO_BGP ? (
               <div><strong>{t("No BGP")}</strong> <span class="muted">{t("Nodes that run no BGP (not Tinc mesh members, no BGP sessions).")}</span></div>
             ) : tip.item.kind === "vertex" ? (
@@ -333,8 +335,8 @@ function TopologyView(props: { topo: Topology }) {
           </div>
         )}
       </div>
-      {selected && <Details item={selected} view={view} onClose={() => setSelected(null)} />}
-    </>
+      {selected && <div class="topology-details"><Details item={selected} view={view} onClose={() => setSelected(null)} /></div>}
+    </div>
   );
 }
 

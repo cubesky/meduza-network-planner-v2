@@ -19,7 +19,13 @@ function setup(width = 1200, height = 650) {
   const events = new Map<string, (event: any) => void>();
   const captured = new Set<number>();
   let clicks = 0;
-  const ctx = new Proxy({ measureText: (s: string) => ({ width: s.length * 7 }) }, { get: (target: any, key) => target[key] ?? (() => {}) });
+  const labels: Array<{ text: string; x: number; y: number }> = [];
+  let clears = 0;
+  const ctx = new Proxy({
+    measureText: (s: string) => ({ width: s.length * 7 }),
+    clearRect: () => { labels.length = 0; clears++; },
+    fillText: (text: string, x: number, y: number) => labels.push({ text, x, y }),
+  }, { get: (target: any, key) => target[key] ?? (() => {}) });
   const canvas = {
     width, height, style: { cursor: "" }, getContext: () => ctx,
     getBoundingClientRect: () => ({ left: 0, top: 0, width, height }),
@@ -32,7 +38,8 @@ function setup(width = 1200, height = 650) {
   const event = (name: string, fields: Record<string, unknown> = {}) => events.get(name)?.({
     type: name, pointerId: 1, button: 0, clientX: 5, clientY: 5, preventDefault() {}, ...fields,
   });
-  return { graph, event, events, captured, clicks: () => clicks };
+  return { graph, event, events, captured, canvas, labels, clears: () => clears, clicks: () => clicks,
+    resize: (w: number, h: number) => { width = w; height = h; graph.fit(); } };
 }
 
 function data() {
@@ -158,5 +165,72 @@ test("topology: focusing and reset do not disturb settled layout; behind-camera 
   assert.equal(graph.project(v.x, v.y, v.z).visible, false);
   assert.notDeepEqual(graph.hit(600, 325), { kind: "vertex", id: v.id });
   graph.draw();
+  graph.destroy();
+});
+
+test("topology: reordered heartbeat data updates status without reheating or moving settled vertices", () => {
+  const { graph } = setup();
+  const d = populate(graph, 500);
+  const alpha = graph.alpha;
+  const positions = [...graph.vertices.values()].map((v: any) => [v.id, v.x, v.y, v.z]);
+  graph.setData([...d.vertices].reverse().map((v) => ({ ...v, ring: "#f00" })), [...d.links].reverse(), [...d.groups].reverse());
+  assert.equal(graph.alpha, alpha, "array order and health colors are not structural changes");
+  for (let frame = 0; frame < 30; frame++) graph.tick();
+  for (const [id, x, y, z] of positions) {
+    const v = graph.vertices.get(id);
+    assert.deepEqual([v.x, v.y, v.z], [x, y, z]);
+    assert.equal(v.ring, "#f00");
+  }
+  graph.setData(d.vertices, d.links.slice(1), d.groups);
+  assert.ok(graph.alpha > alpha, "an actual removed link still updates layout");
+  graph.destroy();
+});
+
+test("topology: labels retain their placement and remain visible through hover and depth crossings", () => {
+  const { graph, labels } = setup(800, 500);
+  graph.setData(["a", "b", "c"].map((id) => ({ id, label: `10.42.10.${id}`, radius: 10, shape: "circle", color: "#5cb" })), []);
+  graph.yaw = graph.pitch = 0; graph.distance = 600; graph.target = { x: 0, y: 0, z: 0 };
+  for (const [index, v] of [...graph.vertices.values()].entries()) Object.assign(v as object, { x: index * 20, y: 0, z: 0 });
+  graph.draw();
+  const initial = structuredClone(labels).sort((a, b) => a.text.localeCompare(b.text));
+  assert.equal(initial.length, 3, "crowding cannot silently hide an IP address");
+  graph.hover = { kind: "vertex", id: "c" }; graph.highlight = "c";
+  graph.draw();
+  assert.deepEqual([...labels].sort((a, b) => a.text.localeCompare(b.text)), initial, "selection cannot rearrange neighboring labels");
+  graph.vertices.get("a").z = 0.001;
+  graph.vertices.get("b").z = -0.001;
+  graph.draw();
+  assert.equal(labels.length, 3);
+  for (const label of labels) {
+    const before = initial.find((l) => l.text === label.text)!;
+    assert.ok(Math.hypot(label.x - before.x, label.y - before.y) < 0.01, "a depth tie cannot flip label placement");
+  }
+  graph.destroy();
+});
+
+test("topology: viewport resizing refits a framed graph and does not erase an unchanged canvas", () => {
+  const { graph, resize, clears } = setup(1200, 650);
+  populate(graph);
+  graph.fitGraph();
+  const alpha = graph.alpha;
+  const before = clears();
+  resize(1200, 650);
+  assert.equal(clears(), before, "unchanged ResizeObserver notifications cannot clear the bitmap");
+  resize(480, 320);
+  assert.ok(clears() > before, "a real resize redraws immediately");
+  for (const v of graph.vertices.values()) {
+    const p = graph.project(v.x, v.y, v.z);
+    assert.ok(p.visible && p.sx >= 0 && p.sx <= 480 && p.sy >= 0 && p.sy <= 320, "framed nodes fit the new viewport");
+  }
+  assert.equal(graph.alpha, alpha, "resize must not restart the physical layout");
+  graph.zoomBy(0.8); graph.panX = 20; graph.panY = 10;
+  const distance = graph.distance;
+  const target = { ...graph.target }, yaw = graph.yaw, pitch = graph.pitch;
+  resize(960, 640);
+  assert.equal(graph.distance, distance / 2, "manual zoom adapts in proportion to viewport size");
+  assert.equal(graph.panX, 40); assert.equal(graph.panY, 20);
+  assert.deepEqual(graph.target, target); assert.equal(graph.yaw, yaw); assert.equal(graph.pitch, pitch);
+  resize(480, 320);
+  assert.equal(graph.distance, distance, "resize round trips do not accumulate camera drift");
   graph.destroy();
 });

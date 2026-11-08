@@ -42,6 +42,10 @@ export function overview(s: Services) {
       pollSeconds: intervals.roamingPollSeconds,
     });
     const features = (report?.features ?? []) as Array<Record<string, unknown>>;
+    // A failed reapply can leave appliedRevision unchanged. Preserve an explicit current failure even if
+    // its ACK was lost; conversely a transport lastError on an in-sync report is not an application error.
+    const reportedFailure = !!desired && report?.sync?.state === "apply-failed" && report.sync.desiredRevision === desired.revision;
+    const failedRevision = reportedFailure ? desired.revision : (sync?.failed_revision as string | null) ?? null;
     return {
       id: n.id,
       displayName: n.display_name,
@@ -60,9 +64,10 @@ export function overview(s: Services) {
       desiredRevision: desired?.revision ?? null,
       receivedRevision: (sync?.received_revision as string | null) ?? null,
       appliedRevision: (sync?.applied_revision as string | null) ?? null,
-      failedRevision: (sync?.failed_revision as string | null) ?? null,
-      lastError: (sync?.last_error as string | null) ?? null,
-      inSync: !!desired && sync?.applied_revision === desired.revision,
+      failedRevision,
+      lastError: (reportedFailure ? report.sync.lastError : sync?.last_error) ?? null,
+      inSync: !!desired && sync?.applied_revision === desired.revision
+        && failedRevision !== desired.revision && !report?.sync?.recoveryError && !report?.sync?.applyStage,
       enabledFeatures: features.filter((f) => f.enabled).map((f) => f.id),
       problems: [
         ...(report?.sync?.recoveryError ? [{ id: "configuration.recovery", reason: String(report.sync.recoveryError) }] : []),

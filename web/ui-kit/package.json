@@ -8,7 +8,8 @@
     ".": "./src/index.tsx",
     "./styles.css": "./src/styles.css",
     "./package-progress": "./src/package-progress.tsx",
-    "./package-resources": "./src/package-resources.tsx"
+    "./package-resources": "./src/package-resources.tsx",
+    "./instance-tree": "./src/instance-tree.tsx"
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p .",

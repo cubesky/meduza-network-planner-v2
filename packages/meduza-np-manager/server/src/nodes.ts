@@ -217,6 +217,15 @@ export class NodeService {
          received_at = excluded.received_at, previous_boots = excluded.previous_boots, report = excluded.report`,
       nodeId, report.bootId, report.sequence, report.observedAt, now, JSON.stringify(previousBoots), JSON.stringify(report),
     );
+    const sync = report.sync as Record<string, unknown> | undefined;
+    // Reports also repair missing/deduplicated success ACKs after a package upgrade or Manager restart.
+    // lastError includes transport failures (e.g. /jobs HTTP 429), so use configuration state/revisions here.
+    if (sync?.state === "in-sync" && typeof sync.appliedRevision === "string"
+        && sync.appliedRevision === sync.desiredRevision && !sync.recoveryError && !sync.applyStage
+        && revisionNumber(sync.appliedRevision) !== null
+        && this.db.get("SELECT 1 FROM node_snapshots WHERE node_id = ? AND revision = ?", nodeId, sync.appliedRevision)) {
+      this.recordApplied(nodeId, sync.appliedRevision, now);
+    }
     const last = this.lastHistoryAt.get(nodeId) ?? 0;
     if (Date.now() - last > 60_000) {
       this.lastHistoryAt.set(nodeId, Date.now());
@@ -248,6 +257,28 @@ export class NodeService {
 
   // ---- ACKs --------------------------------------------------------------------------------------------
 
+  /** A current success supersedes only failures at the same/older revision; retain immutable ACK history. */
+  private recordApplied(nodeId: string, revision: string, now: string): void {
+    const current = this.db.get<{ applied_revision: string | null; failed_revision: string | null; last_error: string | null }>(
+      "SELECT applied_revision, failed_revision, last_error FROM node_sync WHERE node_id = ?", nodeId,
+    );
+    const num = revisionNumber(revision)!;
+    if (current?.applied_revision && (revisionNumber(current.applied_revision) ?? -1) > num) return;
+    const clearFailure = !current?.failed_revision || (revisionNumber(current.failed_revision) ?? -1) <= num;
+    if (current?.applied_revision !== revision || (clearFailure && (current.failed_revision != null || current.last_error != null))) {
+      this.db.run(
+        `INSERT INTO node_sync (node_id, applied_revision, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(node_id) DO UPDATE SET applied_revision = excluded.applied_revision,
+           failed_revision = CASE WHEN ? THEN NULL ELSE node_sync.failed_revision END,
+           last_error = CASE WHEN ? THEN NULL ELSE node_sync.last_error END, updated_at = excluded.updated_at`,
+        nodeId, revision, now, clearFailure ? 1 : 0, clearFailure ? 1 : 0,
+      );
+    }
+    this.db.run(`UPDATE publish_results SET stage = 'applied', error_code = NULL, message = NULL, updated_at = ?
+      WHERE node_id = ? AND node_revision = ? AND changed = 1 AND (stage <> 'applied' OR error_code IS NOT NULL OR message IS NOT NULL)`,
+      now, nodeId, revision);
+  }
+
   ack(nodeId: string, body: { revision: string; configDigest: string; stage: string; bootId: string; errorCode?: string; message?: string; instances?: unknown[] }): { duplicate: boolean } {
     const stages = ["received", "validated", "applied", "failed", "rejected"];
     if (!stages.includes(body.stage)) throw new NodeApiError(400, "invalid-stage", "unknown stage");
@@ -264,19 +295,33 @@ export class NodeService {
         JSON.stringify(body.instances ?? []).slice(0, 64_000), now,
       );
       if (r.changes === 0) return { duplicate: true };
-      const column = { received: "received_revision", validated: "validated_revision", applied: "applied_revision", failed: "failed_revision", rejected: "failed_revision" }[body.stage]!;
+      const boots = this.db.get<{ previous_boots: string }>("SELECT previous_boots FROM node_reports WHERE node_id = ?", nodeId);
+      if (boots && (JSON.parse(boots.previous_boots) as string[]).includes(body.bootId)) return { duplicate: false };
+      if (body.stage === "applied") {
+        this.recordApplied(nodeId, body.revision, now);
+        return { duplicate: false };
+      }
+      if (body.stage === "failed" || body.stage === "rejected") {
+        const applied = this.db.get<{ applied_revision: string | null }>("SELECT applied_revision FROM node_sync WHERE node_id = ?", nodeId);
+        if (applied?.applied_revision && (revisionNumber(applied.applied_revision) ?? -1) > revNum) return { duplicate: false };
+      }
+      const column = { received: "received_revision", validated: "validated_revision", failed: "failed_revision", rejected: "failed_revision" }[body.stage]!;
       const current = this.db.get<Record<string, string | null>>(`SELECT ${column} AS rev FROM node_sync WHERE node_id = ?`, nodeId);
       const currentNum = current?.rev ? revisionNumber(current.rev) ?? -1 : -1;
       // Out-of-order ACKs never move a pointer backwards.
       if (revNum >= currentNum) {
         this.db.run(
           `INSERT INTO node_sync (node_id, ${column}, last_error, updated_at) VALUES (?, ?, ?, ?)
-           ON CONFLICT(node_id) DO UPDATE SET ${column} = excluded.${column}, last_error = excluded.last_error, updated_at = excluded.updated_at`,
+           ON CONFLICT(node_id) DO UPDATE SET ${column} = excluded.${column},
+             last_error = CASE WHEN ? THEN excluded.last_error ELSE node_sync.last_error END, updated_at = excluded.updated_at`,
           nodeId, body.revision, body.stage === "failed" || body.stage === "rejected" ? `${body.errorCode ?? "error"}: ${body.message ?? ""}` : null, now,
+          body.stage === "failed" || body.stage === "rejected" ? 1 : 0,
         );
       }
-      this.db.run("UPDATE publish_results SET stage = ?, error_code = ?, message = ?, updated_at = ? WHERE node_id = ? AND node_revision = ? AND changed = 1",
-        body.stage, body.errorCode ?? null, body.message ?? null, now, nodeId, body.revision);
+      this.db.run(`UPDATE publish_results SET stage = ?, error_code = ?, message = ?, updated_at = ?
+        WHERE node_id = ? AND node_revision = ? AND changed = 1
+          AND (? IN ('failed', 'rejected') OR (stage NOT IN ('applied', 'failed', 'rejected') AND NOT (stage = 'validated' AND ? = 'received')))`,
+        body.stage, body.errorCode ?? null, body.message ?? null, now, nodeId, body.revision, body.stage, body.stage);
       return { duplicate: false };
     });
   }

@@ -90,6 +90,8 @@ export class ForceGraph3D {
   private anchors = new Map<string, Point>();
   private fitting = true;
   private userView = false;
+  private viewFrame: "all" | string[] | null = "all";
+  private labelSlots = new Map<string, number>();
   private frame = 0;
   private raf = 0;
   private width = 0;
@@ -143,14 +145,21 @@ export class ForceGraph3D {
 
   /** Replaces the graph; vertices that stay keep their position, new ones start next to a neighbour. */
   setData(vertices: GraphVertex[], links: GraphLink[], groups: GraphGroup[] = []): void {
+    vertices = [...vertices].sort((a, b) => a.id.localeCompare(b.id));
+    const ids = new Set(vertices.map((v) => v.id));
+    links = links.filter((l) => ids.has(l.source) && ids.has(l.target)).sort((a, b) => a.id.localeCompare(b.id));
+    const previousLinks = new Map(this.links.map((l) => [l.id, l]));
     const next = new Map<string, SimVertex>();
     const structural =
       vertices.length !== this.vertices.size ||
       vertices.some((v) => !this.vertices.has(v.id) || this.vertices.get(v.id)!.group !== v.group) ||
       links.length !== this.links.length ||
-      links.some((l, i) => l.id !== this.links[i]?.id || l.source !== this.links[i]?.source || l.target !== this.links[i]?.target);
+      links.some((l) => {
+        const old = previousLinks.get(l.id);
+        return !old || l.source !== old.source || l.target !== old.target || l.length !== old.length || l.strength !== old.strength;
+      });
     const previous = this.vertices;
-    this.groups = groups;
+    this.groups = [...groups].sort((a, b) => a.id.localeCompare(b.id));
     for (const v of vertices) {
       const old = this.vertices.get(v.id);
       // Reports/theme changes must keep the actual object being dragged, not copy it out from under the pointer.
@@ -171,7 +180,8 @@ export class ForceGraph3D {
       Object.assign(v, { x: base.x + Math.cos(angle) * radius, y: base.y + Math.sin(angle) * radius, z: base.z + (hash(v.id + "z") - 0.5) * 30 });
     }
     if (this.drag?.kind === "vertex" && !next.has(this.drag.v.id)) this.cancelDrag();
-    this.links = links.filter((l) => next.has(l.source) && next.has(l.target));
+    this.links = links;
+    for (const id of this.labelSlots.keys()) if (!next.has(id)) this.labelSlots.delete(id);
     if (structural) this.alpha = Math.max(this.alpha, 0.8);
     if (!previous.size || structural && !this.userView) this.fitting = true;
   }
@@ -185,6 +195,8 @@ export class ForceGraph3D {
   fitGraph(): void {
     this.fitting = false;
     this.userView = true;
+    this.viewFrame = "all";
+    this.labelSlots.clear();
     this.frameVertices([...this.vertices.values()]);
   }
 
@@ -198,6 +210,8 @@ export class ForceGraph3D {
     if (!vertices.length) return;
     this.fitting = false;
     this.userView = true;
+    this.viewFrame = vertices.map((v) => v.id);
+    this.labelSlots.clear();
     this.frameVertices(vertices);
   }
 
@@ -208,6 +222,7 @@ export class ForceGraph3D {
     this.updateAnchors();
     this.alpha = Math.max(this.alpha, 0.9);
     this.userView = false;
+    this.viewFrame = "all";
     this.fitting = true;
   }
 
@@ -412,12 +427,26 @@ export class ForceGraph3D {
   private fit(): void {
     const r = this.canvas.getBoundingClientRect();
     const dpr = window.devicePixelRatio || 1;
+    const bitmapWidth = Math.max(1, Math.round(r.width * dpr));
+    const bitmapHeight = Math.max(1, Math.round(r.height * dpr));
+    if (this.width === r.width && this.height === r.height && this.canvas.width === bitmapWidth && this.canvas.height === bitmapHeight) return;
+    const oldWidth = this.width, oldHeight = this.height;
     this.width = r.width;
     this.height = r.height;
-    this.canvas.width = Math.max(1, Math.round(r.width * dpr));
-    this.canvas.height = Math.max(1, Math.round(r.height * dpr));
+    if (this.canvas.width !== bitmapWidth) this.canvas.width = bitmapWidth;
+    if (this.canvas.height !== bitmapHeight) this.canvas.height = bitmapHeight;
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    if (!this.userView && this.vertices.size) this.frameVertices([...this.vertices.values()]);
+    if (this.viewFrame) {
+      const frame = this.viewFrame;
+      this.frameVertices([...this.vertices.values()].filter((v) => frame === "all" || frame.includes(v.id)));
+    } else if (oldWidth > 0 && oldHeight > 0 && this.width > 0 && this.height > 0) {
+      this.distance *= Math.min(oldWidth, oldHeight) / Math.min(this.width, this.height);
+      this.panX *= this.width / oldWidth;
+      this.panY *= this.height / oldHeight;
+    }
+    this.labelSlots.clear();
+    // Assigning canvas dimensions clears its bitmap; redraw in this resize callback, not a later frame.
+    this.draw();
   }
 
   /** World → camera space (rotation only). */
@@ -562,24 +591,49 @@ export class ForceGraph3D {
       }
       occupied.push({ x: p.sx - r - 3, y: p.sy - r - 3, w: (r + 3) * 2, h: (r + 3) * 2 });
     }
-    // Place readable labels after all geometry. Prioritize the selection/hover and avoid other labels/nodes.
-    order.sort((a, b) => Number(b.v.id === this.hover?.id || selectedNodes.has(b.v.id)) - Number(a.v.id === this.hover?.id || selectedNodes.has(a.v.id)) || a.depth - b.depth);
+    // Reserve a stable side of each vertex. Re-running greedy placement in depth/hover order every frame made
+    // labels flip sides or disappear near collisions. Hover only changes paint order, never label geometry.
+    order.sort((a, b) => a.v.id.localeCompare(b.v.id));
+    const labels = [];
     for (const p of order) {
       const important = p.v.id === this.hover?.id || selectedNodes.has(p.v.id);
       const r = p.v.radius * p.scale;
-      ctx.font = `${important ? "600 " : ""}12px system-ui, sans-serif`;
+      if (p.sx + r < 0 || p.sx - r > this.width || p.sy + r < 0 || p.sy - r > this.height) continue;
+      ctx.font = "12px system-ui, sans-serif";
       const w = ctx.measureText(p.v.label).width + 10, h = 19;
-      const candidates = [
-        { x: p.sx - w / 2, y: p.sy + r + 5, w, h },
-        { x: p.sx - w / 2, y: p.sy - r - h - 5, w, h },
-        { x: p.sx + r + 5, y: p.sy - h / 2, w, h },
-        { x: p.sx - r - w - 5, y: p.sy - h / 2, w, h },
-      ];
-      const box = candidates.find((b) => b.x >= 2 && b.y >= 2 && b.x + w < this.width - 2 && b.y + h < this.height - 2 &&
-        !occupied.some((o) => b.x < o.x + o.w + 2 && b.x + w + 2 > o.x && b.y < o.y + o.h + 2 && b.y + h + 2 > o.y))
-        ?? (important ? candidates[0] : undefined);
-      if (!box) continue;
+      const candidates = [0, 22, 44].flatMap((offset) => [
+        { x: p.sx - w / 2, y: p.sy + r + 5 + offset, w, h },
+        { x: p.sx - w / 2, y: p.sy - r - h - 5 - offset, w, h },
+        { x: p.sx + r + 5 + offset, y: p.sy - h / 2, w, h },
+        { x: p.sx - r - w - 5 - offset, y: p.sy - h / 2, w, h },
+      ]);
+      const score = (b: typeof candidates[number]) => {
+        const outside = Math.max(0, 2 - b.x) + Math.max(0, 2 - b.y) + Math.max(0, b.x + w - this.width + 2) + Math.max(0, b.y + h - this.height + 2);
+        return outside * 1000 + occupied.reduce((sum, o) => sum +
+          Math.max(0, Math.min(b.x + w + 2, o.x + o.w + 2) - Math.max(b.x, o.x)) *
+          Math.max(0, Math.min(b.y + h + 2, o.y + o.h + 2) - Math.max(b.y, o.y)), 0);
+      };
+      let slot = this.labelSlots.get(p.v.id);
+      if (slot === undefined) {
+        slot = candidates.reduce((best, b, i) => score(b) < score(candidates[best]!) ? i : best, 0);
+        this.labelSlots.set(p.v.id, slot);
+      }
+      const candidate = candidates[slot]!;
+      const box = { ...candidate, x: Math.max(2, Math.min(candidate.x, this.width - w - 2)), y: Math.max(2, Math.min(candidate.y, this.height - h - 2)) };
       occupied.push(box);
+      labels.push({ p, box, w, h, important, leader: slot >= 4 });
+    }
+    labels.sort((a, b) => Number(a.important) - Number(b.important));
+    for (const { p, box, w, h, leader } of labels) {
+      if (leader) {
+        ctx.globalAlpha = lit(p.v.id) ? 0.45 : 0.15;
+        ctx.strokeStyle = text;
+        ctx.lineWidth = 0.7;
+        ctx.beginPath();
+        ctx.moveTo(p.sx, p.sy);
+        ctx.lineTo(Math.max(box.x, Math.min(p.sx, box.x + w)), Math.max(box.y, Math.min(p.sy, box.y + h)));
+        ctx.stroke();
+      }
       ctx.globalAlpha = lit(p.v.id) ? 0.9 : 0.25;
       ctx.fillStyle = background;
       ctx.fillRect(box.x, box.y, w, h);
@@ -752,6 +806,7 @@ export class ForceGraph3D {
     this.interacted = performance.now();
     this.userView = true;
     this.fitting = false;
+    this.viewFrame = null;
   }
 
   private cancelDrag(): void {

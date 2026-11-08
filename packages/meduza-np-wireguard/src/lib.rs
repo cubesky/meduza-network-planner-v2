@@ -437,6 +437,7 @@ pub fn statuses(cfg: &WireGuardConfig, dumps: &BTreeMap<String, Result<String, S
         let parsed = dumps.get(&dev).and_then(|r| r.as_ref().ok()).and_then(|t| parse_dump(t));
         let mut detail = BTreeMap::new();
         detail.insert("device".into(), Value::String(dev.clone()));
+        detail.insert("name".into(), Value::String(inst.name.clone().unwrap_or_else(|| inst.id.to_string())));
         let (state, reason) = match (&parsed, dumps.get(&dev)) {
             (Some((pk, _)), _) => {
                 detail.insert("publicKey".into(), Value::String(pk.clone()));
@@ -457,6 +458,9 @@ pub fn statuses(cfg: &WireGuardConfig, dumps: &BTreeMap<String, Result<String, S
             let d = parsed.as_ref().and_then(|(_, peers)| peers.iter().find(|p| Some(&p.public_key) == peer.public_key.as_ref()));
             let (state, reason) = peer_state(peer, d, now, inst.handshake_timeout_seconds);
             let mut detail = BTreeMap::new();
+            detail.insert("name".into(), Value::String(peer.name.clone().unwrap_or_else(|| peer.id.to_string())));
+            detail.insert("instance".into(), Value::String(format!("wireguard/{}", inst.id)));
+            detail.insert("interfaceName".into(), Value::String(inst.name.clone().unwrap_or_else(|| inst.id.to_string())));
             if let Some(endpoint) = &peer.endpoint {
                 detail.insert("configuredEndpoint".into(), Value::String(endpoint.clone()));
             }
@@ -669,6 +673,10 @@ mod tests {
         assert_eq!(st[1].state, ServiceState::Up);
         assert_eq!(st[1].detail["rxBytes"], json!(1024));
         assert_eq!(st[1].detail["endpoint"], json!("203.0.113.5:51820"));
+        assert_eq!(st[0].detail["name"], "uplink");
+        assert_eq!(st[1].detail["name"], "peer-b");
+        assert_eq!(st[1].detail["instance"], "wireguard/uplink");
+        assert_eq!(st[1].detail["interfaceName"], "uplink");
         let stale = statuses(&cfg, &dumps, 5000);
         assert_eq!(stale[1].state, ServiceState::Down, "active peer with old handshake is down");
         let mut unconnected = BTreeMap::new();
@@ -682,6 +690,22 @@ mod tests {
         let none = statuses(&cfg, &BTreeMap::new(), 1100);
         assert_eq!(none[0].state, ServiceState::Down, "missing interface is not up");
         assert_eq!(none[1].state, ServiceState::Down);
+    }
+
+    #[test]
+    fn status_names_preserve_interface_and_peer_identity() {
+        let mut cfg = load(&req()).unwrap();
+        cfg.instances[0].name = Some("Branch office".into());
+        cfg.instances[0].peers[0].name = Some("Main router".into());
+        let rows = statuses(&cfg, &BTreeMap::new(), 1100);
+        assert_eq!(rows[0].id, "wireguard/uplink");
+        assert_eq!(rows[0].detail["name"], "Branch office");
+        assert_eq!(rows[1].id, "wireguard/uplink/peer-b");
+        assert_eq!(rows[1].detail["name"], "Main router");
+        assert_eq!(rows[1].detail["instance"], rows[0].id);
+        assert_eq!(rows[1].detail["interfaceName"], "Branch office");
+        assert_eq!(rows[0].state, ServiceState::Down, "names do not imply connectivity");
+        assert_eq!(rows[1].state, ServiceState::Down);
     }
 
     #[test]
