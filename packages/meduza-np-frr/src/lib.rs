@@ -36,6 +36,70 @@ use serde_json::Value;
 pub const SLOT: &str = "frr.daemons";
 pub const PATHSPACE: &str = "meduza";
 
+/// The daemon's configured privilege identity, not the account a distribution happens to install.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DaemonIdentity {
+    user: String,
+    group: String,
+}
+
+impl DaemonIdentity {
+    pub fn from_version(version: &str) -> Result<Self, PluginError> {
+        let (_, options) = version.split_once("configured with:").ok_or_else(|| {
+            PluginError::new(
+                "unsupported-provider",
+                "FRR --version did not report configure options; cannot determine its daemon user/group",
+            )
+        })?;
+        let mut user = "frr";
+        let mut group = "frr";
+        for option in options.split_whitespace().map(|s| s.trim_matches(['\'', '"'])) {
+            if let Some(value) = option.strip_prefix("--enable-user=") {
+                user = match value {
+                    "yes" | "" => "frr",
+                    "no" => "root",
+                    value => value,
+                };
+            } else if let Some(value) = option.strip_prefix("--enable-group=") {
+                group = match value {
+                    "yes" | "" => "frr",
+                    "no" => "root",
+                    value => value,
+                };
+            } else if option == "--disable-user" {
+                // No privilege transition: the root planner's launch identity remains in effect.
+                user = "root";
+            } else if option == "--disable-group" {
+                group = "root";
+            }
+        }
+        for value in [user, group] {
+            if value.is_empty() || value.starts_with('-') || !value.bytes().all(|c| c.is_ascii_alphanumeric() || b"_.-".contains(&c)) {
+                return Err(PluginError::new("unsupported-provider", "FRR reported an invalid daemon user/group"));
+            }
+        }
+        Ok(Self { user: user.into(), group: group.into() })
+    }
+
+    fn owner(&self) -> String {
+        format!("{}:{}", self.user, self.group)
+    }
+}
+
+/// Inspect the actual resolved binary. Never fall back to root when the command or parsing fails.
+pub fn daemon_identity(req: &PluginRequest) -> Result<DaemonIdentity, PluginError> {
+    let path = &req.provider(SLOT)?.path;
+    let out = meduza_np_plugin_sdk::run_status_command(path, &["--version"], std::time::Duration::from_secs(5), 64 * 1024)
+        .map_err(|e| PluginError::new("provider-inspection-failed", format!("{path} --version: {e}")))?;
+    if out.status != Some(0) || out.timed_out {
+        return Err(PluginError::new(
+            "provider-inspection-failed",
+            format!("{path} --version failed (status {:?}, timeout {})", out.status, out.timed_out),
+        ));
+    }
+    DaemonIdentity::from_version(&format!("{}\n{}", out.stdout, out.stderr))
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 #[schemars(title = "FRR")]
@@ -1005,7 +1069,7 @@ pub fn render(cfg: &FrrConfig, req: &PluginRequest) -> Result<BTreeMap<&'static 
     Ok(files)
 }
 
-pub fn plan(cfg: &FrrConfig, req: &PluginRequest) -> Result<Vec<GenerationPlan>, PluginError> {
+pub fn plan(cfg: &FrrConfig, req: &PluginRequest, identity: &DaemonIdentity) -> Result<Vec<GenerationPlan>, PluginError> {
     if !cfg.enabled {
         return Ok(Vec::new());
     }
@@ -1013,28 +1077,51 @@ pub fn plan(cfg: &FrrConfig, req: &PluginRequest) -> Result<Vec<GenerationPlan>,
     let dir = "frr/main";
     let mut planned = Vec::new();
     let mut processes = Vec::new();
+    // OpenWrt may not have run the distribution's FRR init script. Prepare both runtime and saved-state
+    // pathspaces ourselves. Explicit parent modes also work with a restrictive inherited umask; mkdir -p
+    // leaves existing shared parents untouched. Never recursively chown /var/{run,lib}/frr itself.
     let mut checks = vec![CommandSpec {
         provider_slot: None,
         program: Some("/bin/mkdir".into()),
-        argv: vec!["-p".into(), format!("/var/run/frr/{PATHSPACE}")],
+        argv: vec!["-p".into(), "-m".into(), "0755".into(), "/var/lib".into(), "/var/lib/frr".into(), "/var/run/frr".into()],
         timeout_seconds: 5,
         required: true,
     }];
-    checks.push(CommandSpec {
-        provider_slot: None,
-        program: Some("/bin/chown".into()),
-        argv: vec!["frr:frr".into(), format!("/var/run/frr/{PATHSPACE}")],
-        timeout_seconds: 5,
-        required: false,
-    });
-    // The daemons drop privileges to user `frr` before reading their -f file; planner writes generation files as
+    for path in [format!("/var/run/frr/{PATHSPACE}"), format!("/var/lib/frr/{PATHSPACE}")] {
+        checks.extend([
+            CommandSpec {
+                provider_slot: None,
+                program: Some("/bin/mkdir".into()),
+                argv: vec!["-p".into(), "-m".into(), "0755".into(), path.clone()],
+                timeout_seconds: 5,
+                required: true,
+            },
+            // -m only applies when mkdir creates a directory. Repair modes of our existing namespace too,
+            // and transfer old root-owned pid/state files left by a different daemon build to its user.
+            CommandSpec {
+                provider_slot: None,
+                program: Some("/bin/chmod".into()),
+                argv: vec!["0755".into(), path.clone()],
+                timeout_seconds: 5,
+                required: true,
+            },
+            CommandSpec {
+                provider_slot: None,
+                program: Some("/bin/chown".into()),
+                argv: vec!["-R".into(), identity.owner(), path],
+                timeout_seconds: 5,
+                required: true,
+            },
+        ]);
+    }
+    // The daemons drop privileges to their compiled identity before reading their -f file; planner writes files as
     // root. The daemon user owns its (per-apply, immutable) generation directory, like /etc/frr in distributions;
     // modes stay 0640 / 0600 for files with secrets. Without this FRR starts with an empty configuration and only
     // logs "Permission denied" (found in the multi-node lab).
     checks.push(CommandSpec {
         provider_slot: None,
         program: Some("/bin/chown".into()),
-        argv: vec!["-R".into(), "frr:frr".into(), format!("${{GENERATION_ROOT}}/{dir}")],
+        argv: vec!["-R".into(), identity.owner(), format!("${{GENERATION_ROOT}}/{dir}")],
         timeout_seconds: 5,
         required: true,
     });
@@ -1421,6 +1508,56 @@ pub fn ospf_statuses(cfg: &FrrConfig, json: &Value, guard_states: &BTreeMap<Stri
 mod tests {
     use super::*;
 
+    fn plan(cfg: &FrrConfig, req: &PluginRequest) -> Result<Vec<GenerationPlan>, PluginError> {
+        super::plan(
+            cfg,
+            req,
+            &DaemonIdentity::from_version("zebra version 10.4.1\nconfigured with: '--enable-user=frr' '--enable-group=frr'")?,
+        )
+    }
+
+    #[test]
+    fn compiled_identity_matches_openwrt_official_custom_and_dedicated_service_accounts() {
+        for (options, owner) in [
+            ("'--enable-user=network' '--enable-group=network' '--localstatedir=/var/run/frr'", "network:network"),
+            ("'--enable-user=root' '--enable-group=root' '--enable-vty-group=root'", "root:root"),
+            ("'--enable-user=frr' '--enable-group=frr'", "frr:frr"),
+            ("'--prefix=/usr'", "frr:frr"),
+            ("\"--enable-user=quagga\" \"--enable-group=routing\"", "quagga:routing"),
+            ("--disable-user --disable-group", "root:root"),
+        ] {
+            let identity = DaemonIdentity::from_version(&format!("zebra version 10.4.1\nconfigured with:\n {options}")).unwrap();
+            assert_eq!(identity.owner(), owner);
+            let r = req(base());
+            let plans = super::plan(&load(&r).unwrap(), &r, &identity).unwrap();
+            for check in plans[0].checks.iter().filter(|c| c.program.as_deref() == Some("/bin/chown")) {
+                assert_eq!(check.argv[1], owner, "both runtime/state and config ownership must match the binary");
+            }
+        }
+        assert!(DaemonIdentity::from_version("zebra version 10.4.1").is_err(), "unknown build identity must not silently run as root");
+        assert!(DaemonIdentity::from_version("configured with: '--enable-user=bad:owner'").is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inspect_resolved_binary_identity_and_reject_failed_version_commands() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("meduza-frr-inspect-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let binary = root.join("zebra provider");
+        std::fs::write(&binary, "#!/bin/sh\n[ \"$1\" = --version ] || exit 3\nprintf '%s\\n' 'zebra version 10.4.1' 'configured with:' '--enable-user=root --enable-group=root'\n").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut r = req(base());
+        r.providers.get_mut(SLOT).unwrap().path = binary.to_string_lossy().into_owned();
+        assert_eq!(daemon_identity(&r).unwrap().owner(), "root:root");
+        std::fs::write(&binary, "#!/bin/sh\necho 'configured with: --enable-user=root --enable-group=root'\nexit 1\n").unwrap();
+        assert!(daemon_identity(&r).is_err(), "a failed command must not supply an identity");
+        std::fs::remove_file(&binary).unwrap();
+        assert!(daemon_identity(&r).is_err(), "a missing provider must not default to root or frr");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn ebgp_needs_an_external_transport_and_routers_forward() {
         let mut f = base();
@@ -1546,6 +1683,103 @@ mod tests {
         }
         cfg.enabled = false;
         assert!(validate(&cfg, &r).is_empty());
+    }
+
+    #[test]
+    fn pathspace_preparation_covers_runtime_and_state_with_required_permissions() {
+        let r = req(base());
+        let cfg = load(&r).unwrap();
+        let checks = &plan(&cfg, &r).unwrap()[0].checks;
+        for parent in ["/var/lib", "/var/lib/frr", "/var/run/frr"] {
+            assert!(
+                checks.iter().any(|c| c.required
+                    && c.program.as_deref() == Some("/bin/mkdir")
+                    && c.argv.iter().any(|s| s == parent)
+                    && c.argv.iter().any(|s| s == "0755")),
+                "missing traversable parent {parent}"
+            );
+        }
+        for path in ["/var/run/frr/meduza", "/var/lib/frr/meduza"] {
+            assert!(
+                checks.iter().any(|c| c.required && c.program.as_deref() == Some("/bin/mkdir") && c.argv.iter().any(|s| s == path)),
+                "missing FRR pathspace directory {path}"
+            );
+            assert!(
+                checks.iter().any(|c| c.required && c.program.as_deref() == Some("/bin/chmod") && c.argv == ["0755", path]),
+                "existing pathspace directories need an explicit mode: {path}"
+            );
+            assert!(
+                checks.iter().any(|c| c.required
+                    && c.program.as_deref() == Some("/bin/chown")
+                    && c.argv.iter().any(|s| s == path)
+                    && c.argv.iter().any(|s| s == "-R")
+                    && c.argv.iter().any(|s| s == "frr:frr")),
+                "FRR must own its namespace, including old pid/state files: {path}"
+            );
+        }
+        for c in checks.iter().filter(|c| matches!(c.program.as_deref(), Some("/bin/chown" | "/bin/chmod"))) {
+            assert!(c.required, "permission failures must abort before daemon startup");
+            assert!(
+                !c.argv.iter().any(|s| ["/var/lib", "/var/lib/frr", "/var/run/frr"].contains(&s.as_str())),
+                "never change the shared FRR parent's permissions or ownership"
+            );
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn pathspace_checks_initialize_missing_state_under_restrictive_umask_and_preserve_shared_parents() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("meduza-frr-pathspace-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let runtime = root.join("var/run/frr/meduza");
+        std::fs::create_dir_all(&runtime).unwrap();
+        // Model an existing namespace left unusable by an earlier package/init run.
+        std::fs::set_permissions(&runtime, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let shared = runtime.parent().unwrap();
+        std::fs::set_permissions(shared, std::fs::Permissions::from_mode(0o711)).unwrap();
+        let sibling = shared.join("administrator-instance");
+        std::fs::create_dir(&sibling).unwrap();
+        std::fs::set_permissions(&sibling, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let generation = root.join("generation/frr/main");
+        std::fs::create_dir_all(&generation).unwrap();
+        let secret = generation.join("bgpd.conf");
+        std::fs::write(&secret, "test password").unwrap();
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o600)).unwrap();
+        // SAFETY: these functions return the calling process's numeric identity without pointers.
+        let identity = unsafe { format!("{}:{}", libc::geteuid(), libc::getegid()) };
+        let r = req(base());
+        let checks = plan(&load(&r).unwrap(), &r).unwrap().remove(0).checks;
+        for _ in 0..2 {
+            for check in &checks {
+                let argv: Vec<_> = check
+                    .argv
+                    .iter()
+                    .map(|s| {
+                        if s == "frr:frr" {
+                            identity.clone()
+                        } else if s.starts_with("/var/") {
+                            root.join(s.trim_start_matches('/')).to_string_lossy().into_owned()
+                        } else {
+                            s.replace("${GENERATION_ROOT}", &root.join("generation").to_string_lossy())
+                        }
+                    })
+                    .collect();
+                let output = std::process::Command::new("/bin/sh")
+                    .args(["-c", "umask 077; exec \"$@\"", "--", check.program.as_deref().unwrap()])
+                    .args(&argv)
+                    .output()
+                    .unwrap();
+                assert!(output.status.success(), "{check:?}: {}", String::from_utf8_lossy(&output.stderr));
+            }
+            for path in ["var/lib", "var/lib/frr", "var/lib/frr/meduza", "var/run/frr/meduza"] {
+                assert_eq!(std::fs::metadata(root.join(path)).unwrap().permissions().mode() & 0o777, 0o755, "{path}");
+            }
+            assert_eq!(std::fs::metadata(shared).unwrap().permissions().mode() & 0o777, 0o711);
+            assert_eq!(std::fs::metadata(&sibling).unwrap().permissions().mode() & 0o777, 0o700);
+            assert_eq!(std::fs::metadata(&secret).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

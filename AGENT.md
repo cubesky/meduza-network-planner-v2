@@ -669,6 +669,8 @@ OSPF 的范围严格限定为内部 Anycast：
 
 读取 BGP、BFD、OSPF 邻居状态使用可解析的 FRR JSON，附最后观测时间。不得把 bfdd/ospfd 进程存在当作邻居 up。系统 FRR 版本不支持某参数时，应在预检指出，不应用后再无限重启。
 
+FRR 目录属主必须与实际 provider 的编译用户/组一致，通过有界的 `zebra --version` 读取配置参数，兼容 OpenWrt 官方的 `network:network`、自定义 `root:root` 和其他系统的 `frr:frr` 构建；读取失败不能静默改用 root。独立 pathspace 启动前应同时准备运行和状态目录，补齐缺失父目录并显式设置自有目录权限，属主设置失败必须阻止启动。已有共享父目录和其他实例不得递归改权；配置中的秘密文件继续使用 0600。planner 必须以有界日志保留并转发监督进程的 stdout/stderr，避免丢弃 FRR 的 `log stdout` 诊断。
+
 ### 9.6 网络映射、端口转发和基础健康端口
 
 支持以下业务能力，以 `networks` 中的类型化对象表示，不新增重复的服务 daemon：

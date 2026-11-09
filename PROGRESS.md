@@ -1285,3 +1285,20 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   Logs: target/check-topology-volume-{before,after,final,browser,types,build}.log; previews:
   target/topology-volume.png and topology-volume-orbit.png. Source-only; update Manager to deploy.
   No Git submission or production modifications.
+- 2026-11-10 (per the user) Fix OpenWrt FRR startup directory/identity compatibility (D80).
+  roaming-cat reports missing /var/lib/frr/meduza and denied PID/socket writes; its supplied FRR 10.4.1
+  build uses root:root while the existing namespace is frr:frr. Inspect the actual provider's configure
+  options with bounded --version and use its compiled identity for runtime/state/config ownership.
+  Reject failed/unknown identity inspection instead of defaulting to root. Prepare both namespaces and
+  missing parents with explicit modes, require ownership setup, preserve existing shared/sibling paths
+  and secret modes. Capture supervisor stdout as well as stderr in the existing bounded log forwarder.
+  All 18 FRR tests, 10 supervisor tests and strict FRR/planner Clippy pass, including root/custom/default
+  builds, failed/missing providers, umask/reapply behavior and shared-directory/secret preservation.
+  Logs: target/check-frr-pathspace-before.log, check-frr-output-before.log, check-frr-openwrt-tests.log,
+  check-frr-output-after.log and check-frr-openwrt-clippy.log. Source-only; update meduza-np-frr then
+  reapply; update planner for full log capture. No live device verification or Git submission.
+- 2026-11-10 (per the user) Confirm official OpenWrt FRR uses network:network, not frr:frr (D80).
+  Checked the official packages feed's master and openwrt-24.10 configure flags. Existing compiled-identity
+  detection supports the official account as well as the reported custom root build; added network:network
+  to the ownership-plan regression and clarified the specification. All 18 FRR tests and strict FRR/planner
+  Clippy pass. Source-only; no additional runtime behavior change or Git submission.

@@ -2,7 +2,7 @@
 //! graceful stop with deadline, status for reports. No external supervisor is required.
 //!
 //! Process adoption (D32): a supervisor with a state directory records every started process (pid, kernel start
-//! time, boot id, binary) and sends its stderr to a log file there that planner forwards. A planned planner restart
+//! time, boot id, binary) and sends its stdout/stderr to a log file there that planner forwards. A planned planner restart
 //! (`detach_all`) leaves the daemons running; the next planner adopts a recorded process when its launch spec is
 //! unchanged and the process is provably the same one, so a planner-only upgrade does not restart tunnels.
 //!
@@ -106,7 +106,7 @@ enum Proc {
     Adopted(Record),
 }
 
-/// Persisted per supervised process in the state directory (`<sha>.json`, stderr in `<sha>.log`).
+/// Persisted per supervised process in the state directory (`<sha>.json`, stdout/stderr in `<sha>.log`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Record {
@@ -557,18 +557,22 @@ fn adopted_since(rec: &Record) -> Instant {
 
 fn spawn_child(spec: &LaunchSpec, log: Option<&Path>) -> std::io::Result<Child> {
     let mut cmd = Command::new(&spec.program);
-    cmd.args(&spec.args).stdin(Stdio::null()).stdout(Stdio::null()).env_clear();
+    cmd.args(&spec.args).stdin(Stdio::null()).env_clear();
     match log {
-        // A log file instead of planner's stderr: a pipe from procd/systemd would break (SIGPIPE) when planner
+        // A log file instead of planner's output: a pipe from procd/systemd would break (SIGPIPE) when planner
         // restarts and the adopted daemon writes its next line.
         Some(path) => {
             let mut o = std::fs::OpenOptions::new();
             o.create(true).append(true);
             #[cfg(unix)]
             std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
-            cmd.stderr(Stdio::from(o.open(path)?));
+            let output = o.open(path)?;
+            // FRR uses `log stdout`; both streams share an append-only file and the same bounded forwarder.
+            cmd.stdout(Stdio::from(output.try_clone()?));
+            cmd.stderr(Stdio::from(output));
         }
         None => {
+            cmd.stdout(Stdio::inherit());
             cmd.stderr(Stdio::inherit());
         }
     }
@@ -677,7 +681,7 @@ enum TailEnd {
     Remove,
 }
 
-/// Forwards the daemon's stderr log file to planner's stderr, prefixed with the process id.
+/// Forwards both daemon output streams to planner's stderr, prefixed with the process id.
 async fn forward_log(id: String, path: PathBuf, mut end: watch::Receiver<TailEnd>) {
     use std::io::{Read, Seek, SeekFrom};
     let mut offset = 0u64;
@@ -1115,17 +1119,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Daemon stderr goes to the log file and is forwarded; detaching empties it.
+    /// Both daemon output streams reach the same log; detaching empties forwarded output.
     #[cfg(target_os = "linux")]
     #[tokio::test]
-    async fn stderr_goes_to_log_file() {
+    async fn stdout_and_stderr_go_to_log_file() {
         let dir = std::env::temp_dir().join(format!("meduza-np-sup-log-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let sup = Supervisor::persistent(&dir);
         let spec = LaunchSpec {
             id: "t/log".into(),
             program: "/bin/sh".into(),
-            args: vec!["-c".into(), "echo hello >&2; exec sleep 60".into()],
+            args: vec!["-c".into(), "echo stdout-diagnostic; echo stderr-diagnostic >&2; exec sleep 60".into()],
             env: Default::default(),
             restart: RestartPolicy::OnFailure,
             startup: Default::default(),
@@ -1137,6 +1141,9 @@ mod tests {
         assert!(sup.wait_settled("t/log", Duration::from_millis(300), Duration::from_secs(3)).await);
         let log = log_path(&dir, "t/log");
         assert!(log.exists());
+        let output = std::fs::read_to_string(&log).unwrap();
+        assert!(output.contains("stdout-diagnostic"), "stdout diagnostics must not be discarded: {output:?}");
+        assert!(output.contains("stderr-diagnostic"), "stderr diagnostics must still be captured: {output:?}");
         sup.detach_all().await;
         assert_eq!(std::fs::metadata(&log).unwrap().len(), 0, "forwarded output is dropped on detach");
         let rec = load_record(&dir, "t/log").unwrap();

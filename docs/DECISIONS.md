@@ -1816,3 +1816,40 @@ world-space sphere clearance, deterministic coincident-body separation and no re
 All 14 graph tests plus 3 i18n tests pass. Actual Manager Chrome checks verify cluster/member depth, orbiting,
 stable labels and six responsive viewport transitions. Type checks and production build pass. Source-only;
 update Manager to deploy. Git submission remains with the user; no production node changes.
+
+## D80 — Prepare OpenWrt FRR pathspaces for the binary's compiled identity
+
+roaming-cat's FRR 10.4.1 exits immediately: `/var/lib/frr/meduza` has no parent, and PID/socket creation
+in `/var/run/frr/meduza` fails. The supplied directory listing is traversable and owned by frr, but the
+binary reports `--enable-user=root --enable-group=root --enable-vty-group=root`. A root UID with FRR's
+reduced capabilities cannot rely on bypassing another account's directory permissions. Hardcoding frr
+ownership therefore breaks this build; the earlier missing-account report was a separate packaging issue.
+
+Inspect the resolved zebra binary with a bounded, read-only `--version` command and parse its configured
+daemon user/group. Generate all runtime, saved-state and generation-config chown commands for that identity;
+keep upstream frr defaults and respect explicitly disabled identity transitions. Failed commands, missing
+configure metadata and invalid identities fail planning instead of silently assuming root. Disabled FRR
+does not inspect or require a provider. No runtime privilege override is added to the daemon arguments.
+
+Prepare missing shared parents with explicit 0755 creation modes, leaving existing parents untouched.
+Prepare both dedicated `meduza` runtime/state directories, explicitly repair their modes and recursively
+set their owner including old PID/state files. Ownership checks are required before launch. Do not chown
+shared FRR parents or sibling instances; generation secret files retain 0600. This also avoids assuming
+that the distribution's FRR init script has run, especially with OpenWrt's volatile /var.
+
+The supervisor previously discarded stdout although FRR's generated config uses `log stdout`. Send both
+streams through one append-only file and the existing bounded forwarder, retaining adoption/detach behavior.
+
+New regressions reproduced missing-directory preparation and lost stdout before the fix. All 18 FRR tests
+and 10 supervisor tests pass, plus strict Clippy for FRR/planner. Checks cover the reported root build,
+dedicated/custom identities, failed/missing version commands, restrictive umask, repeated preparation,
+existing shared/sibling permissions, secret file modes and both output streams. Source-only; release/update
+meduza-np-frr for startup compatibility and planner for complete logs, then reapply. No live OpenWrt
+verification, Git submission or production modifications performed.
+
+The OpenWrt official packages feed (master and openwrt-24.10) explicitly sets `--enable-user=network`
+and `--enable-group=network`: https://github.com/openwrt/packages/blob/openwrt-24.10/net/frr/Makefile .
+The reported root build is therefore not the official account convention, and frr:frr must not be
+assumed for OpenWrt. Add the official network:network configure flags to the same identity/plan regression;
+the runtime detection already supports them without a platform-specific override. All 18 FRR tests and
+strict FRR/planner Clippy still pass.

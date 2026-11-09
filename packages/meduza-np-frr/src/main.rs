@@ -34,7 +34,8 @@ impl Plugin for Frr {
         if !errors.is_empty() {
             return Err(PluginError::invalid(errors));
         }
-        Ok(PlanResult { plans: frr::plan(&cfg, req)?, warnings: Vec::new() })
+        let plans = if cfg.enabled { frr::plan(&cfg, req, &frr::daemon_identity(req)?)? } else { Vec::new() };
+        Ok(PlanResult { plans, warnings: Vec::new() })
     }
 
     fn probe(&self, req: &PluginRequest) -> Result<ProbeResult, PluginError> {
