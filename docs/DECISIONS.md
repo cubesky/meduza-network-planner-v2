@@ -1775,3 +1775,44 @@ Actual Manager Chrome checks exercise six viewport transitions (1500x900 down to
 dimensions, every framed node staying visible, a bounded selected-router pane, label stability and reordered
 heartbeats. Shared UI/Manager/Dashboard type checks and the Manager production build pass. Source-only; updating
 Manager deploys this change, with no node-side package/configuration changes required.
+
+## D78 — Render labels inside the depth-sorted topology scene
+
+Stable labels from D77 were still painted after all geometry with nearly opaque panels. They could obscure
+routers/links and behave like an overlay. Put both node/IP and AS labels on their associated object's projected
+depth plane as camera-facing text. Render the scene back-to-front; links and nodes win equal-depth ties over
+labels. Split depth-spanning links into at most 24 sections so their foreground and background portions can
+appear on the correct side of text. Preserve dashed-line phase and animated traffic particles across sections.
+
+Node panels use at most 18% background opacity; AS panels use 16%, with separate readable text opacity and
+depth fog. Label placement now penalizes projected link intersections, prioritizes node and label clearance,
+and offers diagonal as well as axial candidates at three distances. Keep the chosen candidate through hover,
+selection and ordinary reports, retain leader lines for offset text, and clip at the canvas boundary instead
+of pinning labels to the viewport edge. This keeps the position-stability and responsive-layout fixes intact.
+
+Reproduced opaque/foreground occlusion and crossing-link placement failures before the fix. All 12 graph tests
+plus 3 i18n tests pass, including split-link depth ordering and labels following their object at the viewport
+edge. Actual Manager Chrome checks cover translucent panels, stable hover/report labels, six viewport changes
+and bounded details; front and rotated-scene previews were inspected. Manager type checks and production
+build pass. Source-only; update Manager to deploy. No Git submission or production node changes.
+
+## D79 — Simulate topology clusters and members in three dimensions
+
+The camera was three-dimensional, but AS anchors and collision distances were planar and a continuous Z
+restoring force flattened members. Keep the existing lightweight ForceGraph3D canvas implementation and
+compute member repulsion/collision, link springs, body attraction and body separation in X/Y/Z. Seed new
+members deterministically on a Fibonacci sphere; keep existing positions through status refreshes. Place
+AS anchors on size-aware spherical shells around the primary AS, use actual three-dimensional collision
+distances and apply collision/weak charge to whole bodies. Cross-AS springs honor configured strength and
+translate groups without dismantling their local arrangement. Remove the separate flattening force.
+
+Spacing now means physical three-dimensional separation; some spheres can overlap in projection and separate
+when orbiting. Preserve depth-sorted translucent labels, camera interaction and responsive framing from D77/D78.
+Do not enforce pairwise screen-space separation that would collapse the layout back into a plane.
+
+New regressions reproduce the old flattening and Z-only collision failures. Check normalized covariance
+determinants after settlement to reject any plane regardless of camera orientation, group/member volume,
+world-space sphere clearance, deterministic coincident-body separation and no reheating on reordered reports.
+All 14 graph tests plus 3 i18n tests pass. Actual Manager Chrome checks verify cluster/member depth, orbiting,
+stable labels and six responsive viewport transitions. Type checks and production build pass. Source-only;
+update Manager to deploy. Git submission remains with the user; no production node changes.

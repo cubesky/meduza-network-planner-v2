@@ -168,6 +168,8 @@ export class ForceGraph3D {
     this.vertices = next;
     this.updateAnchors();
     const indices = new Map<string, number>();
+    const sizes = new Map<string, number>();
+    for (const v of next.values()) sizes.set(this.bodyKey(v), (sizes.get(this.bodyKey(v)) ?? 0) + 1);
     for (const v of next.values()) {
       const key = this.bodyKey(v);
       const index = indices.get(key) ?? 0;
@@ -175,9 +177,10 @@ export class ForceGraph3D {
       if (previous.has(v.id)) continue;
       const existing = [...previous.values()].filter((o) => v.group && o.group === v.group);
       const base = existing.length ? centroid(existing) : this.anchors.get(key)!;
-      const angle = index * 2.39996 + hash(v.id) * 0.5;
-      const radius = 20 + Math.sqrt(index) * 25;
-      Object.assign(v, { x: base.x + Math.cos(angle) * radius, y: base.y + Math.sin(angle) * radius, z: base.z + (hash(v.id + "z") - 0.5) * 30 });
+      const count = sizes.get(key)!;
+      const direction = spherePoint(index, count, hash(key) * Math.PI * 2);
+      const radius = count > 1 ? 30 + Math.cbrt(count) * 22 : 0;
+      Object.assign(v, { x: base.x + direction.x * radius, y: base.y + direction.y * radius, z: base.z + direction.z * radius });
     }
     if (this.drag?.kind === "vertex" && !next.has(this.drag.v.id)) this.cancelDrag();
     this.links = links;
@@ -259,12 +262,13 @@ export class ForceGraph3D {
         let dx = q.x - p.x, dy = q.y - p.y, dz = q.z - p.z;
         let l = dx * dx + dy * dy + dz * dz;
         if (l < 1) {
-          dx = Math.random() - 0.5;
-          dy = Math.random() - 0.5;
-          dz = Math.random() - 0.5;
+          const direction = stableDirection(`${p.id}|${q.id}`);
+          dx = direction.x; dy = direction.y; dz = direction.z;
           l = 1;
         }
-        const w = (-500 * a) / Math.max(l, 25);
+        const distance = Math.sqrt(l);
+        const collision = Math.max(0, p.radius + q.radius + 28 - distance) * 0.25;
+        const w = -a * (500 / Math.max(l, 25) + collision / distance);
         p.vx += dx * w; p.vy += dy * w; p.vz += dz * w;
         q.vx -= dx * w; q.vy -= dy * w; q.vz -= dz * w;
       }
@@ -283,7 +287,7 @@ export class ForceGraph3D {
       // Cross-AS links describe connectivity, not a demand to pull the routers out of their own clusters.
       // Apply a weak translation to both whole bodies, leaving their local arrangement intact.
       if (this.bodyKey(s) !== this.bodyKey(t)) {
-        const k = ((d - l.length) / d) * a * 0.018 / Math.max(degree.get(l.source)!, degree.get(l.target)!);
+        const k = ((d - l.length) / d) * a * 0.018 * (l.strength ?? 1) / Math.max(degree.get(l.source)!, degree.get(l.target)!);
         const left = this.bodyMembers(s), right = this.bodyMembers(t);
         for (const v of left) { v.vx += dx * k; v.vy += dy * k; v.vz += dz * k; }
         for (const v of right) { v.vx -= dx * k; v.vy -= dy * k; v.vz -= dz * k; }
@@ -306,8 +310,8 @@ export class ForceGraph3D {
         v.vz += (c.z - v.z) * 0.15 * a;
       }
     }
-    // Separated anchors keep the overview readable. A shallow scene preserves depth inside each cluster without
-    // stacking unrelated ASes along the camera axis; collisions move a large cluster as strongly as a small one.
+    // Every AS is a spherical force body. Cohesion, anchor attraction, charge and collision all act in XYZ;
+    // a large cluster and a small one translate equally, without flattening their members or pulling one out.
     const bodies = [
       ...this.bubbles().map((b) => ({ members: this.members().get(b.group.id)!, x: b.x, y: b.y, z: b.z, r: b.r })),
       ...vs.filter((v) => !v.group).map((v) => ({ members: [v], x: v.x, y: v.y, z: v.z, r: v.radius * 2.4 + 18 })),
@@ -318,23 +322,27 @@ export class ForceGraph3D {
       for (const v of p.members) {
         v.vx += (anchor.x - p.x) * 0.035 * a;
         v.vy += (anchor.y - p.y) * 0.035 * a;
-        v.vz -= v.z * 0.06 * a;
+        v.vz += (anchor.z - p.z) * 0.035 * a;
       }
       for (let j = i + 1; j < bodies.length; j++) {
         const q = bodies[j]!;
-        let dx = q.x - p.x, dy = q.y - p.y;
-        const d = Math.hypot(dx, dy) || 1;
-        if (Math.abs(dx) + Math.abs(dy) < 0.01) { dx = 1; dy = 0.5; }
+        let dx = q.x - p.x, dy = q.y - p.y, dz = q.z - p.z;
+        let d = Math.hypot(dx, dy, dz);
+        if (d < 0.01) {
+          const direction = stableDirection(`${this.bodyKey(p.members[0]!)}|${this.bodyKey(q.members[0]!)}`);
+          dx = direction.x; dy = direction.y; dz = direction.z; d = 1;
+        }
         const overlap = p.r + q.r + 140 * this.spacing - d;
-        if (overlap <= 0) continue;
-        const k = (overlap / d) * 0.35 * a;
+        const k = (Math.max(0, overlap) * 0.35 / d + 1800 / Math.max(d * d, 25)) * a;
         for (const v of p.members) {
           v.vx -= dx * k;
           v.vy -= dy * k;
+          v.vz -= dz * k;
         }
         for (const v of q.members) {
           v.vx += dx * k;
           v.vy += dy * k;
+          v.vz += dz * k;
         }
       }
     }
@@ -373,11 +381,11 @@ export class ForceGraph3D {
     this.anchors.clear();
     let index = 0;
     if (keys.length) this.anchors.set(keys[index++]!, { x: 0, y: 0, z: 0 });
-    for (let ring = 1; index < keys.length; ring++) {
-      const count = Math.min(6 * ring, keys.length - index);
+    for (let shell = 1; index < keys.length; shell++) {
+      const count = Math.min(12 * shell * shell, keys.length - index);
       for (let i = 0; i < count; i++) {
-        const angle = -Math.PI / 2 + (i * Math.PI * 2) / count + (ring - 1) * 0.15;
-        this.anchors.set(keys[index++]!, { x: Math.cos(angle) * ring * step, y: Math.sin(angle) * ring * step, z: 0 });
+        const direction = spherePoint(i, count, shell * 0.35);
+        this.anchors.set(keys[index++]!, { x: direction.x * shell * step, y: direction.y * shell * step, z: direction.z * shell * step });
       }
     }
   }
@@ -488,9 +496,13 @@ export class ForceGraph3D {
     const activeNodes = new Set([...selectedNodes, ...this.links.filter((l) => activeLinks.has(l.id)).flatMap((l) => [l.source, l.target])]);
     const lit = (id: string) => !this.highlight || activeNodes.has(id) || activeLinks.has(id);
     const t = performance.now() / 1000;
-    const occupied: Array<{ x: number; y: number; w: number; h: number }> = [];
+    const occupied: Array<{ x: number; y: number; w: number; h: number; weight?: number }> = [];
+    // Camera-facing text belongs to its object's depth plane, just like the AS labels. Geometry at the same
+    // depth wins ties; split long depth-spanning links so their foreground sections stay in front of text.
+    const scene: Array<{ depth: number; layer: number; draw: () => void }> = [];
+    const edges: Array<{ sx: number; sy: number; ex: number; ey: number; width: number }> = [];
 
-    // AS clusters behind everything: translucent bubble, dashed outline, the AS label on top
+    // AS bubbles sit behind the scene; their labels join nodes and links at the cluster's projected depth.
     const bubbles = this.bubbles()
       .map((b) => ({ b, ...this.project(b.x, b.y, b.z) }))
       .filter((p) => p.visible && p.b.r * p.scale < Math.max(this.width, this.height) * 2)
@@ -510,18 +522,22 @@ export class ForceGraph3D {
       ctx.setLineDash([6, 5]);
       ctx.stroke();
       ctx.setLineDash([]);
-      ctx.globalAlpha = fog(depth) * (on ? 1 : 0.4);
-      ctx.fillStyle = b.group.color;
       ctx.font = "600 14px system-ui, sans-serif";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "bottom";
       const labelWidth = ctx.measureText(b.group.label).width + 16;
       const labelY = sy - r - 6;
-      ctx.fillStyle = background;
-      ctx.fillRect(sx - labelWidth / 2, labelY - 19, labelWidth, 22);
-      ctx.fillStyle = b.group.color;
-      ctx.fillText(b.group.label, sx, labelY);
-      occupied.push({ x: sx - labelWidth / 2, y: labelY - 19, w: labelWidth, h: 22 });
+      const opacity = fog(depth) * (on ? 1 : 0.4);
+      scene.push({ depth, layer: 0, draw: () => {
+        ctx.globalAlpha = opacity * 0.16;
+        ctx.fillStyle = background;
+        ctx.fillRect(sx - labelWidth / 2, labelY - 19, labelWidth, 22);
+        ctx.globalAlpha = opacity;
+        ctx.fillStyle = b.group.color;
+        ctx.font = "600 14px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "bottom";
+        ctx.fillText(b.group.label, sx, labelY);
+      } });
+      occupied.push({ x: sx - labelWidth / 2, y: labelY - 19, w: labelWidth, h: 22, weight: 16 });
     }
 
     for (const l of this.links) {
@@ -529,27 +545,40 @@ export class ForceGraph3D {
       const e = proj.get(l.target)!;
       if (!s.visible || !e.visible) continue;
       const linked = !this.highlight || activeLinks.has(l.id);
-      ctx.globalAlpha = fog((s.depth + e.depth) / 2) * (linked ? (this.highlight || this.hover?.id === l.id ? 0.95 : 0.55) : 0.1);
-      ctx.strokeStyle = l.color;
-      ctx.lineWidth = Math.max(0.6, l.width * ((s.scale + e.scale) / 2)) * (this.hover?.id === l.id ? 2 : 1);
-      ctx.setLineDash(l.dash ?? []);
-      ctx.beginPath();
-      ctx.moveTo(s.sx, s.sy);
-      ctx.lineTo(e.sx, e.sy);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      if (l.particles > 0) {
-        ctx.fillStyle = l.color;
-        const r = Math.max(1.2, 2.2 * ((s.scale + e.scale) / 2));
-        for (let i = 0; i < l.particles; i++) {
-          for (const dir of [0, 1]) {
-            const f = (t * 0.35 + i / l.particles + (dir ? 0.5 / l.particles : 0) + hash(l.id)) % 1;
-            const p = dir ? 1 - f : f;
-            ctx.beginPath();
-            ctx.arc(s.sx + (e.sx - s.sx) * p, s.sy + (e.sy - s.sy) * p, r, 0, Math.PI * 2);
-            ctx.fill();
+      const point = (fraction: number) => this.project(s.v.x + (e.v.x - s.v.x) * fraction, s.v.y + (e.v.y - s.v.y) * fraction, s.v.z + (e.v.z - s.v.z) * fraction);
+      const pieces = Math.min(24, Math.max(1, Math.ceil(Math.abs(s.depth - e.depth) / 60)));
+      for (let piece = 0; piece < pieces; piece++) {
+        const from = piece / pieces, to = (piece + 1) / pieces;
+        const start = point(from), end = point(to);
+        const depth = (start.depth + end.depth) / 2;
+        const scale = (start.scale + end.scale) / 2;
+        edges.push({ sx: start.sx, sy: start.sy, ex: end.sx, ey: end.sy, width: Math.max(2, l.width * scale) });
+        scene.push({ depth, layer: 1, draw: () => {
+          ctx.globalAlpha = fog(depth) * (linked ? (this.highlight || this.hover?.id === l.id ? 0.95 : 0.55) : 0.1);
+          ctx.strokeStyle = l.color;
+          ctx.lineWidth = Math.max(0.6, l.width * scale) * (this.hover?.id === l.id ? 2 : 1);
+          ctx.setLineDash(l.dash ?? []);
+          ctx.lineDashOffset = -Math.hypot(start.sx - s.sx, start.sy - s.sy);
+          ctx.beginPath();
+          ctx.moveTo(start.sx, start.sy);
+          ctx.lineTo(end.sx, end.sy);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.lineDashOffset = 0;
+          if (l.particles > 0) {
+            ctx.fillStyle = l.color;
+            const r = Math.max(1.2, 2.2 * scale);
+            for (let i = 0; i < l.particles; i++) for (const dir of [0, 1]) {
+              const f = (t * 0.35 + i / l.particles + (dir ? 0.5 / l.particles : 0) + hash(l.id)) % 1;
+              const fraction = dir ? 1 - f : f;
+              if (fraction < from || fraction >= to) continue;
+              const p = point(fraction);
+              ctx.beginPath();
+              ctx.arc(p.sx, p.sy, r, 0, Math.PI * 2);
+              ctx.fill();
+            }
           }
-        }
+        } });
       }
     }
 
@@ -557,46 +586,46 @@ export class ForceGraph3D {
     for (const p of order) {
       const v = p.v;
       const r = v.radius * p.scale;
-      ctx.globalAlpha = fog(p.depth) * (lit(v.id) || this.links.some((l) => (l.source === v.id || l.target === v.id) && lit(l.id)) ? 1 : 0.25);
-      ctx.fillStyle = v.color;
-      ctx.beginPath();
-      if (v.shape === "diamond") {
-        ctx.moveTo(p.sx, p.sy - r * 1.25);
-        ctx.lineTo(p.sx + r * 1.25, p.sy);
-        ctx.lineTo(p.sx, p.sy + r * 1.25);
-        ctx.lineTo(p.sx - r * 1.25, p.sy);
-        ctx.closePath();
-      } else if (v.shape === "square") {
-        ctx.rect(p.sx - r * 0.9, p.sy - r * 0.9, r * 1.8, r * 1.8);
-      } else if (v.shape === "triangle") {
-        ctx.moveTo(p.sx, p.sy - r * 1.2);
-        ctx.lineTo(p.sx + r * 1.1, p.sy + r * 0.8);
-        ctx.lineTo(p.sx - r * 1.1, p.sy + r * 0.8);
-        ctx.closePath();
-      } else {
-        ctx.arc(p.sx, p.sy, r, 0, Math.PI * 2);
-      }
-      ctx.fill();
-      ctx.lineWidth = Math.max(1, 2.2 * p.scale);
-      ctx.strokeStyle = v.ring ?? background;
-      ctx.setLineDash(v.dashedRing ? [3, 3] : []);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      if (this.hover?.id === v.id || this.highlight === v.id) {
-        ctx.strokeStyle = text;
-        ctx.lineWidth = 1.5;
+      scene.push({ depth: p.depth, layer: 2, draw: () => {
+        ctx.globalAlpha = fog(p.depth) * (lit(v.id) || this.links.some((l) => (l.source === v.id || l.target === v.id) && lit(l.id)) ? 1 : 0.25);
+        ctx.fillStyle = v.color;
         ctx.beginPath();
-        ctx.arc(p.sx, p.sy, r * 1.25 + 4, 0, Math.PI * 2);
+        if (v.shape === "diamond") {
+          ctx.moveTo(p.sx, p.sy - r * 1.25);
+          ctx.lineTo(p.sx + r * 1.25, p.sy);
+          ctx.lineTo(p.sx, p.sy + r * 1.25);
+          ctx.lineTo(p.sx - r * 1.25, p.sy);
+          ctx.closePath();
+        } else if (v.shape === "square") {
+          ctx.rect(p.sx - r * 0.9, p.sy - r * 0.9, r * 1.8, r * 1.8);
+        } else if (v.shape === "triangle") {
+          ctx.moveTo(p.sx, p.sy - r * 1.2);
+          ctx.lineTo(p.sx + r * 1.1, p.sy + r * 0.8);
+          ctx.lineTo(p.sx - r * 1.1, p.sy + r * 0.8);
+          ctx.closePath();
+        } else {
+          ctx.arc(p.sx, p.sy, r, 0, Math.PI * 2);
+        }
+        ctx.fill();
+        ctx.lineWidth = Math.max(1, 2.2 * p.scale);
+        ctx.strokeStyle = v.ring ?? background;
+        ctx.setLineDash(v.dashedRing ? [3, 3] : []);
         ctx.stroke();
-      }
-      occupied.push({ x: p.sx - r - 3, y: p.sy - r - 3, w: (r + 3) * 2, h: (r + 3) * 2 });
+        ctx.setLineDash([]);
+        if (this.hover?.id === v.id || this.highlight === v.id) {
+          ctx.strokeStyle = text;
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.arc(p.sx, p.sy, r * 1.25 + 4, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      } });
+      occupied.push({ x: p.sx - r - 3, y: p.sy - r - 3, w: (r + 3) * 2, h: (r + 3) * 2, weight: 30 });
     }
     // Reserve a stable side of each vertex. Re-running greedy placement in depth/hover order every frame made
-    // labels flip sides or disappear near collisions. Hover only changes paint order, never label geometry.
+    // labels flip sides or disappear near collisions. Hover only changes emphasis, never label geometry.
     order.sort((a, b) => a.v.id.localeCompare(b.v.id));
-    const labels = [];
     for (const p of order) {
-      const important = p.v.id === this.hover?.id || selectedNodes.has(p.v.id);
       const r = p.v.radius * p.scale;
       if (p.sx + r < 0 || p.sx - r > this.width || p.sy + r < 0 || p.sy - r > this.height) continue;
       ctx.font = "12px system-ui, sans-serif";
@@ -606,42 +635,49 @@ export class ForceGraph3D {
         { x: p.sx - w / 2, y: p.sy - r - h - 5 - offset, w, h },
         { x: p.sx + r + 5 + offset, y: p.sy - h / 2, w, h },
         { x: p.sx - r - w - 5 - offset, y: p.sy - h / 2, w, h },
+        { x: p.sx + r + 5 + offset, y: p.sy + r + 5 + offset, w, h },
+        { x: p.sx - r - w - 5 - offset, y: p.sy + r + 5 + offset, w, h },
+        { x: p.sx + r + 5 + offset, y: p.sy - r - h - 5 - offset, w, h },
+        { x: p.sx - r - w - 5 - offset, y: p.sy - r - h - 5 - offset, w, h },
       ]);
       const score = (b: typeof candidates[number]) => {
         const outside = Math.max(0, 2 - b.x) + Math.max(0, 2 - b.y) + Math.max(0, b.x + w - this.width + 2) + Math.max(0, b.y + h - this.height + 2);
         return outside * 1000 + occupied.reduce((sum, o) => sum +
           Math.max(0, Math.min(b.x + w + 2, o.x + o.w + 2) - Math.max(b.x, o.x)) *
-          Math.max(0, Math.min(b.y + h + 2, o.y + o.h + 2) - Math.max(b.y, o.y)), 0);
+          Math.max(0, Math.min(b.y + h + 2, o.y + o.h + 2) - Math.max(b.y, o.y)) * (o.weight ?? 1), 0) +
+          edges.reduce((sum, e) => sum + segmentBoxOverlap(e.sx, e.sy, e.ex, e.ey, b) * e.width * 4, 0);
       };
-      let slot = this.labelSlots.get(p.v.id);
-      if (slot === undefined) {
-        slot = candidates.reduce((best, b, i) => score(b) < score(candidates[best]!) ? i : best, 0);
-        this.labelSlots.set(p.v.id, slot);
-      }
-      const candidate = candidates[slot]!;
-      const box = { ...candidate, x: Math.max(2, Math.min(candidate.x, this.width - w - 2)), y: Math.max(2, Math.min(candidate.y, this.height - h - 2)) };
-      occupied.push(box);
-      labels.push({ p, box, w, h, important, leader: slot >= 4 });
+      const previous = this.labelSlots.get(p.v.id);
+      const slot = previous ?? candidates.reduce((best, b, i) => score(b) < score(candidates[best]!) ? i : best, 0);
+      if (previous === undefined) this.labelSlots.set(p.v.id, slot);
+      // Like AS labels, follow the projected object; let the canvas clip at its edge instead of pinning text
+      // to the viewport as an overlay while the router continues to move through the scene.
+      const box = candidates[slot]!;
+      occupied.push({ ...box, weight: 16 });
+      const opacity = fog(p.depth) * (lit(p.v.id) ? 1 : 0.3);
+      scene.push({ depth: p.depth, layer: 0, draw: () => {
+        if (slot >= 4) {
+          ctx.globalAlpha = lit(p.v.id) ? 0.45 : 0.15;
+          ctx.strokeStyle = text;
+          ctx.lineWidth = 0.7;
+          ctx.beginPath();
+          ctx.moveTo(p.sx, p.sy);
+          ctx.lineTo(Math.max(box.x, Math.min(p.sx, box.x + w)), Math.max(box.y, Math.min(p.sy, box.y + h)));
+          ctx.stroke();
+        }
+        ctx.globalAlpha = opacity * 0.18;
+        ctx.fillStyle = background;
+        ctx.fillRect(box.x, box.y, w, h);
+        ctx.globalAlpha = opacity * 0.95;
+        ctx.fillStyle = text;
+        ctx.font = "12px system-ui, sans-serif";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        ctx.fillText(p.v.label, box.x + 5, box.y + h / 2);
+      } });
     }
-    labels.sort((a, b) => Number(a.important) - Number(b.important));
-    for (const { p, box, w, h, leader } of labels) {
-      if (leader) {
-        ctx.globalAlpha = lit(p.v.id) ? 0.45 : 0.15;
-        ctx.strokeStyle = text;
-        ctx.lineWidth = 0.7;
-        ctx.beginPath();
-        ctx.moveTo(p.sx, p.sy);
-        ctx.lineTo(Math.max(box.x, Math.min(p.sx, box.x + w)), Math.max(box.y, Math.min(p.sy, box.y + h)));
-        ctx.stroke();
-      }
-      ctx.globalAlpha = lit(p.v.id) ? 0.9 : 0.25;
-      ctx.fillStyle = background;
-      ctx.fillRect(box.x, box.y, w, h);
-      ctx.fillStyle = text;
-      ctx.textAlign = "left";
-      ctx.textBaseline = "middle";
-      ctx.fillText(p.v.label, box.x + 5, box.y + h / 2);
-    }
+    scene.sort((a, b) => b.depth - a.depth || a.layer - b.layer);
+    for (const item of scene) item.draw();
     ctx.globalAlpha = 1;
   }
 
@@ -835,6 +871,19 @@ export class ForceGraph3D {
   };
 }
 
+/** Length of a projected link inside a padded label box (Liang-Barsky clipping). */
+function segmentBoxOverlap(ax: number, ay: number, bx: number, by: number, box: { x: number; y: number; w: number; h: number }): number {
+  const dx = bx - ax, dy = by - ay;
+  let from = 0, to = 1;
+  for (const [p, q] of [[-dx, ax - box.x + 2], [dx, box.x + box.w + 2 - ax], [-dy, ay - box.y + 2], [dy, box.y + box.h + 2 - ay]] as const) {
+    if (p === 0) { if (q < 0) return 0; else continue; }
+    const t = q / p;
+    if (p < 0) from = Math.max(from, t); else to = Math.min(to, t);
+    if (from > to) return 0;
+  }
+  return Math.hypot(dx, dy) * (to - from);
+}
+
 function segmentDistance(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {
   const dx = bx - ax, dy = by - ay;
   const l = dx * dx + dy * dy;
@@ -847,6 +896,21 @@ function hash(s: string): number {
   let h = 0;
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
   return ((h >>> 0) % 1000) / 1000;
+}
+
+/** Fibonacci sphere seeds a volume deterministically; the solver remains free to move in all three axes. */
+function spherePoint(index: number, count: number, phase: number): Point {
+  const y = 1 - 2 * (index + 0.5) / count;
+  const radial = Math.sqrt(Math.max(0, 1 - y * y));
+  const angle = index * Math.PI * (3 - Math.sqrt(5)) + phase;
+  return { x: Math.cos(angle) * radial, y, z: Math.sin(angle) * radial };
+}
+
+function stableDirection(key: string): Point {
+  const y = 2 * hash(`${key}:y`) - 1;
+  const radial = Math.sqrt(Math.max(0, 1 - y * y));
+  const angle = hash(`${key}:angle`) * Math.PI * 2;
+  return { x: Math.cos(angle) * radial, y, z: Math.sin(angle) * radial };
 }
 
 function centroid(vs: Array<{ x: number; y: number; z: number }>): { x: number; y: number; z: number } {

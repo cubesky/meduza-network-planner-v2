@@ -20,11 +20,15 @@ function setup(width = 1200, height = 650) {
   const captured = new Set<number>();
   let clicks = 0;
   const labels: Array<{ text: string; x: number; y: number }> = [];
+  const paints: Array<{ kind: string; color: string; alpha: number; text?: string }> = [];
   let clears = 0;
-  const ctx = new Proxy({
+  const ctx: any = new Proxy({
     measureText: (s: string) => ({ width: s.length * 7 }),
-    clearRect: () => { labels.length = 0; clears++; },
-    fillText: (text: string, x: number, y: number) => labels.push({ text, x, y }),
+    clearRect: () => { labels.length = 0; paints.length = 0; clears++; },
+    fillText: (text: string, x: number, y: number) => { labels.push({ text, x, y }); paints.push({ kind: "text", color: ctx.fillStyle, alpha: ctx.globalAlpha, text }); },
+    fillRect: () => paints.push({ kind: "background", color: ctx.fillStyle, alpha: ctx.globalAlpha }),
+    fill: () => paints.push({ kind: "fill", color: ctx.fillStyle, alpha: ctx.globalAlpha }),
+    stroke: () => paints.push({ kind: "stroke", color: ctx.strokeStyle, alpha: ctx.globalAlpha }),
   }, { get: (target: any, key) => target[key] ?? (() => {}) });
   const canvas = {
     width, height, style: { cursor: "" }, getContext: () => ctx,
@@ -38,7 +42,7 @@ function setup(width = 1200, height = 650) {
   const event = (name: string, fields: Record<string, unknown> = {}) => events.get(name)?.({
     type: name, pointerId: 1, button: 0, clientX: 5, clientY: 5, preventDefault() {}, ...fields,
   });
-  return { graph, event, events, captured, canvas, labels, clears: () => clears, clicks: () => clicks,
+  return { graph, event, events, captured, canvas, labels, paints, clears: () => clears, clicks: () => clicks,
     resize: (w: number, h: number) => { width = w; height = h; graph.fit(); } };
 }
 
@@ -60,23 +64,71 @@ function populate(graph: any, ticks = 400) {
   return d;
 }
 
-test("topology: clusters remain visibly separated and fit a wide viewport", () => {
+test("topology: cluster spheres stay separated in 3D and fit a wide viewport", () => {
   const { graph } = setup(1300, 560);
   populate(graph);
   graph.fitGraph();
-  const bubbles = graph.bubbles().map((b: any) => ({ ...graph.project(b.x, b.y, b.z), r: b.r }));
+  const bubbles = graph.bubbles().map((b: any) => ({ ...b, ...graph.project(b.x, b.y, b.z) }));
   for (let i = 0; i < bubbles.length; i++) {
     const a = bubbles[i]!;
     assert.ok(a.visible);
     assert.ok(a.sx - a.r * a.scale > 25 && a.sx + a.r * a.scale < 1275);
     assert.ok(a.sy - a.r * a.scale > 25 && a.sy + a.r * a.scale < 535);
-    for (const b of bubbles.slice(i + 1)) assert.ok(Math.hypot(a.sx - b.sx, a.sy - b.sy) > a.r * a.scale + b.r * b.scale + 12, "clusters have a real screen-space gap");
+    for (const b of bubbles.slice(i + 1)) assert.ok(Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z) > a.r + b.r + 25, "cluster spheres have a real world-space gap");
   }
-  const before = Math.hypot(graph.vertices.get("as1-0").x, graph.vertices.get("as1-0").y);
+  const v = graph.vertices.get("as1-0");
+  const before = Math.hypot(v.x, v.y, v.z);
   graph.setSpacing(2.5);
   for (let i = 0; i < 400; i++) graph.tick();
-  assert.ok(Math.hypot(graph.vertices.get("as1-0").x, graph.vertices.get("as1-0").y) > before * 1.2);
+  assert.ok(Math.hypot(v.x, v.y, v.z) > before * 1.2);
   graph.destroy();
+});
+
+/** Rotation-independent volume of a point cloud: zero for any plane, including a tilted one. */
+function volume(points: Array<{ x: number; y: number; z: number }>): number {
+  const mean = (key: "x" | "y" | "z") => points.reduce((sum, p) => sum + p[key], 0) / points.length;
+  const center = [mean("x"), mean("y"), mean("z")];
+  const cov = Array.from({ length: 3 }, (_, i) => Array.from({ length: 3 }, (_, j) => points.reduce((sum, p) => {
+    const v = [p.x, p.y, p.z];
+    return sum + (v[i]! - center[i]!) * (v[j]! - center[j]!);
+  }, 0) / points.length));
+  const [a, b, c] = cov as [number[], number[], number[]];
+  const determinant = a[0]! * (b[1]! * c[2]! - b[2]! * c[1]!) - a[1]! * (b[0]! * c[2]! - b[2]! * c[0]!) + a[2]! * (b[0]! * c[1]! - b[1]! * c[0]!);
+  return determinant / Math.max(1, (a[0]! + b[1]! + c[2]!) ** 3);
+}
+
+test("topology: settled AS clusters and their members occupy a volume instead of any plane", () => {
+  const { graph } = setup();
+  const d = populate(graph, 600);
+  assert.ok(volume(graph.bubbles()) > 0.002, "AS centers have substantial depth independent of camera rotation");
+  const members = [...graph.vertices.values()].filter((v: any) => v.group === "as0");
+  assert.ok(volume(members as any) > 0.001, "the seven members of an AS spread through all three dimensions");
+  const positions = [...graph.vertices.values()].map((v: any) => [v.id, v.x, v.y, v.z]);
+  graph.setData([...d.vertices].reverse(), [...d.links].reverse(), [...d.groups].reverse());
+  for (let frame = 0; frame < 60; frame++) graph.tick();
+  assert.deepEqual([...graph.vertices.values()].map((v: any) => [v.id, v.x, v.y, v.z]), positions, "polling does not restart the settled volume");
+  graph.destroy();
+});
+
+test("topology: cluster collision separates bodies along depth and resolves exact coincidence deterministically", () => {
+  const run = (coincident: boolean) => {
+    const { graph } = setup();
+    graph.setData(["a", "b"].map((id) => ({ id, group: id, label: id, radius: 10, shape: "circle", color: "#5cb" })), [], ["a", "b"].map((id) => ({ id, label: id, color: "#5cb" })));
+    for (const [i, v] of [...graph.vertices.values()].entries()) Object.assign(v as object, { x: 0, y: 0, z: coincident ? 0 : i ? 10 : -10, vx: 0, vy: 0, vz: 0 });
+    graph.anchors.set("group:a", { x: 0, y: 0, z: 0 }); graph.anchors.set("group:b", { x: 0, y: 0, z: 0 });
+    for (let frame = 0; frame < 30; frame++) graph.tick();
+    const a = graph.vertices.get("a"), b = graph.vertices.get("b");
+    const result = [a.x, a.y, a.z, b.x, b.y, b.z];
+    assert.ok(result.every(Number.isFinite));
+    if (!coincident) {
+      assert.ok(Math.abs(b.z - a.z) > 100, "depth-aligned overlapping spheres must separate along Z");
+      assert.ok(Math.abs(a.x) + Math.abs(a.y) + Math.abs(b.x) + Math.abs(b.y) < 0.001, "a Z collision must not invent a sideways displacement");
+    }
+    graph.destroy();
+    return result;
+  };
+  run(false);
+  assert.deepEqual(run(true), run(true), "coincident bodies use a stable three-dimensional direction");
 });
 
 test("topology: node dragging follows the screen at every orbit angle, including after report refresh", () => {
@@ -232,5 +284,70 @@ test("topology: viewport resizing refits a framed graph and does not erase an un
   assert.deepEqual(graph.target, target); assert.equal(graph.yaw, yaw); assert.equal(graph.pitch, pitch);
   resize(480, 320);
   assert.equal(graph.distance, distance, "resize round trips do not accumulate camera drift");
+  graph.destroy();
+});
+
+test("topology: label panels are translucent and foreground nodes/links occlude distant labels", () => {
+  const { graph, paints } = setup(800, 500);
+  graph.setData([
+    { id: "far", label: "Distant IP", radius: 10, shape: "circle", color: "#far" },
+    { id: "near", label: "Near router", radius: 10, shape: "circle", color: "#near" },
+    { id: "left", label: "Left", radius: 10, shape: "circle", color: "#left" },
+    { id: "right", label: "Right", radius: 10, shape: "circle", color: "#right" },
+  ], [{ id: "front", source: "left", target: "right", color: "#front-link", length: 100, width: 2, particles: 0 }]);
+  graph.yaw = graph.pitch = 0; graph.distance = 600; graph.target = { x: 0, y: 0, z: 0 };
+  Object.assign(graph.vertices.get("far"), { x: 0, y: 0, z: 0 });
+  Object.assign(graph.vertices.get("near"), { x: 0, y: 16, z: 200 });
+  Object.assign(graph.vertices.get("left"), { x: -100, y: 16, z: 200 });
+  Object.assign(graph.vertices.get("right"), { x: 100, y: 16, z: 200 });
+  graph.labelSlots.set("far", 0); // Force an overlap to exercise depth handling even when no clear slot exists.
+  graph.draw();
+  const label = paints.findIndex((p) => p.kind === "text" && p.text === "Distant IP");
+  const node = paints.findIndex((p) => p.kind === "fill" && p.color === "#near");
+  const link = paints.findIndex((p) => p.kind === "stroke" && p.color === "#front-link");
+  assert.ok(label >= 0 && node > label, "a distant label cannot paint over a nearer router");
+  assert.ok(link > label, "a distant label cannot erase a nearer link");
+  const backgrounds = paints.filter((p) => p.kind === "background");
+  assert.ok(backgrounds.length > 0 && backgrounds.every((p) => p.alpha > 0 && p.alpha <= 0.25), "background panels preserve the scene beneath them");
+  graph.destroy();
+});
+
+test("topology: label placement avoids a crossing link and keeps its choice through hover", () => {
+  const { graph, labels } = setup(800, 500);
+  graph.setData(["a", "left", "right"].map((id) => ({ id, label: id, radius: 10, shape: "circle", color: "#5cb" })), [
+    { id: "crossing", source: "left", target: "right", color: "#front-link", length: 100, width: 2, particles: 0 },
+  ]);
+  graph.yaw = graph.pitch = 0; graph.distance = 600; graph.target = { x: 0, y: 0, z: 0 };
+  Object.assign(graph.vertices.get("a"), { x: 0, y: 0, z: 0 });
+  Object.assign(graph.vertices.get("left"), { x: -200, y: 24.5, z: 0 });
+  Object.assign(graph.vertices.get("right"), { x: 200, y: 24.5, z: 0 });
+  graph.draw();
+  const before = { ...labels.find((l) => l.text === "a")! };
+  assert.ok(before.y < 250, "choose the clear side instead of covering the link below the router");
+  graph.hover = { kind: "vertex", id: "a" }; graph.draw();
+  assert.deepEqual(labels.find((l) => l.text === "a"), before);
+  graph.destroy();
+});
+
+test("topology: depth-spanning links draw their far and near sections on either side of labels", () => {
+  const { graph, paints, labels } = setup(800, 500);
+  graph.setData(["a", "left", "right"].map((id) => ({ id, label: id, radius: 10, shape: "circle", color: "#5cb" })), [
+    { id: "depth", source: "left", target: "right", color: "#depth-link", length: 100, width: 2, particles: 0, dash: [4, 4] },
+  ]);
+  graph.yaw = graph.pitch = 0; graph.distance = 600; graph.target = { x: 0, y: 0, z: 0 };
+  Object.assign(graph.vertices.get("a"), { x: 0, y: 0, z: 0 });
+  Object.assign(graph.vertices.get("left"), { x: -200, y: 24.5, z: -300 });
+  Object.assign(graph.vertices.get("right"), { x: 200, y: 24.5, z: 300 });
+  graph.draw();
+  const label = paints.findIndex((p) => p.kind === "text" && p.text === "a");
+  assert.ok(paints.slice(0, label).some((p) => p.kind === "stroke" && p.color === "#depth-link"));
+  assert.ok(paints.slice(label + 1).some((p) => p.kind === "stroke" && p.color === "#depth-link"));
+  graph.labelSlots.set("a", 2);
+  graph.vertices.get("a").x = 360;
+  graph.draw();
+  const before = labels.find((l) => l.text === "a")!.x;
+  graph.vertices.get("a").x += 10;
+  graph.draw();
+  assert.equal(labels.find((l) => l.text === "a")!.x - before, 10, "a label follows its 3D object instead of sticking to a viewport edge");
   graph.destroy();
 });

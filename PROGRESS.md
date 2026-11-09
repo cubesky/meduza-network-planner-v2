@@ -1263,3 +1263,25 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   vertices, matching canvas/DPR sizes, stable labels and bounded selected-router details. Shared/Manager/
   Dashboard type checks and Manager production build pass. Logs: target/check-topology-stability-{before,
   final,browser,types,build}.log; screenshot: target/topology-stability.png. Source-only; update Manager to deploy.
+- 2026-11-09 (per the user) Prevent topology labels from covering rendered geometry (D78).
+  Node/IP and AS labels now join the depth-sorted scene, with nodes/links winning equal-depth ties. Split
+  depth-spanning links for foreground/background ordering while retaining dashes and traffic particles.
+  Separate text from low-opacity panel painting (18% node / 16% AS maximum); consider link intersections,
+  strongly penalize node/label overlap and add diagonal placement candidates. Keep hover/report placement
+  stable and attach labels to their object's projection rather than the viewport edge. Two regressions fail
+  before the fix; all 12 graph tests plus 3 i18n tests pass, including split-depth links and edge movement.
+  Actual Manager Chrome checks pass for translucency, stable labels and six viewport transitions; front and
+  rotated previews inspected. Type checks and production build pass. Logs: target/check-topology-occlusion-
+  {before,final,browser,types,build}.log; previews: target/topology-occlusion.png and topology-occlusion-orbit.png.
+  Source-only; updating Manager deploys the change. No Git submission or production modifications.
+- 2026-11-09 (per the user) Give topology a true three-dimensional force layout (D79).
+  Replace planar AS anchors/collision and member flattening with deterministic spherical placement and
+  X/Y/Z repulsion, springs and collision. AS bodies separate in space as a whole; group members retain
+  depth after settling. Preserve existing camera, spacing control, translucent depth-sorted labels and
+  stable report refresh. New regressions fail before and pass after; all 14 graph tests plus 3 i18n tests
+  pass, including rotation-independent volume, Z-only collision and deterministic coincident separation.
+  Actual Manager Chrome checks pass for group/member depth, six viewport transitions, stable labels and
+  bounded details. Front and rotated previews inspected; type checks and production build pass.
+  Logs: target/check-topology-volume-{before,after,final,browser,types,build}.log; previews:
+  target/topology-volume.png and topology-volume-orbit.png. Source-only; update Manager to deploy.
+  No Git submission or production modifications.
