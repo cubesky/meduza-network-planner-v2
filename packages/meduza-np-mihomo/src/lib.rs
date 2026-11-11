@@ -51,6 +51,8 @@ pub struct MihomoConfig {
     #[serde(default)]
     pub api: Api,
     #[serde(default)]
+    pub web_ui: WebUi,
+    #[serde(default)]
     pub dns: MihomoDns,
     #[serde(default)]
     pub subscriptions: Vec<Subscription>,
@@ -102,6 +104,63 @@ fn default_api_addr() -> IpAddr {
 }
 fn default_api_port() -> u16 {
     9090
+}
+
+pub const DEFAULT_WEB_UI_URL: &str = "https://github.com/MetaCubeX/metacubexd/archive/refs/heads/gh-pages.zip";
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WebUi {
+    /// auto: inherit a subscription panel; enabled: also use MetaCubeXD when no URL is specified; disabled: no panel.
+    #[serde(default)]
+    pub mode: WebUiMode,
+    /// Optional HTTP(S) panel archive URL, overriding the subscription. Downloaded by Mihomo into persistent storage.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(regex(pattern = r"^https?://[^\s/@]+(?:[/?#][^\s]*)?$"))]
+    pub url: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum WebUiMode {
+    #[default]
+    Auto,
+    Enabled,
+    Disabled,
+}
+
+fn valid_web_ui_url(url: &str) -> bool {
+    let authority = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")).unwrap_or_default();
+    !authority.split(['/', '?', '#']).next().unwrap_or_default().is_empty()
+        && !authority.split(['/', '?', '#']).next().unwrap_or_default().contains('@')
+        && !url.chars().any(|c| c.is_whitespace() || c.is_control() || matches!(c, '\'' | '"' | '\\'))
+}
+
+/// The subscription may select a download, never an arbitrary host directory. A source-specific directory lets
+/// Mihomo download a changed panel without overwriting the last cached panel before its replacement succeeds.
+fn web_ui_fields(
+    subscription: &serde_json::Map<String, Value>,
+    controlled: &serde_json::Map<String, Value>,
+) -> Result<Option<(String, String)>, String> {
+    if controlled.get("external-ui") == Some(&Value::Null) {
+        return Ok(None);
+    }
+    let url = controlled.get("external-ui-url").or_else(|| subscription.get("external-ui-url"));
+    let requested = controlled.contains_key("external-ui")
+        || url.is_some()
+        || subscription.get("external-ui").and_then(Value::as_str).is_some_and(|p| !p.is_empty());
+    if !requested {
+        return Ok(None);
+    }
+    let url = match url {
+        Some(Value::String(s)) if !s.is_empty() => s.as_str(),
+        Some(Value::String(_)) | Some(Value::Null) | None => DEFAULT_WEB_UI_URL,
+        _ => return Err("external-ui-url must be an HTTP(S) archive URL".into()),
+    };
+    if !valid_web_ui_url(url) {
+        return Err("external-ui-url must be an HTTP(S) archive URL without credentials".into());
+    }
+    Ok(Some((format!("ui/{}", sha256_hex(url.as_bytes())), url.into())))
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -458,6 +517,9 @@ pub fn validate(cfg: &MihomoConfig, req: &PluginRequest) -> Vec<ValidationError>
     if !cfg.enabled {
         return Vec::new();
     }
+    if let Some(url) = &cfg.web_ui.url {
+        v.check(valid_web_ui_url(url), "/webUi/url", "panel URL must be HTTP(S) without credentials");
+    }
     match &cfg.api.secret_ref {
         None => v.error("/api/secretRef", "an API secret is required (generate a per-node secret)"),
         Some(r) => v.check(
@@ -613,6 +675,7 @@ fn normalize_with_context(
         return Err("subscription contains no proxies or proxy-providers".into());
     }
     let mut overridden = Vec::new();
+    let web_ui = web_ui_fields(&map, controlled)?;
     let inherit = controlled.get("dns").is_some_and(|d| d.get("enable") == Some(&Value::Bool(true)) && d.get("nameserver").is_none());
     let mut inherited_dns =
         if inherit { map.get("dns").and_then(Value::as_object).cloned().unwrap_or_default() } else { Default::default() };
@@ -625,6 +688,9 @@ fn normalize_with_context(
         }
     }
     for (k, v) in controlled {
+        if ["external-ui", "external-ui-url", "external-ui-name"].contains(&k.as_str()) {
+            continue;
+        }
         if k == "dns" && inherit {
             for (key, value) in v.as_object().ok_or("controlled DNS is not an object")? {
                 if inherited_dns.contains_key(key) {
@@ -636,6 +702,10 @@ fn normalize_with_context(
         } else {
             map.insert(k.clone(), v.clone());
         }
+    }
+    if let Some((path, url)) = web_ui {
+        map.insert("external-ui".into(), Value::String(path));
+        map.insert("external-ui-url".into(), Value::String(url));
     }
     if let Some(d) = map.get("dns") {
         dns::validate_effective(d, context)?;
@@ -660,6 +730,18 @@ pub fn controlled_fields(cfg: &MihomoConfig, secret: &str) -> serde_json::Map<St
     );
     m.insert("external-controller".into(), Value::String(SocketAddr::new(cfg.api.address, cfg.api.port).to_string()));
     m.insert("secret".into(), Value::String(secret.into()));
+    match cfg.web_ui.mode {
+        WebUiMode::Disabled => {
+            m.insert("external-ui".into(), Value::Null);
+        }
+        WebUiMode::Enabled => {
+            m.insert("external-ui".into(), Value::String("ui".into()));
+        }
+        WebUiMode::Auto => {}
+    }
+    if let Some(url) = &cfg.web_ui.url {
+        m.insert("external-ui-url".into(), Value::String(url.clone()));
+    }
     if cfg.mode == Mode::Tproxy {
         m.insert("tproxy-port".into(), Value::from(cfg.tproxy.port));
         m.insert("routing-mark".into(), Value::from(cfg.tproxy.fwmark + 1)); // own outbound traffic is never re-marked
@@ -1116,6 +1198,73 @@ mod tests {
         m["tproxy"]["sideRouter"]["gateway"] = json!("192.0.2.1");
         let r = req(m);
         assert!(validate(&load(&r).unwrap().unwrap(), &r).iter().any(|e| e.path == "/tproxy/sideRouter/gateway"));
+    }
+
+    #[test]
+    fn web_ui_inherits_download_url_in_a_managed_persistent_directory() {
+        let cfg = load(&req(base())).unwrap().unwrap();
+        let sub = "proxies: []\nexternal-ui: /etc/clash/ui\nexternal-ui-name: ../../private\nexternal-ui-url: https://example.com/panel.zip\nexternal-controller: 0.0.0.0:9999\nsecret: subscription-secret\n";
+        let (yaml, _) = normalize(sub, &controlled_fields(&cfg, "node-api-secret")).unwrap();
+        let out: Value = serde_norway::from_str(&yaml).unwrap();
+        assert!(out["external-ui"].as_str().unwrap().starts_with("ui/"));
+        assert_eq!(out["external-ui-url"], "https://example.com/panel.zip");
+        assert!(out.get("external-ui-name").is_none(), "subscription cannot choose paths outside the managed directory");
+        assert_eq!(out["external-controller"], "127.0.0.1:9090");
+        assert_eq!(out["secret"], "node-api-secret");
+        let (yaml, _) = normalize("proxies: []\n", &controlled_fields(&cfg, "secret")).unwrap();
+        let out: Value = serde_norway::from_str(&yaml).unwrap();
+        assert!(out.get("external-ui").is_none(), "auto mode does not download a UI for subscriptions that never requested it");
+    }
+
+    #[test]
+    fn web_ui_node_settings_override_subscription_and_can_disable_it() {
+        let sub = "proxies: []\nexternal-ui-url: https://example.com/subscription.zip\n";
+        for (settings, expected) in [
+            (json!({"mode":"enabled"}), Some("https://example.com/subscription.zip")),
+            (json!({"mode":"auto", "url":"https://example.com/custom.zip"}), Some("https://example.com/custom.zip")),
+            (json!({"mode":"disabled", "url":"https://example.com/custom.zip"}), None),
+        ] {
+            let mut config = base();
+            config["webUi"] = settings;
+            let cfg = load(&req(config)).unwrap().unwrap();
+            let (yaml, _) = normalize(sub, &controlled_fields(&cfg, "secret")).unwrap();
+            let out: Value = serde_norway::from_str(&yaml).unwrap();
+            assert_eq!(out.get("external-ui-url").and_then(Value::as_str), expected);
+            assert_eq!(out.get("external-ui").is_some(), expected.is_some());
+        }
+        let mut config = base();
+        config["webUi"] = json!({"mode":"enabled"});
+        let cfg = load(&req(config)).unwrap().unwrap();
+        let (yaml, _) = normalize("proxies: []\n", &controlled_fields(&cfg, "secret")).unwrap();
+        let out: Value = serde_norway::from_str(&yaml).unwrap();
+        assert!(out["external-ui"].as_str().unwrap().starts_with("ui/"));
+        assert_eq!(out["external-ui-url"], "https://github.com/MetaCubeX/metacubexd/archive/refs/heads/gh-pages.zip");
+    }
+
+    #[test]
+    fn web_ui_rejects_non_http_downloads_and_keeps_other_listeners_controlled() {
+        for url in [
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "https://",
+            "https://user:password@example.com/ui.zip",
+            "https://example.com/\nui.zip",
+        ] {
+            let mut config = base();
+            config["webUi"] = json!({"mode":"enabled","url":url});
+            let request = req(config);
+            let cfg = load(&request).unwrap().unwrap();
+            assert!(validate(&cfg, &request).iter().any(|p| p.path == "/webUi/url"), "{url}");
+        }
+        let cfg = load(&req(base())).unwrap().unwrap();
+        assert!(normalize("proxies: []\nexternal-ui-url: file:///etc/passwd\n", &controlled_fields(&cfg, "secret")).is_err());
+        let (yaml, _) = normalize(
+            "proxies: []\nexternal-ui-url: https://example.com/ui.zip\nsocks-port: 7891\nredir-port: 7892\n",
+            &controlled_fields(&cfg, "secret"),
+        )
+        .unwrap();
+        let out: Value = serde_norway::from_str(&yaml).unwrap();
+        assert!(out.get("socks-port").is_none() && out.get("redir-port").is_none());
     }
 
     #[test]

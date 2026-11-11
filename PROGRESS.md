@@ -1329,3 +1329,25 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   shipped-LuCI-module tests pass; LuCI regressions added to web CI. Update planner and dashboard-openwrt
   together. Evidence: target/check-console-features-tests.log and target/check-openwrt-status-tests.log.
   Source-only; no Git submission or production modifications.
+
+- 2026-11-11 (per the user) Support Mihomo's native web panel (D84).
+  Inherit subscription UI requests by default; add explicit enable/disable and archive URL controls in
+  the shared Manager/Dashboard descriptor. Keep controller binding and per-node credentials owned.
+  Let the core download into persistent URL-derived UI directories, restart it when the static route
+  changes, and prune obsolete owned caches only after the replacement is ready. Failed downloads keep
+  the proxy/API running and retain the previous cache. Actual Mihomo v1.19.33/worker checks pass for
+  download, /ui/, auth, offline restart, refresh switching, cleanup and failed-download isolation.
+  Plugin, protocol/manifest, translation, strict Clippy and browser form checks pass. Evidence:
+  target/check-mihomo-ui-{tests,protocol,clippy,real,browser,i18n}.log. Source-only; no Git submission
+  or production modifications.
+
+- 2026-11-12 (per the user) Native Mihomo panel launch buttons in Dashboard and LuCI (D85).
+  Gate entries on enabled native-panel status, including the ordinary dashboard's anonymous login page.
+  Per the user's clarification, anonymous Dashboard clicks directly hand off endpoint/secret without login.
+  A dedicated explicit POST and LuCI write ACL govern on-demand credentials; other management APIs keep
+  authentication and public polling exposes only availability/address. Use
+  native MetaCubeXD setup fragments, node hostname substitution, IPv6 and explicit loopback handling.
+  The worker owns 0600 ephemeral credentials, deletes them when unavailable/stopped and the planner
+  rejects expired/malformed state. Browser, URL/ACL, real HTTP/UDS, Rust, strict Clippy and production
+  build checks are recorded in target/check-panel-launch-*.log. Source-only; no production changes or
+  Git submission. Update planner/cli/mihomo and the selected dashboard together.

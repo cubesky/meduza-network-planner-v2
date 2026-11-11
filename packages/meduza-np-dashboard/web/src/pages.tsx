@@ -4,6 +4,7 @@ import { BinaryProgress, PackageProgress, progressFromStatus } from "@meduza-np/
 import { PackageResourceCard, type PackageResources } from "@meduza-np/ui-kit/package-resources";
 import { Badge, Button, Card, Field, Loadable, StateBadge, Table, TextInput, NumberInput, Checkbox, bytes, relativeTime, toast, useAsync } from "@meduza-np/ui-kit";
 import { errorText, get, post, roleAtLeast, type Feature, type PackageStatus, type Report, type Session } from "./api.ts";
+import { mihomoPanelUrl, type MihomoPanel } from "./mihomo-panel.ts";
 
 const kib = (v: number | undefined) => (v == null ? "—" : bytes(v * 1024));
 
@@ -51,6 +52,7 @@ export function OverviewPage(props: { session: Session }) {
             )}
           </Card>
           <MaintenanceCard report={r} session={props.session} />
+          <MihomoPanelCard />
           <PackageProgress progress={r.update} reportedAt={r.observedAt} />
           {r.instances.filter((i) => i.kind === "mihomo-provider" && (i.mode === "auto-download" || i.downloadProgress)).map((i) => <BinaryProgress
             name="Mihomo" progress={i.downloadProgress} providerState={i.providerState} reason={i.reason}
@@ -72,6 +74,28 @@ export function OverviewPage(props: { session: Session }) {
       )}
     </Loadable>
   );
+}
+
+export function MihomoPanelCard() {
+  const [busy, setBusy] = useState(false);
+  const status = useAsync(() => get<{enabled:boolean;ready:boolean}>("/api/mihomo/panel/status"), [], 10000);
+  if (!status.data?.enabled) return null;
+  const open = async () => {
+    const tab = window.open("about:blank", "_blank");
+    if (!tab) { toast("请允许弹出窗口以打开 Mihomo 面板。", "bad"); return; }
+    tab.opener = null;
+    setBusy(true);
+    try {
+      const info = await post<MihomoPanel>("/api/mihomo/panel", {});
+      tab.location.replace(mihomoPanelUrl(info, window.location.hostname));
+    } catch (e) {
+      tab.close();
+      toast(errorText(e), "bad");
+    } finally { setBusy(false); }
+  };
+  return <Card title="Mihomo" actions={<Button small disabled={busy} onClick={() => void open()}>打开 Mihomo 面板</Button>}>
+    <p class="small muted">自动使用当前节点的地址和 API 密钥连接。</p>
+  </Card>;
 }
 
 function MaintenanceCard(props: { report: Report; session: Session }) {

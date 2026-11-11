@@ -241,6 +241,37 @@ of the planner service (or the procd init script) stops them.
 
 ### Mihomo DNS and TPROXY on a side router
 
+Mihomo can serve its native panel at `http://<controller-address>:<controller-port>/ui/`.
+In the node's Mihomo settings, **Web panel** offers `auto` (inherit the subscription's panel), `enabled`
+(use the subscription/custom URL, or MetaCubeXD if none is provided) and `disabled`. The optional archive
+URL overrides the subscription. For example, merge this into the existing service, preserving its API secret:
+
+```json
+{
+  "webUi": { "mode": "enabled" },
+  "api": { "address": "0.0.0.0", "port": 9090, "secretRef": "<existing-per-node-secret>" }
+}
+```
+
+Set the API address explicitly when LAN access is wanted; its default remains loopback. After saving and
+applying, open `/ui/` on that API address and configure the panel with the same API endpoint and node secret.
+Mihomo downloads/unpacks the panel and keeps it in persistent storage for offline restarts. Subscription
+paths are replaced with an owned cache directory. A source change switches to a new cache, removing the
+previous one only after the replacement is ready. Download failures leave the proxy running; inspect the
+Mihomo process log for its native UI downloader error. Updates of an unchanged source can use the panel's
+native UI update function. The project does not bundle panel files into the adapter package.
+
+Dashboard and LuCI show **Open Mihomo panel** only while Mihomo and its native panel are enabled.
+The Dashboard login page also shows this entry and permits direct connection without signing in, as
+requested: anyone who can access this enabled Dashboard entry can use the Mihomo controller credential.
+Clicking it (or using LuCI with write access) opens the native panel and supplies its endpoint,
+port and secret using MetaCubeXD's setup fragment. The secret is fetched on demand and never added
+to the general report or public availability response. Wildcard listeners use the browser's node hostname,
+including IPv6; loopback-only listeners require a local browser or an explicit LAN API address.
+The panel must finish downloading before the credential connection becomes available. Upgrade planner,
+cli, mihomo and the selected dashboard package together for this button. Custom panels need to understand
+the MetaCubeXD setup-link format to auto-connect.
+
 Mihomo DNS is configured explicitly in the node's Mihomo settings. Subscription DNS is replaced, including its
 listener and upstreams. Enabling TPROXY alone does not enable Mihomo DNS or install/enable dnsmasq. A fragment
 to merge into an existing Mihomo service (keep its API secret and subscription settings) is:

@@ -81,15 +81,26 @@ fn fill_set(table: &str, ips: &[String]) -> Result<(), String> {
 
 fn write_atomic(path: &Path, content: &str, mode: u32) {
     let tmp = path.with_extension("tmp");
-    if std::fs::write(&tmp, content).is_ok() {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(mode);
+    }
+    #[cfg(not(unix))]
+    let _ = mode;
+    if let Ok(mut file) = options.open(&tmp) {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode));
+            if file.set_permissions(std::fs::Permissions::from_mode(mode)).is_err() {
+                return;
+            }
         }
-        #[cfg(not(unix))]
-        let _ = mode;
-        let _ = std::fs::rename(&tmp, path);
+        if file.write_all(content.as_bytes()).is_ok() {
+            let _ = std::fs::rename(&tmp, path);
+        }
     }
 }
 
@@ -139,6 +150,50 @@ fn publish_subscriptions(path: &Path, subs: &BTreeMap<String, SubState>) {
     write_atomic(path, &state.to_string(), 0o644);
 }
 
+fn ui_path(yaml: &str) -> Option<String> {
+    serde_norway::from_str::<Value>(yaml).ok()?.get("external-ui")?.as_str().map(str::to_string)
+}
+
+/// Kept out of the public state and reports; only the privileged local control method reads this file.
+fn publish_panel(path: &Path, work: &Path, yaml: &str, api_ready: bool, address: &str, secret: &str) {
+    let enabled = ui_path(yaml).is_some();
+    let ready = api_ready && ui_path(yaml).is_some_and(|p| work.join(p).join("index.html").is_file());
+    write_atomic(
+        &path.with_file_name("mihomo-panel-status.json"),
+        &json!({"enabled":enabled,"ready":ready,"address":address}).to_string(),
+        0o644,
+    );
+    if ready {
+        write_atomic(path, &json!({"address":address,"secret":secret}).to_string(), 0o600);
+    } else {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+/// Only remove obsolete directories of our own URL-derived cache, after the active panel is complete.
+fn prune_ui_cache(work: &Path, yaml: &str) {
+    let Some(active) = ui_path(yaml) else { return };
+    let Some(name) = active.strip_prefix("ui/") else { return };
+    if name.len() != 64 || !name.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return;
+    }
+    if !work.join(&active).join("index.html").is_file() {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(work.join("ui")) else { return };
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let candidate = file_name.to_string_lossy();
+        if candidate != name
+            && candidate.len() == 64
+            && candidate.bytes().all(|c| c.is_ascii_hexdigit())
+            && entry.file_type().is_ok_and(|t| t.is_dir() && !t.is_symlink())
+        {
+            let _ = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
 pub fn run(args: &[String]) -> ! {
     let get = |k: &str| args.windows(2).find(|w| w[0] == k).map(|w| w[1].clone());
     let (Some(mihomo), Some(spec_path), Some(run_dir)) = (get("--mihomo"), get("--spec"), get("--run-dir")) else {
@@ -156,6 +211,9 @@ pub fn run(args: &[String]) -> ! {
     let _ = std::fs::create_dir_all(&work);
     let final_path = PathBuf::from(&run_dir).join("mihomo-final.yaml");
     let state_path = PathBuf::from(&run_dir).join("mihomo-main.state");
+    let panel_path = PathBuf::from(&run_dir).join("mihomo-panel.json");
+    let _ = std::fs::remove_file(&panel_path);
+    let _ = std::fs::remove_file(panel_path.with_file_name("mihomo-panel-status.json"));
     let mut subs: BTreeMap<String, SubState> = spec
         .subscriptions
         .iter()
@@ -181,6 +239,8 @@ pub fn run(args: &[String]) -> ! {
     let mut next_set = Instant::now();
     loop {
         if term() {
+            let _ = std::fs::remove_file(&panel_path);
+            let _ = std::fs::remove_file(panel_path.with_file_name("mihomo-panel-status.json"));
             if let Some(mut c) = child.take() {
                 let _ = c.kill();
                 let _ = c.wait();
@@ -245,7 +305,10 @@ pub fn run(args: &[String]) -> ! {
                     }
                     if yaml != last_final {
                         write_atomic(&final_path, &yaml, 0o600);
+                        // Config reload does not recreate the controller/static-file router. Restart the core
+                        // when the UI path changes, including enabling or disabling an inherited panel.
                         let reloaded = child.is_some()
+                            && ui_path(&yaml) == ui_path(&last_final)
                             && api_call(
                                 &spec.api,
                                 &secret,
@@ -284,10 +347,13 @@ pub fn run(args: &[String]) -> ! {
         }
         if let Some(c) = child.as_mut() {
             if let Ok(Some(status)) = c.try_wait() {
+                let _ = std::fs::remove_file(&panel_path);
+                let _ = std::fs::remove_file(panel_path.with_file_name("mihomo-panel-status.json"));
                 eprintln!("mihomo exited: {status}");
                 std::process::exit(status.code().unwrap_or(1));
             }
         }
+        prune_ui_cache(&work, &last_final);
         // 3. Keep the proxy-server bypass set current (also after planner re-created the table).
         if spec.tproxy && !last_final.is_empty() && Instant::now() >= next_set {
             let ips = resolve_v4(&crate::proxy_servers(&last_final));
@@ -318,6 +384,7 @@ pub fn run(args: &[String]) -> ! {
             .ok()
             .and_then(|(_, b)| serde_json::from_str::<Value>(&b).ok())
             .and_then(|v| v.get("connections").and_then(Value::as_array).map(|a| a.len()));
+        publish_panel(&panel_path, &work, &last_final, version.is_some(), &spec.api, &secret);
         let state = json!({
             "apiReady": version.is_some(),
             "version": version.and_then(|v| v.get("version").cloned()),
@@ -334,5 +401,61 @@ pub fn run(args: &[String]) -> ! {
             }
             std::thread::sleep(Duration::from_millis(100));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn panel_credentials_are_private_and_published_only_while_the_panel_and_api_are_ready() {
+        let root = std::env::temp_dir().join(format!("mnp-panel-file-{}", std::process::id()));
+        let ui = format!("ui/{}", "d".repeat(64));
+        std::fs::create_dir_all(root.join(&ui)).unwrap();
+        let path = root.join("mihomo-panel.json");
+        let yaml = format!("external-ui: {ui}\n");
+        publish_panel(&path, &root, &yaml, true, "0.0.0.0:9090", "private-fixture");
+        assert!(!path.exists());
+        std::fs::write(root.join(ui).join("index.html"), "ready").unwrap();
+        publish_panel(&path, &root, &yaml, true, "0.0.0.0:9090", "private-fixture");
+        let value: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(value["secret"], "private-fixture");
+        let public = std::fs::read_to_string(root.join("mihomo-panel-status.json")).unwrap();
+        assert!(!public.contains("private-fixture") && !public.contains("secret"));
+        assert!(serde_json::from_str::<Value>(&public).unwrap()["enabled"].as_bool().unwrap());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        publish_panel(&path, &root, &yaml, false, "0.0.0.0:9090", "private-fixture");
+        assert!(!path.exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ui_cache_is_pruned_only_after_replacement_is_ready_and_only_for_owned_directories() {
+        let root = std::env::temp_dir().join(format!("mnp-ui-cache-{}", std::process::id()));
+        let old = "a".repeat(64);
+        let current = "b".repeat(64);
+        let link = "c".repeat(64);
+        std::fs::create_dir_all(root.join("ui").join(&old)).unwrap();
+        std::fs::create_dir_all(root.join("ui/custom")).unwrap();
+        std::fs::create_dir_all(root.join("keep")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(root.join("keep"), root.join("ui").join(link)).unwrap();
+        let yaml = format!("external-ui: ui/{current}\n");
+        prune_ui_cache(&root, &yaml);
+        assert!(root.join("ui").join(&old).exists(), "failed/incomplete download keeps previous cache");
+        std::fs::create_dir_all(root.join("ui").join(&current)).unwrap();
+        std::fs::write(root.join("ui").join(&current).join("index.html"), "ready").unwrap();
+        prune_ui_cache(&root, &yaml);
+        assert!(!root.join("ui").join(&old).exists());
+        assert!(root.join("ui").join(&current).join("index.html").exists());
+        assert!(root.join("ui/custom").exists() && root.join("keep").exists());
+        #[cfg(unix)]
+        assert!(root.join("ui").join("c".repeat(64)).is_symlink());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

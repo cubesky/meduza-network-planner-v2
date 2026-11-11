@@ -199,7 +199,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
-        let task = tokio::spawn(serve(listener, app, None, async move {
+        let task = tokio::spawn(serve(listener, app.clone(), None, async move {
             let _ = stop_rx.await;
         }));
         let get = |path: &str| {
@@ -262,6 +262,71 @@ Connection: close
         assert!(r.starts_with("HTTP/1.1 503"), "planner unavailable is reported, not hidden: {r}");
         // a node without the updater: explicit "not available"
         assert!(request(addr, &with_cookie("/api/update/status", "GET", "")).await.contains("\"available\":false"));
+
+        // Panel launch is public, but requires an explicit browser header; GET/polling never return credentials.
+        assert!(request(addr, &get("/api/mihomo/panel")).await.starts_with("HTTP/1.1 401"));
+        assert!(request(addr, &with_cookie("/api/mihomo/panel", "GET", "")).await.starts_with("HTTP/1.1 404"));
+        assert!(request(addr, &with_cookie("/api/mihomo/panel", "POST", "")).await.starts_with("HTTP/1.1 403"));
+        let (viewer_token, viewer) =
+            app.sessions.lock().unwrap().create("viewer".into(), auth::Role::Viewer, std::time::Duration::from_secs(60), "local");
+        let viewer_request = format!("POST /api/mihomo/panel HTTP/1.1\r\nHost: x\r\nCookie: mnp_dash={viewer_token}\r\nX-CSRF-Token: {}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", viewer.csrf);
+        assert!(request(addr, &viewer_request).await.starts_with("HTTP/1.1 403"));
+        assert!(request(addr, &viewer_request.replace("/api/mihomo/panel", "/api/sync")).await.starts_with("HTTP/1.1 403"));
+        let anonymous_sync = "POST /api/sync HTTP/1.1\r\nHost: x\r\nX-Meduza-Panel: open\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        assert!(request(addr, anonymous_sync).await.starts_with("HTTP/1.1 401"));
+        let socket = tokio::net::UnixListener::bind(&app.planner_socket).unwrap();
+        let public_socket = socket;
+        let availability = tokio::spawn(async move {
+            use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+            let (mut stream, _) = public_socket.accept().await.unwrap();
+            let mut line = String::new();
+            tokio::io::BufReader::new(&mut stream).read_line(&mut line).await.unwrap();
+            let call: meduza_np_protocol::local::LocalRequest = serde_json::from_str(&line).unwrap();
+            assert_eq!(call.method, "mihomo.panel.status");
+            let response = meduza_np_protocol::local::LocalResponse::ok(
+                call.id,
+                serde_json::json!({"enabled":true,"ready":true,"address":"0.0.0.0:9090"}),
+            );
+            let mut bytes = serde_json::to_vec(&response).unwrap();
+            bytes.push(b'\n');
+            stream.write_all(&bytes).await.unwrap();
+            public_socket
+        });
+        let public = request(addr, &get("/api/mihomo/panel/status")).await;
+        assert!(public.starts_with("HTTP/1.1 200") && public.contains("\"enabled\":true"));
+        assert!(!public.contains("secret"));
+        let socket = availability.await.unwrap();
+        let planner = tokio::spawn(async move {
+            use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+            for _ in 0..3 {
+                let (mut stream, _) = socket.accept().await.unwrap();
+                let mut line = String::new();
+                tokio::io::BufReader::new(&mut stream).read_line(&mut line).await.unwrap();
+                let call: meduza_np_protocol::local::LocalRequest = serde_json::from_str(&line).unwrap();
+                assert_eq!(call.method, "mihomo.panel");
+                let response = meduza_np_protocol::local::LocalResponse::ok(
+                    call.id,
+                    serde_json::json!({"address":"0.0.0.0:9090","secret":"fixture-panel-secret"}),
+                );
+                let mut bytes = serde_json::to_vec(&response).unwrap();
+                bytes.push(b'\n');
+                stream.write_all(&bytes).await.unwrap();
+            }
+        });
+        for launch in [
+            "POST /api/mihomo/panel HTTP/1.1\r\nHost: x\r\nX-Meduza-Panel: open\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                .to_string(),
+            viewer_request.replace("Content-Length: 0", "X-Meduza-Panel: open\r\nContent-Length: 0"),
+            with_cookie("/api/mihomo/panel", "POST", "X-Meduza-Panel: open\r\n"),
+        ] {
+            let r = request(addr, &launch).await;
+            assert!(
+                r.starts_with("HTTP/1.1 200") && r.contains("fixture-panel-secret"),
+                "panel launch works without Dashboard authentication"
+            );
+            assert!(r.to_ascii_lowercase().contains("cache-control: no-store"));
+        }
+        planner.await.unwrap();
 
         let _ = stop_tx.send(());
         let _ = task.await;

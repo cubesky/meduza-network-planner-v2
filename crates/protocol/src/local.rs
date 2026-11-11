@@ -92,6 +92,9 @@ pub const PLANNER_METHODS: &[(&str, bool)] = &[
     // meduza-np-dashboard sign-in relay to the manager
     ("dashboard.login", true),
     ("dashboard.exchange", true),
+    // Discloses the current Mihomo controller credential; privileged even though it does not change config.
+    ("mihomo.panel", true),
+    ("mihomo.panel.status", false),
 ];
 
 pub const UPDATER_METHODS: &[(&str, bool)] = &[

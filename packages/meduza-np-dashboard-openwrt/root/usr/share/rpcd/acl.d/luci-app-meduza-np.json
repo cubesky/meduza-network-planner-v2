@@ -3,12 +3,12 @@
 		"description": "Meduza NP node status and maintenance",
 		"read": {
 			"ubus": {
-				"meduza-np": ["status", "features", "packages", "instances", "doctor", "logs", "config", "update_status"]
+				"meduza-np": ["status", "features", "packages", "instances", "doctor", "logs", "config", "update_status", "mihomo_panel_status"]
 			}
 		},
 		"write": {
 			"ubus": {
-				"meduza-np": ["sync", "instance", "maintenance_start", "maintenance_stop", "update"]
+				"meduza-np": ["sync", "instance", "maintenance_start", "maintenance_stop", "update", "mihomo_panel"]
 			}
 		}
 	}

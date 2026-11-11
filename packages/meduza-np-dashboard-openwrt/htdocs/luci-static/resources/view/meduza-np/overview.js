@@ -5,7 +5,7 @@
 'require meduza-np.common as c';
 
 return view.extend({
-	load: function() { return Promise.all([c.call.status(), c.call.features()]); },
+	load: function() { return Promise.all([c.call.status(), c.call.features(), c.call.panel_access('ubus', 'meduza-np', 'mihomo_panel'), c.call.mihomo_panel_status()]); },
 
 	renderStatus: function(st, features) {
 		var s = st.sync || {}, b = s.backoff || {}, m = st.maintenance, r = st.resources || {};
@@ -40,6 +40,8 @@ return view.extend({
 					}) }, _('Start maintenance'))
 				]),
 			E('h3', _('Features')),
+			this.panelAllowed && this.panelEnabled && (features || []).some(function(f) { return f.id === 'mihomo.proxy' && f.enabled; })
+				? E('p', [E('button', { 'class': 'btn cbi-button', 'click': ui.createHandlerFn(this, function() { return c.openMihomoPanel(); }) }, _('Open Mihomo panel'))]) : null,
 			c.table([_('Feature'), _('Package'), _('State'), _('Provider'), _('Reason')], (features || []).map(function(f) {
 				var label = !f.registered ? _('registration failed') : !f.available ? _('missing dependency') : !f.enabled ? _('not enabled')
 					: f.running === false ? _('not running') : f.healthy === false ? _('degraded') : _('ok');
@@ -58,10 +60,13 @@ return view.extend({
 	},
 
 	render: function(data) {
+		this.panelAllowed = data[2] === true;
+		this.panelEnabled = !!(data[3] && data[3].ok && data[3].result && data[3].result.enabled);
 		var st = c.result(data[0], _('Status')) || {}, features = c.result(data[1], _('Features')) || [];
 		var self = this;
 		poll.add(function() {
-			return Promise.all([c.call.status(), c.call.features()]).then(function(d) {
+			return Promise.all([c.call.status(), c.call.features(), c.call.mihomo_panel_status()]).then(function(d) {
+				self.panelEnabled = !!(d[2] && d[2].ok && d[2].result && d[2].result.enabled);
 				var el = document.getElementById('mnp-overview');
 				var typing = document.activeElement && String(document.activeElement.id || '').indexOf('mnp-') === 0;
 				if (el && d[0] && d[0].ok && !typing) el.replaceWith(self.renderStatus(d[0].result, (d[1] && d[1].result) || []));

@@ -692,6 +692,8 @@ FRR 目录属主必须与实际 provider 的编译用户/组一致，通过有�
 
 ### 9.7 Mihomo 与 TPROXY
 
+支持 Mihomo 原生网页面板 `/ui/`。`webUi.mode` 默认 `auto`，订阅包含 `external-ui` 或 `external-ui-url` 时继承面板请求；`enabled` 强制开启，无自定义或订阅地址时使用 MetaCubeXD；`disabled` 明确关闭。`webUi.url` 可覆盖订阅下载地址，只接受无内嵌凭据的 HTTP(S) 地址。下载、解压与静态资源服务使用 Mihomo 原生实现，资源固定保存在节点持久工作目录内，订阅不得指定宿主路径或外部子目录。面板目录变化时重启 Mihomo 内核以重建网页路由；新面板完整下载后清理旧的自有缓存，下载失败保留旧缓存并且不阻止代理运行。控制 API 仍使用节点指定的监听地址和密钥，面板继承不能覆盖鉴权或自动开放 LAN 监听。Manager 与 Dashboard 使用相同配置 Schema 和描述表单提供模式、地址设置。
+
 支持系统 Mihomo 和 mihomo-pkg 管理的持久目录本体两种 provider；后者来自 GitHub Release 下载或用户手工复制，并非安装包内嵌。提供订阅命名、选择、周期刷新、下载结果、配置预览、API 状态、代理组和连接摘要。本体获取状态与订阅/规则下载状态分别显示。
 
 配置必须规范化，不使用浅合并导致残留端口。运行模式明确区分显式 HTTP/SOCKS 代理和 TPROXY；订阅中的 tun/监听/API/DNS 等受本项目控制的字段按策略覆盖或拒绝，并向用户显示最终结果。
@@ -984,6 +986,8 @@ manager 与普通 dashboard 的实例状态按“服务 → 实例/接口 → �
 `meduza-np-dashboard` 的 `web/` 必须是 Vite + PReact + TypeScript 前端工程，由 CI/构建阶段输出生产静态资源，与本包 Rust HTTP 服务一起打包发布。节点只运行 Rust 服务，通过其受控 API 访问 planner；不运行 Vite 开发服务器、Node.js SSR 或独立 TypeScript 服务端。前端使用共享 ui-kit/descriptor-renderer 实现插件配置与状态，静态资源按需加载并压缩，纳入 128 MiB 节点的体积与内存验收。
 
 dashboard 与 dashboard-openwrt 必须显示本节点同步、功能能力、实例/邻居、接收状态、版本/升级、资源和诊断。配置变更仍提交 manager 草稿并发布，断网时不得建立另一套无提示的主配置。
+
+Mihomo 与其原生网页面板启用时，两种 Dashboard 提供“打开 Mihomo 面板”按钮。普通 Dashboard 的未登录页也显示启用的入口，关闭功能时隐藏；按用户要求，未登录也允许显式点击后直接自动填写控制地址、端口和 secret，不要求先登录 Dashboard。该公开入口仅用于 Mihomo 面板，其他 Dashboard 管理接口继续鉴权。OpenWrt 入口遵循 rpcd 写权限。未指定绑定地址（0.0.0.0/::）时使用浏览器访问节点的 hostname/IP，支持 IPv6；回环监听不能伪装为 LAN 可达。自动连接参数放在面板的 URL fragment，按 MetaCubeXD 的 `#/setup?http=true&hostname=...&port=...&secret=...` 格式传递。只在显式点击后通过特权方法读取运行实例的凭据；匿名可用性接口、定时状态、日志和诊断报告不得包含 secret。凭据独立保存为运行目录的 0600 文件，面板/API 未就绪或停止时撤销，并拒绝过期内容。
 
 CLI/UI 管理入口的 `ui.*` 能力在对应包成功注册且依赖满足时可用，不依赖不存在的 `services.cli` 或 dashboard 服务启用项，也不要求被 planner 作为常驻进程监督；其 running/healthy 表示入口能力可用。注册失败、冲突、平台不兼容或依赖缺失仍必须显示实际错误。网络服务及其可选能力继续按配置判断启用状态。OpenWrt LuCI 将 `in-sync` 显示为绿色，未同步和未知状态不得显示为正常。
 

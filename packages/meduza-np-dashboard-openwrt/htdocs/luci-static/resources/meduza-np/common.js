@@ -12,9 +12,35 @@ calls.logs = rpc.declare({ object: 'meduza-np', method: 'logs', params: ['lines'
 calls.instance = rpc.declare({ object: 'meduza-np', method: 'instance', params: ['instance', 'action'] });
 calls.maintenance_start = rpc.declare({ object: 'meduza-np', method: 'maintenance_start', params: ['reason', 'minutes', 'pause_apply'] });
 calls.update = rpc.declare({ object: 'meduza-np', method: 'update', params: ['action'] });
+calls.mihomo_panel = rpc.declare({ object: 'meduza-np', method: 'mihomo_panel' });
+calls.mihomo_panel_status = rpc.declare({ object: 'meduza-np', method: 'mihomo_panel_status' });
+calls.panel_access = rpc.declare({ object: 'session', method: 'access', params: ['scope', 'object', 'function'], expect: { access: false } });
 
 return baseclass.extend({
 	call: calls,
+
+	panelUrl: function(info, hostname) {
+		var url = new URL('http://' + info.address);
+		var loopback = function(h) { return h === 'localhost' || h === '[::1]' || h === '::1' || /^127\./.test(h); };
+		if (loopback(url.hostname) && !loopback(hostname)) throw new Error(_('Mihomo controller listens only on loopback; set api.address to the node LAN address or 0.0.0.0 in Manager.'));
+		if (url.hostname === '0.0.0.0' || url.hostname === '[::]') url.hostname = hostname;
+		url.pathname = '/ui/';
+		url.hash = '/setup?' + new URLSearchParams({ http: 'true', hostname: url.hostname, port: url.port || '80', secret: info.secret });
+		return url.toString();
+	},
+
+	openMihomoPanel: function() {
+		var tab = window.open('about:blank', '_blank'), self = this;
+		if (!tab) { ui.addNotification(null, E('p', _('Allow popups to open the Mihomo panel.')), 'warning'); return Promise.resolve(); }
+		tab.opener = null;
+		return calls.mihomo_panel().then(function(r) {
+			if (!r || !r.ok) throw new Error((r && r.error) || _('Mihomo panel is unavailable.'));
+			tab.location.replace(self.panelUrl(r.result, window.location.hostname));
+		}).catch(function(error) {
+			tab.close();
+			ui.addNotification(null, E('p', error.message || String(error)), 'warning');
+		});
+	},
 
 	/** Unwraps {ok, result, error}; an error becomes a visible notice instead of a silently empty view. */
 	result: function(r, what) {

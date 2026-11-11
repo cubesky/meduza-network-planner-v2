@@ -32,6 +32,8 @@ list)
   "status": {}, "features": {}, "packages": {}, "instances": {}, "doctor": {},
   "logs": { "lines": 100 },
   "config": {},
+  "mihomo_panel": {},
+  "mihomo_panel_status": {},
   "update_status": {},
   "sync": {},
   "instance": { "instance": "str", "action": "str" },
@@ -50,6 +52,8 @@ call)
 	instances) reply instances ;;
 	doctor) reply doctor ;;
 	config) reply config ;;
+	mihomo_panel) reply mihomo-panel ;;
+	mihomo_panel_status) reply mihomo-panel-status ;;
 	logs)
 		n=$(arg lines)
 		case "$n" in '' | *[!0-9]*) n=100 ;; esac

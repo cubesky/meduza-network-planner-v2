@@ -4,7 +4,7 @@ import "@meduza-np/ui-kit/styles.css";
 import "./app.css";
 import { Button, Card, ThemeSelect, ToastHost, toast } from "@meduza-np/ui-kit";
 import { errorText, get, post, setCsrf, type Session } from "./api.ts";
-import { ConfigPage, DiagnosticsPage, FeaturesPage, InstancesPage, OverviewPage, PackagesPage, UpdatesPage } from "./pages.tsx";
+import { ConfigPage, DiagnosticsPage, FeaturesPage, InstancesPage, MihomoPanelCard, OverviewPage, PackagesPage, UpdatesPage } from "./pages.tsx";
 
 const NAV: Array<[string, string]> = [
   ["/overview", "总览"],
@@ -41,6 +41,7 @@ function Login(props: { session: Session }) {
           离线或 manager 不可达时，在节点上以 root 执行 <code>meduza-np dashboard-link</code>，打开输出的一次性链接（10 分钟内有效）。
         </p>
       </Card>
+      <MihomoPanelCard />
     </div>
   );
 }

@@ -139,6 +139,16 @@ impl App {
                 ),
                 None => json_resp(StatusCode::OK, &json!({"authenticated": false, "managerLogin": self.public_url.is_some()})),
             },
+            // Periodic availability polling excludes the controller credential.
+            (Method::GET, "/api/mihomo/panel/status") => self.reply(self.local(false, "mihomo.panel.status", Value::Null).await),
+            // Explicitly public native-panel launch. This custom header requires a same-origin browser request;
+            // no CORS permission is granted to cross-origin pages. Other control APIs still require a session.
+            (Method::POST, "/api/mihomo/panel") => {
+                if req.headers().get("x-meduza-panel").and_then(|v| v.to_str().ok()) != Some("open") {
+                    return error(StatusCode::FORBIDDEN, "invalid-panel-request", "use the Open Mihomo panel button");
+                }
+                self.reply(self.local(false, "mihomo.panel", Value::Null).await)
+            }
             (m, p) if p.starts_with("/api/") => self.api(m, p, req).await,
             (Method::GET, _) => crate::assets::serve(&self.www, &path, req.headers()),
             _ => error(StatusCode::METHOD_NOT_ALLOWED, "method-not-allowed", "method not allowed"),

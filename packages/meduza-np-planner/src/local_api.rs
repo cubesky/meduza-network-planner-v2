@@ -12,6 +12,43 @@ use serde_json::{json, Value};
 
 use crate::sync::Planner;
 
+/// Credentials are published by the active Mihomo worker, separately from its public status/report.
+fn mihomo_panel(run: &std::path::Path) -> Result<Value, String> {
+    let path = run.join("mihomo-panel.json");
+    let age = std::fs::metadata(&path).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok());
+    if age.is_none_or(|age| age > Duration::from_secs(120)) {
+        return Err("Mihomo panel is not ready; enable the web panel and wait for its download, or update meduza-np-mihomo".into());
+    }
+    let info = meduza_np_runtime::fsutil::read_json::<Value>(&path, 16 * 1024)
+        .map_err(|_| "Mihomo panel connection is unavailable")?
+        .ok_or("Mihomo panel connection is unavailable")?;
+    let address = info
+        .get("address")
+        .and_then(Value::as_str)
+        .and_then(|s| s.parse::<std::net::SocketAddr>().ok())
+        .filter(|a| a.port() != 0)
+        .ok_or("Mihomo controller address is invalid")?;
+    let secret = info.get("secret").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or("Mihomo controller secret is unavailable")?;
+    Ok(json!({"address":address.to_string(),"secret":secret}))
+}
+
+fn mihomo_panel_status(run: &std::path::Path) -> Value {
+    let path = run.join("mihomo-panel-status.json");
+    let fresh = std::fs::metadata(&path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|age| age <= Duration::from_secs(120));
+    let status = if fresh { meduza_np_runtime::fsutil::read_json::<Value>(&path, 4096).ok().flatten() } else { None };
+    let enabled = status.as_ref().and_then(|s| s.get("enabled")).and_then(Value::as_bool) == Some(true);
+    if !enabled {
+        return json!({"enabled":false,"ready":false});
+    }
+    json!({"enabled":true,"ready":status.as_ref().and_then(|s| s.get("ready")).and_then(Value::as_bool)==Some(true),
+        "address":status.as_ref().and_then(|s| s.get("address")).and_then(Value::as_str)
+            .and_then(|s| s.parse::<std::net::SocketAddr>().ok()).map(|a| a.to_string())})
+}
+
 /// Health and dependency diagnostics (CLI `doctor`, diagnostics job).
 pub fn doctor(p: &Arc<Planner>) -> Value {
     let registry = p.registry();
@@ -89,6 +126,16 @@ pub async fn dispatch(p: &Arc<Planner>, req: LocalRequest, authorized: bool) -> 
             Ok(None) => ok(Value::Null),
             Err(e) => LocalResponse::err(id, "internal", e.to_string()),
         },
+        "mihomo.panel" if !p.enabled_services().contains_key("mihomo") => LocalResponse::err(id, "unavailable", "Mihomo is not enabled"),
+        "mihomo.panel" => match mihomo_panel(&p.paths.run) {
+            Ok(info) => ok(info),
+            Err(message) => LocalResponse::err(id, "unavailable", message),
+        },
+        "mihomo.panel.status" => ok(if p.enabled_services().contains_key("mihomo") {
+            mihomo_panel_status(&p.paths.run)
+        } else {
+            json!({"enabled":false,"ready":false})
+        }),
         "logs" => {
             let n = req.params.get("lines").and_then(Value::as_u64).unwrap_or(100).min(500) as usize;
             ok(json!(crate::log::tail(n)))
@@ -423,5 +470,46 @@ pub mod server {
                 drop(permit);
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod panel_tests {
+    use super::*;
+
+    #[test]
+    fn panel_credentials_are_privileged_bounded_and_expire_with_the_worker() {
+        assert_eq!(method_is_mutating(PLANNER_METHODS, "mihomo.panel"), Some(true));
+        assert_eq!(method_is_mutating(PLANNER_METHODS, "mihomo.panel.status"), Some(false));
+        let root = std::env::temp_dir().join(format!("mnp-panel-access-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        assert!(mihomo_panel(&root).is_err());
+        assert_eq!(mihomo_panel_status(&root), json!({"enabled":false,"ready":false}));
+        std::fs::write(
+            root.join("mihomo-panel-status.json"),
+            json!({"enabled":true,"ready":true,"address":"0.0.0.0:9090","secret":"must-not-be-returned"}).to_string(),
+        )
+        .unwrap();
+        let status = mihomo_panel_status(&root);
+        assert_eq!(status, json!({"enabled":true,"ready":true,"address":"0.0.0.0:9090"}));
+        assert!(!status.to_string().contains("must-not-be-returned"));
+        let path = root.join("mihomo-panel.json");
+        let info = json!({"address":"[::]:9090","secret":"test-secret-&?#"});
+        std::fs::write(&path, info.to_string()).unwrap();
+        assert_eq!(mihomo_panel(&root).unwrap(), info);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(std::time::SystemTime::now() - Duration::from_secs(121)))
+            .unwrap();
+        assert!(mihomo_panel(&root).is_err());
+        for address in ["javascript:evil", "https://outside.example", "127.0.0.1:0"] {
+            std::fs::write(&path, json!({"address":address,"secret":"test-secret"}).to_string()).unwrap();
+            assert!(mihomo_panel(&root).is_err());
+        }
+        std::fs::write(&path, "x".repeat(16 * 1024 + 1)).unwrap();
+        assert!(mihomo_panel(&root).is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

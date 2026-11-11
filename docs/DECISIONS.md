@@ -1919,3 +1919,56 @@ green. Regression tests execute the shipped LuCI modules and cover console rows,
 failure badges; run these tests in web CI. Registry tests use the actual CLI and both dashboard manifests,
 including the OpenWrt platform constraint, and check dependency/registration failure handling. Deploy the
 updated planner plus dashboard-openwrt packages. Source-only; no Git submission or production changes.
+
+
+## D84 - Serve Mihomo's native web panel from inherited or explicit settings (2026-11-11)
+
+The downloaded subscription already requested a UI, but normalization removed external-ui-url and never
+supplied external-ui, leaving /ui/ at 404. Add webUi.mode: auto (default, inherit a subscription's panel
+request), enabled (fall back to the documented MetaCubeXD archive) and disabled, plus an optional HTTP(S)
+webUi.url override. The shared package descriptor exposes these settings in Manager and Dashboard.
+Keep the API address and per-node secret controlled; UI inheritance does not open a network listener.
+
+Use Mihomo's native downloader/unpacker and /ui/ server. Replace subscription filesystem paths and
+external-ui-name with a relative ui/<URL SHA-256> directory under the persistent Mihomo work directory.
+This confines panel files and lets a changed source download without first destroying the previous cache.
+After index.html exists, remove only obsolete owned hash directories, excluding symlinks and custom files.
+The native controller's static file path is established at startup, so the worker restarts its core when
+that path changes rather than accepting a successful configuration reload with an obsolete UI route.
+Same-source restarts reuse the cache; same-source content updates remain available through Mihomo's
+native UI updater. A panel download error must not stop the proxy core or remove the previous cache.
+
+Regression tests cover inheritance, explicit source/default/disable, URL validation, listener/credential
+ownership and safe cache cleanup. Real v1.19.33 plus the actual worker, a local subscription server and
+small ZIP fixtures verify /ui/ download/serving, API authentication, offline cache, subscription refresh
+switching, obsolete-cache cleanup and continued API service on download failure. Schema/manifests,
+strict Clippy, descriptor translations and a real browser form check pass. No production access or
+deployment performed; update Manager metadata and the node's mihomo adapter to enable the feature.
+
+
+## D85 - Native Mihomo panel launch from both node dashboards (2026-11-12)
+
+Add an explicit launch entry to the ordinary dashboard and LuCI, gated by both the enabled Mihomo service
+and the active worker's native-panel status. Show it on the ordinary dashboard's anonymous login page as
+well. Per the user's explicit clarification, the ordinary Dashboard permits direct anonymous launch with
+the controller credential, without a login redirect. Periodic status calls never return the secret.
+Launch uses a dedicated POST/custom header without opening cross-origin CORS access; other Dashboard
+control APIs retain session/role/CSRF checks. LuCI retains its write-only ubus method. The CLI and privileged
+local protocol share the same credential operation.
+
+The running worker publishes a public enabled/ready/address file and a separate 0600 credential file only
+when its controller and panel are ready. Revoke them at startup/shutdown, reject expired or malformed
+credentials, bound all reads, and keep both files out of normal reports. An anonymous status route exposes
+only a field whitelist. The private response remains no-store and is never included in periodic polling.
+Atomic files set restrictive permissions before secret bytes are written, including temporary files.
+
+Use the browser hostname for wildcard binds, retain explicit binds and IPv6 brackets, and report a remote
+loopback-only endpoint as unreachable. Open a blank tab synchronously, detach its opener, then populate
+MetaCubeXD's /ui/#/setup fragment with HTTP scheme, host, port and encoded secret. This keeps the secret
+out of HTTP request URLs. Close the tab on errors and keep the enabled entry available for retry.
+
+Tests cover IPv4/IPv6/default ports, fragment escaping, loopback handling, LuCI visibility/ACLs, private file
+permissions/expiry, anonymous direct launch and real HTTP/UDS authentication boundaries for other APIs. Actual browser
+checks exercise both shipped views, credential retrieval only on click, anonymous visibility and disabled
+feature hiding. Real Mihomo checks use native Linux temporary storage to verify 0600 credentials and revoke
+on shutdown. No production changes or Git submission.

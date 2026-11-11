@@ -22,6 +22,8 @@ commands:
   maintenance status|stop
   maintenance start --reason TEXT [--minutes N] [--pause-apply] [--stop INSTANCE]...
   config                         last successfully applied configuration (secrets redacted)
+  mihomo-panel                   current native panel connection (privileged; contains API secret)
+  mihomo-panel-status            native panel availability (no credentials)
   instances                      applied instances, their package and supervised processes
   instance start|stop|restart INSTANCE
   rescan                         re-scan installed packages
@@ -194,6 +196,8 @@ fn main() {
         "packages" => (&planner, "packages", Value::Null),
         "instances" => (&planner, "instances", Value::Null),
         "config" => (&planner, "config.current", Value::Null),
+        "mihomo-panel" => (&planner, "mihomo.panel", Value::Null),
+        "mihomo-panel-status" => (&planner, "mihomo.panel.status", Value::Null),
         "sync" => (&planner, "sync.now", Value::Null),
         "validate" => (&planner, "validate", Value::Null),
         "plan" => (&planner, "plan.preview", Value::Null),

@@ -449,6 +449,32 @@
         }
       },
       "type": "object"
+    },
+    "WebUi": {
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/WebUiMode",
+          "default": "auto",
+          "description": "auto: inherit a subscription panel; enabled: also use MetaCubeXD when no URL is specified; disabled: no panel."
+        },
+        "url": {
+          "description": "Optional HTTP(S) panel archive URL, overriding the subscription. Downloaded by Mihomo into persistent storage.",
+          "pattern": "^https?://[^\\s/@]+(?:[/?#][^\\s]*)?$",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "WebUiMode": {
+      "enum": [
+        "auto",
+        "enabled",
+        "disabled"
+      ],
+      "type": "string"
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -559,6 +585,12 @@
           "privateLan": false
         },
         "useConntrack": true
+      }
+    },
+    "webUi": {
+      "$ref": "#/$defs/WebUi",
+      "default": {
+        "mode": "auto"
       }
     }
   },

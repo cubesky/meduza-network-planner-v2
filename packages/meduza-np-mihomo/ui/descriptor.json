@@ -30,6 +30,13 @@
           "widget": "secret"
         },
         {
+          "title": "Web panel",
+          "fields": [
+            "webUi.mode",
+            "webUi.url"
+          ]
+        },
+        {
           "title": "订阅下载",
           "fields": [
             "downloadProxy"
@@ -173,7 +180,8 @@
         "立即刷新订阅": "Refresh subscription now",
         "旁路由": "Side router",
         "DNS 解析策略": "DNS resolver policy",
-        "Fake-IP": "Fake-IP"
+        "Fake-IP": "Fake-IP",
+        "Web panel": "Web panel"
       },
       "fields": {
         "useConntrack": "Use conntrack",
@@ -202,7 +210,9 @@
         "fakeIpFilter": "Fake-IP domain filter",
         "fakeIpFilterMode": "Fake-IP filter mode",
         "excludeInterfaces": "Excluded ingress interfaces",
-        "excludePortRules": "Port exclusions: [in|out:][tcp|udp:]port"
+        "excludePortRules": "Port exclusions: [in|out:][tcp|udp:]port",
+        "webUi.mode": "Panel mode (auto / enabled / disabled)",
+        "webUi.url": "Panel archive URL (empty inherits subscription)"
       }
     },
     "zh-Hans": {
@@ -222,7 +232,8 @@
         "旁路由": "旁路由",
         "DNS 解析策略": "DNS 解析策略",
         "Fake-IP": "Fake-IP",
-        "Proxy with subscriptions. Empty DNS upstreams inherit subscription DNS and core defaults; configured upstreams select custom DNS. Listeners, API and TUN remain controlled by this project. TPROXY only affects forwarded traffic from the selected sources.": "DNS 上游留空时继承订阅的解析策略和核心默认值；填写上游后使用节点自定义 DNS。监听、API 和 TUN 仍由本项目管理。TPROXY 只影响来自所选来源的转发流量。"
+        "Proxy with subscriptions. Empty DNS upstreams inherit subscription DNS and core defaults; configured upstreams select custom DNS. Listeners, API and TUN remain controlled by this project. TPROXY only affects forwarded traffic from the selected sources.": "DNS 上游留空时继承订阅的解析策略和核心默认值；填写上游后使用节点自定义 DNS。监听、API 和 TUN 仍由本项目管理。TPROXY 只影响来自所选来源的转发流量。",
+        "Web panel": "网页面板"
       },
       "fields": {
         "active": "生效",
@@ -289,7 +300,9 @@
         "fakeIpFilter": "Fake-IP 域名过滤",
         "fakeIpFilterMode": "Fake-IP 过滤模式",
         "excludeInterfaces": "排除入站接口",
-        "excludePortRules": "端口排除规则：[(in|out):][(tcp|udp):]端口"
+        "excludePortRules": "端口排除规则：[(in|out):][(tcp|udp):]端口",
+        "webUi.mode": "面板模式（auto 继承 / enabled 启用 / disabled 关闭）",
+        "webUi.url": "面板压缩包地址（留空继承订阅）"
       }
     },
     "zh-Hant": {
@@ -309,7 +322,8 @@
         "旁路由": "旁路由",
         "DNS 解析策略": "DNS 解析策略",
         "Fake-IP": "Fake-IP",
-        "Proxy with subscriptions. Empty DNS upstreams inherit subscription DNS and core defaults; configured upstreams select custom DNS. Listeners, API and TUN remain controlled by this project. TPROXY only affects forwarded traffic from the selected sources.": "DNS 上游留空時繼承訂閱的解析策略和核心預設值；填寫上游後使用節點自訂 DNS。監聽、API 和 TUN 仍由本專案管理。TPROXY 只影響來自所選來源的轉送流量。"
+        "Proxy with subscriptions. Empty DNS upstreams inherit subscription DNS and core defaults; configured upstreams select custom DNS. Listeners, API and TUN remain controlled by this project. TPROXY only affects forwarded traffic from the selected sources.": "DNS 上游留空時繼承訂閱的解析策略和核心預設值；填寫上游後使用節點自訂 DNS。監聽、API 和 TUN 仍由本專案管理。TPROXY 只影響來自所選來源的轉送流量。",
+        "Web panel": "網頁面板"
       },
       "fields": {
         "active": "生效",
@@ -376,7 +390,9 @@
         "fakeIpFilter": "Fake-IP 網域過濾",
         "fakeIpFilterMode": "Fake-IP 過濾模式",
         "excludeInterfaces": "排除入站介面",
-        "excludePortRules": "連接埠排除規則：[(in|out):][(tcp|udp):]連接埠"
+        "excludePortRules": "連接埠排除規則：[(in|out):][(tcp|udp):]連接埠",
+        "webUi.mode": "面板模式（auto 繼承 / enabled 啟用 / disabled 關閉）",
+        "webUi.url": "面板壓縮檔位址（留空繼承訂閱）"
       }
     }
   }

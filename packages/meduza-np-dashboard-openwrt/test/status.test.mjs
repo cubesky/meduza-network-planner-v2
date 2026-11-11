@@ -31,3 +31,20 @@ test('LuCI renders available consoles and preserves feature errors and disabled 
   assert.match(rows[0][2].attrs.style, /background:#2e7d32/);
   assert.match(rows[1][2].attrs.style, /background:#2e7d32/);
 });
+
+test('LuCI panel launch requires write permission and does not disclose a credential in polling', () => {
+  const acl = JSON.parse(readFileSync(new URL('../root/usr/share/rpcd/acl.d/luci-app-meduza-np.json', import.meta.url), 'utf8'))['luci-app-meduza-np'];
+  assert.ok(!acl.read.ubus['meduza-np'].includes('mihomo_panel'));
+  assert.ok(acl.write.ubus['meduza-np'].includes('mihomo_panel'));
+  const feature = [{ id: 'mihomo.proxy', registered: true, available: true, enabled: true }];
+  const hasButton = result => JSON.stringify(result).includes('Open Mihomo panel');
+  assert.ok(!hasButton(overview.renderStatus({}, feature)));
+  overview.panelAllowed = true;
+  overview.panelEnabled = false;
+  assert.ok(!hasButton(overview.renderStatus({}, feature)));
+  overview.panelEnabled = true;
+  assert.ok(hasButton(overview.renderStatus({}, feature)));
+  assert.ok(!hasButton(overview.renderStatus({}, [{ ...feature[0], enabled: false }])));
+  overview.panelAllowed = false;
+  overview.panelEnabled = false;
+});
