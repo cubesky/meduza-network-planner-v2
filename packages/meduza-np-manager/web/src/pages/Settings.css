@@ -1,0 +1,15 @@
+.as-address-row {
+  display: flex;
+  align-items: start;
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 8px;
+  border-radius: 6px;
+}
+.as-drag-handle { cursor: grab; margin-top: 24px; }
+.as-drag-handle:active { cursor: grabbing; }
+.as-row-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 24px; }
+@media (max-width: 640px) {
+  .as-address-row { flex-wrap: wrap; }
+  .as-row-actions { width: 100%; margin-top: 0; justify-content: end; }
+}

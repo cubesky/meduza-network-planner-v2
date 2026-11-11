@@ -351,3 +351,71 @@ test("topology: depth-spanning links draw their far and near sections on either 
   assert.equal(labels.find((l) => l.text === "a")!.x - before, 10, "a label follows its 3D object instead of sticking to a viewport edge");
   graph.destroy();
 });
+
+test("topology: AS titles and names occupy separate lines in clusters and collapsed vertices", () => {
+  const { graph, labels } = setup(800, 500);
+  graph.setData([
+    { id: "peer", label: "router.example", group: "asn:1", radius: 10, shape: "triangle", color: "#5cb" },
+    { id: "as:2", label: "AS65200", subtitle: "Transit network", labelPriority: 1, radius: 10, shape: "diamond", color: "#5cb" },
+  ], [], [{ id: "asn:1", label: "AS65100", subtitle: "Upstream network", color: "#5cb" }]);
+  graph.yaw = graph.pitch = 0; graph.distance = 600; graph.target = { x: 0, y: 0, z: 0 };
+  Object.assign(graph.vertices.get("peer"), { x: -120, y: 0, z: 0 });
+  Object.assign(graph.vertices.get("as:2"), { x: 120, y: 0, z: 0 });
+  graph.draw();
+  for (const [title, name] of [["AS65100", "Upstream network"], ["AS65200", "Transit network"]]) {
+    const a = labels.find((l) => l.text === title), b = labels.find((l) => l.text === name);
+    assert.ok(a && b, "both AS number and name are drawn");
+    assert.equal(a.x, b.x);
+    assert.ok(b.y > a.y + 10, "name is below the AS number");
+  }
+  graph.destroy();
+});
+
+test("topology: cached router labels move out of AS title/name blocks when those blocks grow", () => {
+  const { graph, labels } = setup(800, 500);
+  graph.setData([
+    { id: "a", label: "router.example", radius: 10, shape: "triangle", color: "#5cb" },
+    { id: "b", label: "AS65100", subtitle: "Upstream network", labelPriority: 1, radius: 10, shape: "diamond", color: "#5cb" },
+  ], []);
+  graph.yaw = graph.pitch = 0; graph.distance = 600; graph.target = { x: 0, y: 0, z: 0 };
+  Object.assign(graph.vertices.get("a"), { x: 0, y: 0, z: 0 });
+  Object.assign(graph.vertices.get("b"), { x: 0, y: -25, z: 0 });
+  graph.labelSlots.set("a", 1); // previously clear placement now occupied by a named AS
+  graph.draw();
+  const as = labels.find((l) => l.text === "AS65100")!, name = labels.find((l) => l.text === "Upstream network")!;
+  const router = labels.find((l) => l.text === "router.example")!;
+  assert.ok(as && name);
+  const bounds = { left: as.x - 5, right: as.x + "Upstream network".length * 7 + 5, top: as.y - 10, bottom: name.y + 10 };
+  assert.ok(router.x + "router.example".length * 7 < bounds.left || router.x > bounds.right || router.y + 9 < bounds.top || router.y - 9 > bounds.bottom,
+    "router ID/IP/hostname text cannot overlap either AS line");
+  const position = { ...router };
+  graph.hover = { kind: "vertex", id: "b" }; graph.highlight = "b"; graph.draw();
+  assert.deepEqual(labels.find((l) => l.text === "router.example"), position, "hover keeps the clear placement stable");
+  graph.destroy();
+});
+
+test("topology: a renamed AS cluster invalidates overlapping router label slots without reheating layout", () => {
+  const { graph, labels } = setup(800, 500);
+  const vertices = [
+    { id: "member", label: "member", group: "asn:1", radius: 10, shape: "circle", color: "#5cb" },
+    { id: "external", label: "203.0.113.1", radius: 10, shape: "triangle", color: "#5cb" },
+  ];
+  graph.setData(vertices, [], [{ id: "asn:1", label: "AS65100", subtitle: "ISP", color: "#5cb" }]);
+  graph.yaw = graph.pitch = 0; graph.distance = 600; graph.target = { x: 0, y: 0, z: 0 };
+  Object.assign(graph.vertices.get("member"), { x: 0, y: 0, z: 0 });
+  Object.assign(graph.vertices.get("external"), { x: 50, y: -69, z: 0 });
+  graph.labelSlots.set("external", 2);
+  graph.draw();
+  assert.equal(graph.labelSlots.get("external"), 2, "short name leaves the previous slot clear");
+  graph.alpha = 0;
+  const name = "Long registered upstream network name";
+  graph.setData(vertices, [], [{ id: "asn:1", label: "AS65100", subtitle: name, color: "#5cb" }]);
+  graph.draw();
+  assert.equal(graph.alpha, 0, "renaming metadata does not restart physics");
+  assert.notEqual(graph.labelSlots.get("external"), 2, "a cached slot must avoid the longer subtitle");
+  const title = labels.find((l) => l.text === "AS65100")!, subtitle = labels.find((l) => l.text === name)!;
+  const router = labels.find((l) => l.text === "203.0.113.1")!;
+  const left = title.x - name.length * 7 / 2 - 8, right = title.x + name.length * 7 / 2 + 8;
+  assert.ok(router.x + "203.0.113.1".length * 7 < left || router.x > right || router.y + 9 < title.y - 12 || router.y - 9 > subtitle.y + 12);
+  graph.destroy();
+});

@@ -1972,3 +1972,46 @@ permissions/expiry, anonymous direct launch and real HTTP/UDS authentication bou
 checks exercise both shipped views, credential retrieval only on click, anonymous visibility and disabled
 feature hiding. Real Mihomo checks use native Linux temporary storage to verify 0600 credentials and revoke
 on shutdown. No production changes or Git submission.
+
+## D86 - AS label layout, sortable catalog and prepaint theme restoration (2026-11-12)
+
+Draw AS numbers and registered names on separate lines for clusters, collapsed ASes and path ASes.
+Reserve the complete two-line rectangle before placing Router ID/IP/hostname labels. Retain cached
+placements through hover, but invalidate them when an AS block moves or grows into their space. Extend
+candidates rather than accept AS overlap; preserve depth ordering and translucent label backgrounds.
+
+Add native drag handles to the AS address editor, plus up/down buttons for keyboard and touch use.
+Move whole name/ASN records in the working copy and retain the existing Save, draft, Apply and validation
+flow. Viewer accounts have disabled fields and no reorder controls. Published array order also determines
+the ASN choices; sorting remains Manager metadata and does not reapply node networking.
+
+Both web apps already restored the saved theme in their JavaScript module, after a light initial paint.
+Emit one shared, small synchronous same-origin theme initializer and inject it before app modules/styles.
+Keep the existing mnp.theme key, CSS system fallback and strict CSP without inline-script exceptions.
+Storage errors must not prevent startup. The ordinary runtime still handles changes made in the selector.
+
+Graph and theme regressions, typechecks, production builds and translation checks pass. Actual Chrome
+checks reproduce the previous light flash with delayed app JavaScript, verify prepaint restoration and
+full reloads for both built apps under production CSP, and exercise native mouse drag, arrow controls,
+draft reload, publishing, order/value preservation and viewer permissions. Actual topology and peer forms
+also pass. Evidence: target/check-settings-ui-browser.log, target/check-as-split-browser.log and
+target/check-as-labels-after.log. No Git submission or production modifications.
+
+## D87 - Use Node 24 inside all JavaScript Actions (2026-11-12)
+
+The workflows already requested Node 24 for build commands, but their JavaScript Actions still declared
+Node 20 internally. Upgrade checkout/setup-node/cache and pnpm setup to v5, upload-artifact to v6,
+download-artifact to v7, configure-pages to v6, upload-pages-artifact to v5 and deploy-pages to v5.
+Include release-tool/release-cache composite actions and the separate cache promotion workflow.
+The Pages uploader's pinned transitive upload action also declares node24. Do not rely on forcing a
+deprecated action to use another runtime or silencing its warning.
+
+Keep explicit node-version: 24 and existing pnpm caching. Disable setup-node v5's automatic package-manager
+cache in release jobs using the custom cache flow and in the manager-image job, which does not prepare
+pnpm on the runner. Artifact names, inputs, permissions, cache keys and publication order remain intact.
+
+Read-only verification parses all six local YAML documents, fetches all twelve upstream action manifests
+including transitive references, confirms node24 for every JavaScript action, and validates all 86 action
+calls' input names and Node setup options. The same actionlint 1.7.7 gate used in CI passes with its existing
+cache-mode exception. Evidence: target/check-node24-actions.log. No remote workflow
+execution, Git submission or production changes.

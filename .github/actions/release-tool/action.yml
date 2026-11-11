@@ -3,13 +3,13 @@ description: Use the tested release tool and verified public signing trust roots
 runs:
   using: composite
   steps:
-    - uses: actions/download-artifact@v4
+    - uses: actions/download-artifact@v7
       with:
         name: release-tool
         path: target/release
     - shell: bash
       run: chmod +x target/release/meduza-np-release
-    - uses: actions/download-artifact@v4
+    - uses: actions/download-artifact@v7
       with:
         name: release-trust
         path: packages/meduza-np-base-container/trust

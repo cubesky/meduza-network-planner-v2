@@ -1351,3 +1351,23 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   rejects expired/malformed state. Browser, URL/ACL, real HTTP/UDS, Rust, strict Clippy and production
   build checks are recorded in target/check-panel-launch-*.log. Source-only; no production changes or
   Git submission. Update planner/cli/mihomo and the selected dashboard together.
+
+- 2026-11-12 (per the user) Sortable AS addresses, two-line topology labels and theme startup (D86).
+  Add native drag handles and up/down controls to the AS catalog; preserve the existing Save/Apply flow,
+  ASN/name pairs, validation and viewer restrictions. Split AS headings/names in clusters, collapsed nodes
+  and paths; reserve both lines and revalidate cached router labels when they overlap AS text. Restore
+  Manager/Dashboard theme before first paint using a shared same-origin CSP-compatible script.
+  Graph/theme regressions, typechecks, both production builds and translations pass. Actual Chrome checks
+  verify native drag, draft/published persistence, permissions, full theme reloads and the prior light-flash
+  reproduction; actual topology and WireGuard/OpenVPN ASN forms pass. Evidence:
+  target/check-settings-ui-browser.log, target/check-as-split-browser.log, target/check-as-labels-after.log.
+  Source-only; no Git submission or production changes.
+
+- 2026-11-12 (per the user) Node 24 for GitHub Actions themselves (D87).
+  Upgrade all external Actions in CI/release/cache workflows and local release composites to versions
+  declaring node24, including the Pages uploader's indirect dependency. Keep build Node at 24 and
+  existing cache behavior by disabling setup-node's new automatic cache where no cache was requested.
+  A read-only audit validates six YAML files, twelve upstream manifests and 86 action calls, including
+  input compatibility and transitive runtimes; the existing actionlint 1.7.7 gate passes.
+  Evidence: target/check-node24-actions.log.
+  Source-only; no workflow execution, Git submission or production changes.

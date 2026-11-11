@@ -8,6 +8,7 @@ import { Badge, Button, Card, Checkbox, Field, ListInput, Loadable, Modal, PageH
 import { errorText, get, post } from "../api.ts";
 import { isError, problemsFor, update, useConfig, type ClusterDoc as Doc, type MihomoCatalog, type MihomoSubscription, type Problem } from "../store.ts";
 import { ProblemList } from "../ApplyBar.tsx";
+import "./Settings.css";
 
 const SYNC_FIELDS = [
   ["heartbeatSeconds", msg("Heartbeat")],
@@ -79,21 +80,7 @@ export function SettingsPage(props: { role: Role; tab?: string }) {
       />
       {tab !== "anycast" && tab !== "mihomo" && tab !== "dns" && <ProblemList problems={mine.filter(isError)} tone="bad" />}
       {tab !== "anycast" && tab !== "mihomo" && tab !== "dns" && <ProblemList problems={mine.filter((p) => !isError(p))} tone="warn" />}
-      {tab === "as-addresses" && <Card title={t("AS addresses")} actions={editable && <Button small onClick={() => change({ ...doc, asAddresses: [...(doc.asAddresses ?? []), { name: "", asn: 0 }] })}>{t("Add")}</Button>}>
-        <p class="small muted">{t("Name your AS numbers to select them in peer settings and show their names in the topology. Removing a name keeps existing peer ASNs.")}</p>
-        {!(doc.asAddresses ?? []).length && <p class="muted">{t("No AS addresses yet.")}</p>}
-        {(doc.asAddresses ?? []).map((entry, i) => {
-          const set = (patch: Partial<typeof entry>) => change({ ...doc, asAddresses: doc.asAddresses!.map((row, j) => j === i ? { ...row, ...patch } : row) });
-          return <div class="form-grid" style={{ alignItems: "start", marginBottom: "12px" }}>
-            <Field label={t("Name")} error={errorAt(`/asAddresses/${i}/name`)}><TextInput value={entry.name} disabled={!editable} onInput={(name) => set({ name })} /></Field>
-            <Field label="ASN" error={errorAt(`/asAddresses/${i}/asn`)}><input type="number" min={1} max={4294967294} value={entry.asn || ""} disabled={!editable} onInput={(e) => set({ asn: Number((e.target as HTMLInputElement).value) })} /></Field>
-            {editable && <div><Button small variant="danger" onClick={() => {
-              const next = doc.asAddresses!.filter((_, j) => j !== i);
-              change({ ...doc, asAddresses: next.length ? next : undefined });
-            }}>{t("Delete")}</Button></div>}
-          </div>;
-        })}
-      </Card>}
+      {tab === "as-addresses" && <AsAddressesEditor doc={doc} change={change} editable={editable} errorAt={errorAt} />}
       {tab === "routing" && <Card title={t("Routing")}>
         <div class="form-grid">
           <Field label={t("Internal ASN")} error={errorAt("/routing/internalAsn")} help={t("The AS number of the internal network: iBGP between mesh members uses it.")}>
@@ -180,6 +167,62 @@ export function SettingsPage(props: { role: Role; tab?: string }) {
       {tab === "pki" && <CertificateAuthority role={props.role} />}
     </div>
   );
+}
+
+function AsAddressesEditor({ doc, change, editable, errorAt }: {
+  doc: Doc; change: (next: Doc) => void; editable: boolean; errorAt: (path: string) => string | undefined;
+}) {
+  const [dragging, setDragging] = useState<number | null>(null);
+  const [over, setOver] = useState<number | null>(null);
+  const rows = doc.asAddresses ?? [];
+  const finishDrag = () => { setDragging(null); setOver(null); };
+  const move = (from: number, to: number) => {
+    if (!editable || from === to || from < 0 || to < 0 || from >= rows.length || to >= rows.length) return;
+    const next = [...rows];
+    next.splice(to, 0, next.splice(from, 1)[0]!);
+    change({ ...doc, asAddresses: next });
+  };
+  return <Card title={t("AS addresses")} actions={editable && <Button small onClick={() => change({ ...doc, asAddresses: [...rows, { name: "", asn: 0 }] })}>{t("Add")}</Button>}>
+    <p class="small muted">{t("Name your AS numbers to select them in peer settings and show their names in the topology. Removing a name keeps existing peer ASNs.")}</p>
+    {editable && <p class="small muted">{t("Drag the handle or use the arrows to reorder. Save and apply to publish the new order.")}</p>}
+    {!rows.length && <p class="muted">{t("No AS addresses yet.")}</p>}
+    {rows.map((entry, i) => {
+      const set = (patch: Partial<typeof entry>) => change({ ...doc, asAddresses: rows.map((row, j) => j === i ? { ...row, ...patch } : row) });
+      return <div class="as-address-row" style={{ outline: over === i && dragging !== i ? "2px solid var(--accent)" : undefined, opacity: dragging === i ? 0.55 : 1 }}
+        onDragOver={(e) => {
+          if (!editable || dragging === null) return;
+          e.preventDefault();
+          if (e.dataTransfer) e.dataTransfer.dropEffect = "move";
+          setOver(i);
+        }}
+        onDrop={(e) => {
+          if (!editable || dragging === null) return;
+          e.preventDefault();
+          move(dragging, i);
+          finishDrag();
+        }}>
+        {editable && <button type="button" class="btn small as-drag-handle" draggable={true} aria-label={t("Drag to reorder")} title={t("Drag to reorder")}
+          onDragStart={(e) => {
+            if (!e.dataTransfer) return;
+            e.dataTransfer.effectAllowed = "move";
+            e.dataTransfer.setData("application/x-meduza-as-row", String(i));
+            setDragging(i);
+          }} onDragEnd={finishDrag}>⠿</button>}
+        <div class="form-grid" style={{ flex: 1, minWidth: 0, alignItems: "start" }}>
+          <Field label={t("Name")} error={errorAt(`/asAddresses/${i}/name`)}><TextInput value={entry.name} disabled={!editable} onInput={(name) => set({ name })} /></Field>
+          <Field label="ASN" error={errorAt(`/asAddresses/${i}/asn`)}><input type="number" min={1} max={4294967294} value={entry.asn || ""} disabled={!editable} onInput={(e) => set({ asn: Number((e.target as HTMLInputElement).value) })} /></Field>
+        </div>
+        {editable && <div class="as-row-actions">
+          <Button small title={t("Move up")} aria-label={t("Move up")} disabled={i === 0} onClick={() => move(i, i - 1)}>↑</Button>
+          <Button small title={t("Move down")} aria-label={t("Move down")} disabled={i === rows.length - 1} onClick={() => move(i, i + 1)}>↓</Button>
+          <Button small variant="danger" onClick={() => {
+            const next = rows.filter((_, j) => j !== i);
+            change({ ...doc, asAddresses: next.length ? next : undefined });
+          }}>{t("Delete")}</Button>
+        </div>}
+      </div>;
+    })}
+  </Card>;
 }
 
 // ---- OpenVPN certificate authority -----------------------------------------------------------------------

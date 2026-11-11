@@ -11,6 +11,9 @@
 export interface GraphVertex {
   id: string;
   label: string;
+  subtitle?: string;
+  /** Place AS headings before router labels so routers can avoid their complete bounds. */
+  labelPriority?: number;
   /** fill colour */
   color: string;
   /** ring colour (e.g. freshness), optional */
@@ -25,6 +28,7 @@ export interface GraphVertex {
 export interface GraphGroup {
   id: string;
   label: string;
+  subtitle?: string;
   color: string;
   primary?: boolean;
 }
@@ -497,6 +501,7 @@ export class ForceGraph3D {
     const lit = (id: string) => !this.highlight || activeNodes.has(id) || activeLinks.has(id);
     const t = performance.now() / 1000;
     const occupied: Array<{ x: number; y: number; w: number; h: number; weight?: number }> = [];
+    const asLabels: Array<{ x: number; y: number; w: number; h: number }> = [];
     // Camera-facing text belongs to its object's depth plane, just like the AS labels. Geometry at the same
     // depth wins ties; split long depth-spanning links so their foreground sections stay in front of text.
     const scene: Array<{ depth: number; layer: number; draw: () => void }> = [];
@@ -523,21 +528,30 @@ export class ForceGraph3D {
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.font = "600 14px system-ui, sans-serif";
-      const labelWidth = ctx.measureText(b.group.label).width + 16;
-      const labelY = sy - r - 6;
+      const titleWidth = ctx.measureText(b.group.label).width;
+      ctx.font = "12px system-ui, sans-serif";
+      const labelWidth = Math.max(titleWidth, b.group.subtitle ? ctx.measureText(b.group.subtitle).width : 0) + 16;
+      const labelHeight = b.group.subtitle ? 42 : 24;
+      const labelY = sy - r - labelHeight - 6;
       const opacity = fog(depth) * (on ? 1 : 0.4);
       scene.push({ depth, layer: 0, draw: () => {
         ctx.globalAlpha = opacity * 0.16;
         ctx.fillStyle = background;
-        ctx.fillRect(sx - labelWidth / 2, labelY - 19, labelWidth, 22);
+        ctx.fillRect(sx - labelWidth / 2, labelY, labelWidth, labelHeight);
         ctx.globalAlpha = opacity;
         ctx.fillStyle = b.group.color;
         ctx.font = "600 14px system-ui, sans-serif";
         ctx.textAlign = "center";
-        ctx.textBaseline = "bottom";
-        ctx.fillText(b.group.label, sx, labelY);
+        ctx.textBaseline = "middle";
+        ctx.fillText(b.group.label, sx, labelY + 12);
+        if (b.group.subtitle) {
+          ctx.font = "12px system-ui, sans-serif";
+          ctx.fillText(b.group.subtitle, sx, labelY + 30);
+        }
       } });
-      occupied.push({ x: sx - labelWidth / 2, y: labelY - 19, w: labelWidth, h: 22, weight: 16 });
+      const box = { x: sx - labelWidth / 2, y: labelY, w: labelWidth, h: labelHeight };
+      occupied.push({ ...box, weight: 16 });
+      asLabels.push(box);
     }
 
     for (const l of this.links) {
@@ -624,13 +638,15 @@ export class ForceGraph3D {
     }
     // Reserve a stable side of each vertex. Re-running greedy placement in depth/hover order every frame made
     // labels flip sides or disappear near collisions. Hover only changes emphasis, never label geometry.
-    order.sort((a, b) => a.v.id.localeCompare(b.v.id));
+    order.sort((a, b) => (b.v.labelPriority ?? 0) - (a.v.labelPriority ?? 0) || a.v.id.localeCompare(b.v.id));
     for (const p of order) {
       const r = p.v.radius * p.scale;
       if (p.sx + r < 0 || p.sx - r > this.width || p.sy + r < 0 || p.sy - r > this.height) continue;
       ctx.font = "12px system-ui, sans-serif";
-      const w = ctx.measureText(p.v.label).width + 10, h = 19;
-      const candidates = [0, 22, 44].flatMap((offset) => [
+      const w = Math.max(ctx.measureText(p.v.label).width, p.v.subtitle ? ctx.measureText(p.v.subtitle).width : 0) + 10;
+      const h = p.v.subtitle ? 37 : 19;
+      // Keep slot indexes stable, including when a long AS name requires a more distant position.
+      const candidates = Array.from({ length: 16 }, (_, i) => i * 22).flatMap((offset) => [
         { x: p.sx - w / 2, y: p.sy + r + 5 + offset, w, h },
         { x: p.sx - w / 2, y: p.sy - r - h - 5 - offset, w, h },
         { x: p.sx + r + 5 + offset, y: p.sy - h / 2, w, h },
@@ -648,12 +664,25 @@ export class ForceGraph3D {
           edges.reduce((sum, e) => sum + segmentBoxOverlap(e.sx, e.sy, e.ex, e.ey, b) * e.width * 4, 0);
       };
       const previous = this.labelSlots.get(p.v.id);
-      const slot = previous ?? candidates.reduce((best, b, i) => score(b) < score(candidates[best]!) ? i : best, 0);
-      if (previous === undefined) this.labelSlots.set(p.v.id, slot);
+      const clearOfAs = (b: typeof candidates[number]) => !asLabels.some((a) =>
+        b.x < a.x + a.w + 4 && b.x + b.w + 4 > a.x && b.y < a.y + a.h + 4 && b.y + b.h + 4 > a.y);
+      let slot = previous;
+      if (slot === undefined || !candidates[slot] || !clearOfAs(candidates[slot]!)) {
+        let eligible = candidates.map((_, i) => i).filter((i) => clearOfAs(candidates[i]!));
+        // In very dense views extend beyond every AS block rather than accepting an overlapping label.
+        if (!eligible.length) {
+          const y = Math.max(...asLabels.map((a) => a.y + a.h)) + 8;
+          candidates.push({ x: p.sx - w / 2, y, w, h });
+          eligible = [candidates.length - 1];
+        }
+        slot = eligible.reduce((best, i) => score(candidates[i]!) < score(candidates[best]!) ? i : best, eligible[0]!);
+      }
+      this.labelSlots.set(p.v.id, slot);
       // Like AS labels, follow the projected object; let the canvas clip at its edge instead of pinning text
       // to the viewport as an overlay while the router continues to move through the scene.
       const box = candidates[slot]!;
       occupied.push({ ...box, weight: 16 });
+      if (p.v.labelPriority) asLabels.push(box);
       const opacity = fog(p.depth) * (lit(p.v.id) ? 1 : 0.3);
       scene.push({ depth: p.depth, layer: 0, draw: () => {
         if (slot >= 4) {
@@ -673,7 +702,8 @@ export class ForceGraph3D {
         ctx.font = "12px system-ui, sans-serif";
         ctx.textAlign = "left";
         ctx.textBaseline = "middle";
-        ctx.fillText(p.v.label, box.x + 5, box.y + h / 2);
+        ctx.fillText(p.v.label, box.x + 5, box.y + 9.5);
+        if (p.v.subtitle) ctx.fillText(p.v.subtitle, box.x + 5, box.y + 27.5);
       } });
     }
     scene.sort((a, b) => b.depth - a.depth || a.layer - b.layer);

@@ -147,7 +147,7 @@ function toGraph(view: View, show: { ibgp: boolean; ebgp: boolean; paths: boolea
     .map<GraphVertex>((v) =>
       v.kind === "as"
         ? // collapsed ASes solid, ASes known only from AS paths hollow-looking (faint ring) and smaller
-          { id: v.id, label: v.label, color: v.internal ? ibgp : ebgp, shape: "diamond", radius: v.members?.length ? 14 : 9, ...(v.members?.length ? {} : { ring: css("--faint"), dashedRing: true }) }
+          { id: v.id, label: asLabel(v.asn!, !!v.internal), subtitle: view.asNames?.[v.asn!], labelPriority: 1, color: v.internal ? ibgp : ebgp, shape: "diamond", radius: v.members?.length ? 14 : 9, ...(v.members?.length ? {} : { ring: css("--faint"), dashedRing: true }) }
         : v.kind === "peer"
           ? { id: v.id, label: v.label, color: ebgp, ring: css("--faint"), shape: "triangle", radius: 10, group: `asn:${v.asn}` }
           : {
@@ -167,7 +167,7 @@ function toGraph(view: View, show: { ibgp: boolean; ebgp: boolean; paths: boolea
   return {
     vertices,
     groups: [
-      ...view.clusters.map((c) => ({ id: c.id, label: asLabel(c.asn, c.internal, view.asNames), color: c.internal ? ibgp : ebgp, primary: c.internal })),
+      ...view.clusters.map((c) => ({ id: c.id, label: asLabel(c.asn, c.internal), subtitle: view.asNames?.[c.asn], color: c.internal ? ibgp : ebgp, primary: c.internal })),
       { id: NO_BGP, label: t("No BGP"), color: css("--faint") },
     ],
     links: links.map<GraphLink>((l) => {

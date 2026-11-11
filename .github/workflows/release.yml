@@ -60,7 +60,7 @@ jobs:
             echo "::error::GitHub Pages source must be GitHub Actions (found: $build_type). Change it at $settings before releasing."
             exit 1
           fi
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ env.TAG }}
           fetch-depth: 0
@@ -140,9 +140,9 @@ jobs:
           cargo test --locked --workspace
           python3 -B -m unittest discover -s tests -p 'test_release_*.py'
           sh tools/fix-exec-bits.sh --check
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with: { node-version: 24 }
+      - uses: pnpm/action-setup@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: 24, package-manager-cache: false }
       - run: pnpm config set store-dir "$PWD/.cache/pnpm"
       - uses: ./.github/actions/release-cache
         with:
@@ -154,17 +154,17 @@ jobs:
       - name: Build changed dashboard UI once for all architectures
         if: contains(steps.m.outputs.rust_changed, 'meduza-np-dashboard')
         run: pnpm --filter @meduza-np/dashboard-web run build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: contains(steps.m.outputs.rust_changed, 'meduza-np-dashboard')
         with: { name: dashboard-www, path: packages/meduza-np-dashboard/dist/www/, if-no-files-found: error }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with: { name: release-tool, path: target/release/meduza-np-release, if-no-files-found: error }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: release-trust
           path: packages/meduza-np-base-container/trust/release-keys.json
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with: { name: plan, path: plan/ }
       - uses: ./.github/actions/release-cache
         if: always() && !cancelled()
@@ -203,11 +203,11 @@ jobs:
           - { target: aarch64-unknown-linux-musl, platform: linux/arm64, machine: "AArch64", qemu: qemu-aarch64-static }
           - { target: armv7-unknown-linux-musleabihf, platform: linux/arm/v7, machine: "ARM", qemu: qemu-arm-static }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with: { ref: "${{ env.TAG }}" }
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with: { name: plan, path: plan }
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         if: contains(needs.plan.outputs.rust_changed, 'meduza-np-dashboard')
         with: { name: dashboard-www, path: packages/meduza-np-dashboard/dist/www }
       - uses: ./.github/actions/release-tool
@@ -266,7 +266,7 @@ jobs:
             fi
           done
           tools/openwrt-apk.sh dist "$R"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with: { name: "dist-rust-${{ matrix.target }}", path: dist/ }
       - uses: ./.github/actions/release-cache
         if: always() && !cancelled()
@@ -294,10 +294,10 @@ jobs:
         package: [meduza-np-openvpn-pkg, meduza-np-mosdns-pkg]
         platform: [linux/amd64, linux/arm64, linux/arm/v7]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with: { ref: "${{ env.TAG }}" }
         if: contains(needs.plan.outputs.providers_changed, matrix.package)
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         if: contains(needs.plan.outputs.providers_changed, matrix.package)
         with: { name: plan, path: plan }
       - uses: ./.github/actions/release-tool
@@ -314,7 +314,7 @@ jobs:
           target/release/meduza-np-release openwrt --package ${{ matrix.package }} --version "$v" --platform ${{ matrix.platform }} \
             --tree packages/${{ matrix.package }}/out/$slug --out dist
           tools/openwrt-apk.sh dist target/release/meduza-np-release
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: contains(needs.plan.outputs.providers_changed, matrix.package)
         with: { name: "dist-${{ matrix.package }}-${{ strategy.job-index }}", path: dist/ }
 
@@ -323,9 +323,9 @@ jobs:
     if: needs.plan.outputs.noarch_changed != '[]'
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with: { ref: "${{ env.TAG }}" }
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with: { name: plan, path: plan }
       - uses: ./.github/actions/release-tool
       - name: Architecture-independent OpenWrt packages (LuCI app)
@@ -335,7 +335,7 @@ jobs:
             target/release/meduza-np-release openwrt --package "$p" --version "$v" --noarch 1 --out dist
           done
           tools/openwrt-apk.sh dist target/release/meduza-np-release
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with: { name: dist-noarch, path: dist/ }
 
   # Runtime images (D30): built for every platform, smoke-tested, pushed by digest. The base image embeds the group's
@@ -355,16 +355,16 @@ jobs:
       matrix:
         package: ${{ fromJSON(needs.plan.outputs.images_changed) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with: { ref: "${{ env.TAG }}" }
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with: { name: plan, path: in/plan }
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         if: needs.build-rust.result == 'success'
         with: { pattern: dist-rust-*, path: in }
       - uses: ./.github/actions/release-tool
-      - uses: actions/setup-node@v4
-        with: { node-version: 24 }
+      - uses: actions/setup-node@v5
+        with: { node-version: 24, package-manager-cache: false }
       - name: Tools and registry login
         env: { GH_TOKEN: "${{ github.token }}" }
         run: |
@@ -400,7 +400,7 @@ jobs:
           v=$(jq -r --arg p ${{ matrix.package }} '.[$p].version' in/plan/matrix.json)
           REL=target/release/meduza-np-release GROUP_TAG="$TAG" UPDATER_DIR="$PWD/updater" UPDATE_BASE_URL="$PAGES_URL" \
             SOURCE_URL="https://github.com/${{ github.repository }}" tools/release-image.sh ${{ matrix.package }} "$v" oci
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with: { name: "oci-${{ matrix.package }}", path: oci/ }
 
   publish:
@@ -416,14 +416,14 @@ jobs:
       contents: write
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with: { ref: "${{ env.TAG }}" }
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with: { name: plan, path: in/plan }
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         if: needs.build-rust.result == 'success' || needs.build-providers.result == 'success' || needs.build-noarch.result == 'success'
         with: { pattern: dist-*, path: in }
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         if: needs.build-images.result == 'success'
         with: { pattern: oci-*, path: in }
       - uses: ./.github/actions/release-tool
@@ -538,7 +538,7 @@ jobs:
             --repository "$GITHUB_REPOSITORY" --base-url "$PAGES_URL" --artifacts dist --sbom sbom
           jq -r '.assets[] | select(.kind == "sbom") | .url' "site/releases/$TAG/catalog.json" |
             while IFS= read -r u; do curl --retry 5 --retry-all-errors --retry-delay 2 --retry-max-time 180 --connect-timeout 15 --max-time 60 -fsSIL "$u" >/dev/null || { echo "::error::Release asset URL verification failed after retries: $u"; exit 1; }; done
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with: { name: site-new, path: site/ }
 
   pages:
@@ -556,21 +556,21 @@ jobs:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with: { ref: "${{ env.TAG }}" }
       - name: Check Pages configuration before deployment
-        uses: actions/configure-pages@v5
-      - uses: actions/download-artifact@v4
+        uses: actions/configure-pages@v6
+      - uses: actions/download-artifact@v7
         with: { name: site-new, path: new }
       - name: Merge with the published site (immutable releases kept, pointer replaced last)
         run: |
           python3 tools/pages-api.py build --new new --out site \
             --repository "$GITHUB_REPOSITORY" --base-url "$PAGES_URL"
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-pages-artifact@v5
         with:
           name: ${{ env.PAGES_ARTIFACT }}
           path: site
       - id: deploy
-        uses: actions/deploy-pages@v4
+        uses: actions/deploy-pages@v5
         with:
           artifact_name: ${{ env.PAGES_ARTIFACT }}

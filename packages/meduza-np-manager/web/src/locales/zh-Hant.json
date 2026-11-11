@@ -677,5 +677,9 @@
   "Stop requesting {package}? Installed or deployment-pinned binaries may remain; the provider status shows what is active.": "停止請求 {package}？已安裝或由部署固定的本體套件可能仍被保留，實際使用情況以下方 provider 狀態為準。",
   "unknown version": "版本未知",
   "endpoint-resolution-failed": "端點 DNS 解析失敗，自動重試",
-  "endpoint-update-failed": "端點更新失敗，自動重試"
+  "endpoint-update-failed": "端點更新失敗，自動重試",
+  "Drag to reorder": "拖曳排序",
+  "Move up": "上移",
+  "Move down": "下移",
+  "Drag the handle or use the arrows to reorder. Save and apply to publish the new order.": "拖曳把手或使用箭頭調整順序，儲存並套用後發佈新順序。"
 }

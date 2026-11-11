@@ -36,14 +36,14 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.discover.outputs.bundles) }}
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           name: ${{ matrix.name }}
           path: .build-cache/${{ matrix.scope }}
           github-token: ${{ github.token }}
           run-id: ${{ github.event.workflow_run.id }}
       # Keep the bundle compressed. No release scripts or cached executables run in this workflow.
-      - uses: actions/cache/save@v4
+      - uses: actions/cache/save@v5
         with:
           path: .build-cache/${{ matrix.scope }}
           key: ${{ matrix.name }}
