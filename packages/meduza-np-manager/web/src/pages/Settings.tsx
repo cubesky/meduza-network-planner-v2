@@ -20,6 +20,7 @@ type Role = "admin" | "operator" | "viewer";
 
 // The page's sections, each its own tab (address #/settings/<id>); `owns` claims the problems shown on the tab.
 const TABS = [
+  { id: "as-addresses", label: msg("AS addresses"), owns: (p: Problem) => p.path.startsWith("/asAddresses") },
   { id: "routing", label: msg("Routing"), owns: (p: Problem) => p.path.startsWith("/routing") && !p.path.startsWith("/routing/anycast") },
   { id: "anycast", label: msg("Anycast"), owns: (p: Problem) => p.path.startsWith("/routing/anycast") },
   { id: "dns", label: msg("DNS"), owns: (p: Problem) => p.path.startsWith("/dns") || p.path.startsWith("/mosdns") || p.path.includes("/services/mosdns") },
@@ -78,6 +79,21 @@ export function SettingsPage(props: { role: Role; tab?: string }) {
       />
       {tab !== "anycast" && tab !== "mihomo" && tab !== "dns" && <ProblemList problems={mine.filter(isError)} tone="bad" />}
       {tab !== "anycast" && tab !== "mihomo" && tab !== "dns" && <ProblemList problems={mine.filter((p) => !isError(p))} tone="warn" />}
+      {tab === "as-addresses" && <Card title={t("AS addresses")} actions={editable && <Button small onClick={() => change({ ...doc, asAddresses: [...(doc.asAddresses ?? []), { name: "", asn: 0 }] })}>{t("Add")}</Button>}>
+        <p class="small muted">{t("Name your AS numbers to select them in peer settings and show their names in the topology. Removing a name keeps existing peer ASNs.")}</p>
+        {!(doc.asAddresses ?? []).length && <p class="muted">{t("No AS addresses yet.")}</p>}
+        {(doc.asAddresses ?? []).map((entry, i) => {
+          const set = (patch: Partial<typeof entry>) => change({ ...doc, asAddresses: doc.asAddresses!.map((row, j) => j === i ? { ...row, ...patch } : row) });
+          return <div class="form-grid" style={{ alignItems: "start", marginBottom: "12px" }}>
+            <Field label={t("Name")} error={errorAt(`/asAddresses/${i}/name`)}><TextInput value={entry.name} disabled={!editable} onInput={(name) => set({ name })} /></Field>
+            <Field label="ASN" error={errorAt(`/asAddresses/${i}/asn`)}><input type="number" min={1} max={4294967294} value={entry.asn || ""} disabled={!editable} onInput={(e) => set({ asn: Number((e.target as HTMLInputElement).value) })} /></Field>
+            {editable && <div><Button small variant="danger" onClick={() => {
+              const next = doc.asAddresses!.filter((_, j) => j !== i);
+              change({ ...doc, asAddresses: next.length ? next : undefined });
+            }}>{t("Delete")}</Button></div>}
+          </div>;
+        })}
+      </Card>}
       {tab === "routing" && <Card title={t("Routing")}>
         <div class="form-grid">
           <Field label={t("Internal ASN")} error={errorAt("/routing/internalAsn")} help={t("The AS number of the internal network: iBGP between mesh members uses it.")}>

@@ -18,6 +18,7 @@ interface Vertex {
   label: string;
   asn?: number;
   address?: string;
+  addresses?: string[];
   routerId?: string;
   freshness?: string;
   behavior?: string;
@@ -56,6 +57,7 @@ interface Link {
 }
 
 interface Topology {
+  asNames?: Record<string, string>;
   internalAsn: number | null;
   vertices: Vertex[];
   links: Link[];
@@ -83,7 +85,8 @@ const css = (name: string) => getComputedStyle(document.documentElement).getProp
 
 const STATE_TONE: Record<LinkState, "ok" | "warn" | "bad" | "idle"> = { up: "ok", partial: "warn", down: "bad", unknown: "idle" };
 const stateLabel = (s: LinkState) => ({ up: t("established"), partial: t("partly established"), down: t("down"), unknown: t("no report") })[s];
-const asLabel = (asn: number, internal: boolean) => (internal ? t("{as} (internal)", { as: `AS${asn}` }) : `AS${asn}`);
+const namedAs = (asn: number, names?: Record<string, string>) => names?.[asn] ? `AS${asn} ${names[asn]}` : `AS${asn}`;
+const asLabel = (asn: number, internal: boolean, names?: Record<string, string>) => (internal ? t("{as} (internal)", { as: namedAs(asn, names) }) : namedAs(asn, names));
 
 function mergeState(a: LinkState, b: LinkState): LinkState {
   if (a === b) return a;
@@ -98,11 +101,11 @@ function present(topo: Topology, collapse: boolean): View {
   const vertices: Vertex[] = [];
   for (const v of topo.vertices) {
     if (collapse && v.kind !== "as" && v.asn !== undefined && v.asn !== topo.internalAsn) into.set(v.id, `as:${v.asn}`);
-    else vertices.push(v);
+    else vertices.push(v.kind === "as" && v.asn !== undefined ? { ...v, label: namedAs(v.asn, topo.asNames) } : v);
   }
   for (const [id, asId] of into) {
     let as = vertices.find((v) => v.id === asId);
-    if (!as) vertices.push((as = { id: asId, kind: "as", label: `AS${asId.slice(3)}`, asn: Number(asId.slice(3)), members: [] }));
+    if (!as) vertices.push((as = { id: asId, kind: "as", label: namedAs(Number(asId.slice(3)), topo.asNames), asn: Number(asId.slice(3)), members: [] }));
     as.members = [...(as.members ?? []), topo.vertices.find((v) => v.id === id)!.label];
   }
   const at = (id: string) => into.get(id) ?? id;
@@ -128,7 +131,7 @@ function present(topo: Topology, collapse: boolean): View {
     if (v.kind === "node") c.external = false;
     clusters.set(v.asn, c);
   }
-  return { internalAsn: topo.internalAsn, vertices, links: [...links.values()], clusters: [...clusters.values()].sort((a, b) => a.asn - b.asn) };
+  return { asNames: topo.asNames, internalAsn: topo.internalAsn, vertices, links: [...links.values()], clusters: [...clusters.values()].sort((a, b) => a.asn - b.asn) };
 }
 
 /** Graph styling from the theme tokens (re-read when the theme changes). */
@@ -164,7 +167,7 @@ function toGraph(view: View, show: { ibgp: boolean; ebgp: boolean; paths: boolea
   return {
     vertices,
     groups: [
-      ...view.clusters.map((c) => ({ id: c.id, label: asLabel(c.asn, c.internal), color: c.internal ? ibgp : ebgp, primary: c.internal })),
+      ...view.clusters.map((c) => ({ id: c.id, label: asLabel(c.asn, c.internal, view.asNames), color: c.internal ? ibgp : ebgp, primary: c.internal })),
       { id: NO_BGP, label: t("No BGP"), color: css("--faint") },
     ],
     links: links.map<GraphLink>((l) => {
@@ -255,6 +258,14 @@ function TopologyView(props: { topo: Topology }) {
     graph.current?.setData(g.vertices, g.links, g.groups);
   }, [view, show.ibgp, show.ebgp, show.paths, theme]);
   useEffect(() => {
+    // Learning a peer's router ID can replace its address-only vertex/link. Drop obsolete interaction targets
+    // instead of leaving an empty details card or tooltip for a duplicate that has just merged away.
+    const exists = (item: GraphItem) => item.kind === "vertex" ? view.vertices.some((v) => v.id === item.id)
+      : item.kind === "link" ? view.links.some((l) => l.id === item.id) : view.clusters.some((c) => c.id === item.id);
+    setSelected((item) => item && exists(item) ? item : null);
+    setTip((tip) => tip && exists(tip.item) ? tip : null);
+  }, [view]);
+  useEffect(() => {
     if (graph.current) graph.current.autoRotate = rotate;
   }, [rotate]);
   useEffect(() => {
@@ -326,9 +337,9 @@ function TopologyView(props: { topo: Topology }) {
             {tip.item.kind === "group" && tip.item.id === NO_BGP ? (
               <div><strong>{t("No BGP")}</strong> <span class="muted">{t("Nodes that run no BGP (not Tinc mesh members, no BGP sessions).")}</span></div>
             ) : tip.item.kind === "vertex" ? (
-              <VertexTip v={vertex(tip.item.id)} />
+              <VertexTip v={vertex(tip.item.id)} names={view.asNames} />
             ) : tip.item.kind === "group" ? (
-              <ClusterTip c={view.clusters.find((c) => c.id === tip.item.id)} label={(id) => vertex(id)?.label ?? id} />
+              <ClusterTip names={view.asNames} c={view.clusters.find((c) => c.id === tip.item.id)} label={(id) => vertex(id)?.label ?? id} />
             ) : (
               <LinkTip l={link(tip.item.id)} label={(id) => vertex(id)?.label ?? id} />
             )}
@@ -340,7 +351,7 @@ function TopologyView(props: { topo: Topology }) {
   );
 }
 
-function VertexTip(props: { v: Vertex | undefined }) {
+function VertexTip(props: { v: Vertex | undefined; names?: Record<string, string> }) {
   const v = props.v;
   if (!v) return null;
   if (v.kind === "as") {
@@ -354,24 +365,24 @@ function VertexTip(props: { v: Vertex | undefined }) {
   if (v.kind === "peer") {
     return (
       <div>
-        <strong>{v.label}</strong> <span class="muted">AS{v.asn} · {t("external router")}</span>
-        <div class="muted mono">{[v.address, v.routerId && v.routerId !== v.label ? t("router ID {id}", { id: v.routerId }) : null].filter(Boolean).join(" · ")}</div>
+        <strong>{v.label}</strong> <span class="muted">{namedAs(v.asn!, props.names)} · {t("external router")}</span>
+        <div class="muted mono">{[v.addresses?.join(", ") || v.address, v.routerId && v.routerId !== v.label ? t("router ID {id}", { id: v.routerId }) : null].filter(Boolean).join(" · ")}</div>
       </div>
     );
   }
   return (
     <div>
-      <strong>{v.label}</strong> <span class="muted">{v.asn !== undefined ? `AS${v.asn}` : t("no BGP")}{v.edge ? ` · ${t("edge router")}` : ""}</span>
+      <strong>{v.label}</strong> <span class="muted">{v.asn !== undefined ? namedAs(v.asn, props.names) : t("no BGP")}{v.edge ? ` · ${t("edge router")}` : ""}</span>
       <div class="muted">{t(v.freshness ?? "unknown")} · {t(v.behavior ?? "static")}</div>
     </div>
   );
 }
 
-function ClusterTip(props: { c: Cluster | undefined; label: (id: string) => string }) {
+function ClusterTip(props: { names?: Record<string, string>; c: Cluster | undefined; label: (id: string) => string }) {
   if (!props.c) return null;
   return (
     <div>
-      <strong>{asLabel(props.c.asn, props.c.internal)}</strong>{" "}
+      <strong>{asLabel(props.c.asn, props.c.internal, props.names)}</strong>{" "}
       <span class="muted">{props.c.external ? t("{count} external router(s)", { count: props.c.members.length }) : t("{count} node(s)", { count: props.c.members.length })}</span>
       <div class="muted">{props.c.members.map(props.label).join(", ")}</div>
     </div>
@@ -416,7 +427,7 @@ function Details(props: { item: GraphItem; view: View; onClose: () => void }) {
   const sessions = links.flatMap((l) => l.sessions.map((s) => ({ ...s, kind: l.kind, link: l.id })));
   const pathLink = props.item.kind === "link" && links[0]?.kind === "path" ? links[0] : undefined;
   const title = cluster
-    ? asLabel(cluster.asn, cluster.internal)
+    ? asLabel(cluster.asn, cluster.internal, props.view.asNames)
     : v
       ? v.label
       : pathLink
@@ -435,14 +446,14 @@ function Details(props: { item: GraphItem; view: View; onClose: () => void }) {
           ? t("Collapsed: {nodes}. Clear “Collapse external ASes” to show them.", { nodes: v.members.join(", ") })
           : `${t("Remote AS: seen only in the AS paths of learned routes, so only its number is known, not its routers or links.")} ${t("Reached through: {names}.", { names: links.map((l) => label(l.source === v.id ? l.target : l.source)).join(", ") })}`
         : v?.kind === "peer"
-          ? [t("External router in AS{asn}, not managed by this console; session address {address}.", { asn: v.asn ?? "?", address: v.address ?? "—" }), v.routerId && t("Router ID {id}.", { id: v.routerId })].filter(Boolean).join(" ")
+          ? [t("External router in AS{asn}, not managed by this console; session address {address}.", { asn: v.asn ?? "?", address: v.addresses?.join(", ") || v.address || "—" }), v.routerId && t("Router ID {id}.", { id: v.routerId })].filter(Boolean).join(" ")
           : v
             ? v.asn !== undefined
-              ? `AS${v.asn}`
+              ? [namedAs(v.asn, props.view.asNames), v.routerId && t("Router ID {id}.", { id: v.routerId })].filter(Boolean).join(" · ")
               : t("This node runs no BGP.")
             : null;
   // the AS paths of the routes an external router sends
-  const asPaths = v?.kind === "peer" ? [...new Set(sessions.flatMap((s) => s.asPaths ?? []).map((p) => p.map((a) => `AS${a}`).join(" → ")))] : [];
+  const asPaths = v?.kind === "peer" ? [...new Set(sessions.flatMap((s) => s.asPaths ?? []).map((p) => p.map((a) => namedAs(a, props.view.asNames)).join(" → ")))] : [];
   return (
     <Card
       title={title}
@@ -466,7 +477,7 @@ function Details(props: { item: GraphItem; view: View; onClose: () => void }) {
         columns={[
           { key: "kind", label: t("Type"), render: (r) => (r.kind === "ibgp" ? "iBGP" : "eBGP") },
           { key: "node", label: t("Node"), render: (r) => String(r.node) },
-          { key: "address", label: t("Neighbor"), render: (r) => <span class="mono">{String(r.address)}{r.remoteAs !== undefined ? ` (AS${r.remoteAs})` : ""}</span> },
+          { key: "address", label: t("Neighbor"), render: (r) => <span class="mono">{String(r.address)}{r.remoteAs !== undefined ? ` (${namedAs(Number(r.remoteAs), props.view.asNames)})` : ""}</span> },
           { key: "bgpState", label: t("State"), render: (r) => <Badge tone={r.bgpState === "Established" ? "ok" : r.bgpState === "not reported" ? "idle" : "bad"}>{r.bgpState === "not reported" ? t("no report") : String(r.bgpState)}</Badge> },
           { key: "uptime", label: t("Up/down for"), render: (r) => String(r.uptime ?? "—") },
           { key: "prefixesReceived", label: t("Received"), render: (r) => String(r.prefixesReceived ?? "—") },

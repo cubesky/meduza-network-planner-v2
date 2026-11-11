@@ -12,6 +12,7 @@ import { useEffect, useState } from "preact/hooks";
 import { ApiError, del, get, post, put } from "./api.ts";
 
 export interface ClusterDoc {
+  asAddresses?: Array<{ name: string; asn: number }>;
   schemaVersion: number;
   routing?: { internalAsn?: number; anycast?: unknown; bfd?: Record<string, unknown>; maximumPaths?: number; bgpFilter?: { in?: string[]; out?: string[] } };
   mihomo?: MihomoCatalog;

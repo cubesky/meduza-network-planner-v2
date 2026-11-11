@@ -1853,3 +1853,69 @@ The reported root build is therefore not the official account convention, and fr
 assumed for OpenWrt. Add the official network:network configure flags to the same identity/plan regression;
 the runtime detection already supports them without a platform-specific override. All 18 FRR tests and
 strict FRR/planner Clippy still pass.
+
+## D81 — Merge topology peers by learned Router ID, including managed nodes
+
+FRR already reports `remoteRouterId` from `show bgp neighbors json` as each BGP instance's `routerId`.
+The topology previously keyed unmanaged peers by that ID, but recognized managed counterparts only by
+tunnel address. A session to a managed router's other address therefore drew an unmanaged duplicate.
+An observer lacking the ID could also draw an address-only copy beside another observer's known peer.
+
+Build a managed identity index from published ASN and FRR/node router ID (the FRR override wins). Resolve
+learned peer identities to a unique managed node before the existing tunnel-address fallback. Never collapse
+distinct managed registrations on duplicate IDs, and scope all identity matches to the AS because Router IDs
+are not globally unique. Validate IPv4/nonzero IDs. A retained ID continues identifying the router through
+session reconnects; unknown/invalid IDs do not justify a merge. Infer an unidentified observer's peer from a
+known AS/address only when the observations agree. Ambiguous overlapping addresses stay independent.
+
+Collect sessions before resolving peers so report/node ordering cannot leave an address-only duplicate.
+Preserve every session, state, learned route and AS path when aggregating links; keep all peer addresses on
+the vertex as well as individual session rows. Existing `address` remains for API compatibility. Preserve
+managed node identity/name/navigation and expose its Router ID. Show all merged addresses in peer tooltips
+and details. Clear obsolete selection/hover targets after a merge instead of retaining empty detail cards.
+
+Five new regressions failed before the change; all seven topology identity cases now pass. The complete
+focused run passes 42 tests (topology, graph, sync/API and i18n), plus Manager type checks and production
+build. Actual Manager Chrome checks feed real server-generated before/after results through normal polling:
+unknown peers merge, the managed duplicate disappears, both session rows/routes/addresses remain, stale
+selection clears and mobile/desktop details stay bounded. Source-only; update Manager to deploy. The existing
+FRR report already supplies the fields, so no new node-side package or configuration revision is required.
+No Git submission or production changes performed.
+
+## D82 — Global AS names and peer ASN choices (2026-11-10)
+
+Store the optional `asAddresses: [{name, asn}]` catalog in the Manager cluster document. Its own Global
+settings tab participates in the existing working copy, per-account draft, validation and Save/Apply flow.
+Allow nonempty names up to 128 characters, unique numeric ASNs in 1..4294967294, and report invalid entries
+at their field paths. Viewers can read the list; operators and administrators edit through normal permissions.
+
+The shared descriptor renderer accepts optional console-provided numeric choices through context, so
+WireGuard nested peer dialogs and OpenVPN instance dialogs both offer catalog selection beside manual
+numeric input without changing their package schemas. Only the numeric remoteAsn is written. Names are
+resolved globally by ASN, including manually entered matching numbers; no redundant per-peer name or
+selection-provenance flag is stored. Deleting a mapping does not modify existing peer configuration.
+
+Expose published names once in topology `asNames`; display them after AS numbers in 3D clusters,
+collapsed AS vertices, remote path vertices, tooltips and session/path details. Keep topology identities
+and routing snapshots independent of display names: catalog-only edits publish a Manager revision but
+leave node desired revisions and content digests unchanged. Never expose unpublished names in topology.
+
+API tests cover staging/publication, rename/removal, unchanged node snapshots and invalid catalog shapes,
+duplicate ASNs and boundaries. Actual Chrome checks exercise Settings permissions and Save/Apply/reload,
+both real package editors including nested WireGuard dialogs, manual numeric entry and named 3D labels.
+Source-only; update Manager to deploy. No Git submission or production modifications.
+
+## D83 — Report console capabilities independently of service configuration (2026-11-11)
+
+OpenWrt overview displayed CLI and LuCI as `not enabled` because registry capabilities were derived only
+from applied services, although these management entry points have no services.* configuration. For
+registered CLI/UI-client roles, expose their `ui.*` capabilities independently of service configuration.
+Entry-point running/healthy means the capability is available, without requiring a supervised daemon.
+Keep availability and registration checks authoritative: absent dependencies, conflicts and incompatible
+platforms remain errors. Non-UI capabilities and optional service switches keep their original semantics.
+
+Add `in-sync` to the LuCI successful badge states. Do not promote unsynced, applying or unknown states to
+green. Regression tests execute the shipped LuCI modules and cover console rows, disabled services and
+failure badges; run these tests in web CI. Registry tests use the actual CLI and both dashboard manifests,
+including the OpenWrt platform constraint, and check dependency/registration failure handling. Deploy the
+updated planner plus dashboard-openwrt packages. Source-only; no Git submission or production changes.

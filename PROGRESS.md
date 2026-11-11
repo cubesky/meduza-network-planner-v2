@@ -1302,3 +1302,30 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   detection supports the official account as well as the reported custom root build; added network:network
   to the ownership-plan regression and clarified the specification. All 18 FRR tests and strict FRR/planner
   Clippy pass. Source-only; no additional runtime behavior change or Git submission.
+- 2026-11-10 (per the user) Automatically merge learned BGP Router IDs in topology (D81).
+  FRR already reports the remote ID. Manager now resolves same-AS identities to unique managed nodes,
+  merges unmanaged multi-address/multi-observer peers and fills address-only observations only when
+  unambiguous. Preserve all session status/routes/AS paths and managed labels/navigation. Reject zero,
+  invalid or cross-AS identities; do not collapse distinct registrations with duplicate IDs. Retained IDs
+  keep reconnecting peers merged. Peer details/tooltips list every address, and obsolete selection clears.
+  Five regressions fail before; all seven new identity cases and the focused graph/sync/i18n suite pass
+  (42 total). Type checks and production build pass. Actual Manager Chrome verifies automatic poll-time
+  merging from server-generated fixtures, both session rows/routes, managed Router ID, stale selection
+  and mobile/desktop bounds. Logs: target/check-topology-routerid-{before,final,types,build,browser}.log;
+  preview: target/topology-routerid.png. Source-only; update Manager, no node package/config revision
+  changes needed. No Git submission or production modifications.
+- 2026-11-10 (per the user) Global AS address settings and peer ASN selection (D82).
+  Added staged/published name–ASN mappings with duplicate/range/name validation and viewer permissions.
+  Actual WireGuard nested peer and OpenVPN instance dialogs offer global choices alongside manual ASN
+  input. Topology resolves published names for 3D AS clusters, collapsed/path vertices and details.
+  Numeric peer configuration stays intact; renaming/removing names never causes a node network reapply.
+  Manager API/topology/i18n: 14 tests; shared renderer: 4 tests. Manager/renderer/dashboard type checks,
+  Manager production build and actual Chrome feature checks pass. Evidence: target/check-as-addresses-*
+  logs and target/as-addresses.png. Source-only; no Git submission or production modifications.
+- 2026-11-11 (per the user) Correct OpenWrt console feature and sync status (D83).
+  Planner now enables registered CLI/UI entry-point capabilities without requiring services.* configuration
+  or a supervised process. Preserve dependency, platform and registration failures, and all network service
+  switches. LuCI displays in-sync green while unknown/unsynced remain neutral. Seven registry tests and two
+  shipped-LuCI-module tests pass; LuCI regressions added to web CI. Update planner and dashboard-openwrt
+  together. Evidence: target/check-console-features-tests.log and target/check-openwrt-status-tests.log.
+  Source-only; no Git submission or production modifications.

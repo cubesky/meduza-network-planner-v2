@@ -50,6 +50,8 @@ export interface NodeSpec {
 }
 
 export interface ClusterDocument {
+  /** Manager-only AS labels, never included in node snapshots. */
+  asAddresses?: Array<{ name: string; asn: number }>;
   schemaVersion: number;
   /**
    * `anycast`: the cluster's Anycast pool and services (nodes select theirs in their routing.anycast); `bfd`: BFD
@@ -269,6 +271,23 @@ export function compileCluster(
     return { nodes: [], problems };
   }
   const asn = doc.routing?.internalAsn;
+  if (doc.asAddresses !== undefined) {
+    if (!Array.isArray(doc.asAddresses)) problems.push({ path: "/asAddresses", message: "AS addresses must be a list" });
+    else {
+      const seen = new Set<number>();
+      doc.asAddresses.forEach((entry, i) => {
+        const path = `/asAddresses/${i}`;
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+          problems.push({ path, message: "AS address must contain a name and ASN" });
+          return;
+        }
+        if (typeof entry.name !== "string" || !entry.name.trim() || entry.name.length > 128) problems.push({ path: `${path}/name`, message: "Name must contain 1..128 characters" });
+        if (!Number.isInteger(entry.asn) || entry.asn < 1 || entry.asn > 4294967294) problems.push({ path: `${path}/asn`, message: "ASN must be 1..4294967294" });
+        else if (seen.has(entry.asn)) problems.push({ path: `${path}/asn`, message: "ASN already has a name" });
+        else seen.add(entry.asn);
+      });
+    }
+  }
   if (asn !== undefined && (!Number.isInteger(asn) || asn < 1 || asn > 4294967294)) {
     problems.push({ path: "/routing/internalAsn", message: "ASN must be 1..4294967294" });
   }

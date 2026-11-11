@@ -1,8 +1,8 @@
 // Renders a package UI descriptor (AGENT.md §5.3) against the package's config schema. Only built-in widgets
 // and declared action ids are used; nothing from the descriptor is executed.
 
-import type { ComponentChildren } from "preact";
-import { useEffect, useMemo, useState } from "preact/hooks";
+import { createContext, type ComponentChildren } from "preact";
+import { useContext, useEffect, useMemo, useState } from "preact/hooks";
 import { Badge, Button, Field, FieldGroup, ListInput, Modal, NumberInput, Select, StateBadge, Table, Tabs, TextInput, ToggleField, ask, formatCell, getLocale, t, type Column } from "@meduza-np/ui-kit";
 import { childSchema, evalWhen, fieldError, fieldInfo, getAt, humanize, itemSchema, resolve, setAt, splitPath, unwrapNullable, walk, type FieldInfo, type JsonSchema } from "./schema.ts";
 import "./messages.ts";
@@ -107,7 +107,12 @@ export interface SecretRequest {
 /** Creates a secret for a field; resolves to the fields to set next to it (e.g. certRef + keyRef), or nothing. */
 export type SecretAction = (req: SecretRequest) => Promise<Record<string, unknown> | undefined>;
 
+/** Console-provided numeric choices, shared by settings, collections and nested dialogs. */
+type NumberOptions = Record<string, Array<{ value: number; label: string }>>;
+const NumericChoices = createContext<NumberOptions>({});
+
 export interface RendererProps {
+  numberOptions?: NumberOptions;
   descriptor: UiDescriptor;
   schema: JsonSchema | null;
   /** The node spec (`services.*` lives below it). */
@@ -147,7 +152,7 @@ export function DescriptorView(props: RendererProps) {
   const short = shortOf(d.package);
   const tx = translator(d);
   return (
-    <div>
+    <NumericChoices.Provider value={props.numberOptions ?? {}}><div>
       {d.description && <p class="muted">{tx.text(d.description)}</p>}
       {(d.settings ?? []).map((block) => {
         const path = splitPath(block.path);
@@ -203,7 +208,7 @@ export function DescriptorView(props: RendererProps) {
           </div>
         );
       })}
-    </div>
+    </div></NumericChoices.Provider>
   );
 }
 
@@ -569,6 +574,7 @@ export function FieldEditor(props: {
   secrets?: SecretOption[];
   error?: string;
 }) {
+  const choices = useContext(NumericChoices)[props.name.split(".").at(-1)!];
   const path = splitPath(props.name);
   const fieldSchema = props.schema && props.root ? walk(props.schema, path, props.root) : undefined;
   const parentSchema = props.schema && props.root && path.length > 1 ? walk(props.schema, path.slice(0, -1), props.root) : props.schema;
@@ -617,6 +623,12 @@ export function FieldEditor(props: {
   return (
     <Field label={label} help={help} error={error} wide={info.kind === "json" || info.kind === "object"}>
       <Input info={info} value={current} onChange={props.onChange} invalid={!!error} />
+      {(info.kind === "integer" || info.kind === "number") && !!choices?.length && <Select
+        value={choices.some((c) => c.value === current) ? String(current) : ""}
+        options={choices.map((c) => ({ value: String(c.value), label: c.label }))}
+        allowEmpty emptyLabel={t("Enter a number or select a saved value")}
+        onChange={(v) => { if (v) props.onChange(Number(v)); }}
+      />}
     </Field>
   );
 }

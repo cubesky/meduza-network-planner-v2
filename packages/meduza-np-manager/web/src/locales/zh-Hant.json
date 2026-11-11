@@ -1,4 +1,8 @@
 {
+  "AS addresses": "AS 位址設定",
+  "Global settings: AS addresses": "全域設定：AS 位址設定",
+  "Name your AS numbers to select them in peer settings and show their names in the topology. Removing a name keeps existing peer ASNs.": "設定名稱與 ASN 的對應，可在對端設定中選擇，並在拓樸圖上顯示名稱。刪除名稱不會變更既有對端的 ASN。",
+  "No AS addresses yet.": "尚未設定 AS 位址。",
   "Last-good recovery degraded": "還原歷史成功設定時降級",
   "Check for updates": "檢查更新",
   "Upgrade now": "立即升級",

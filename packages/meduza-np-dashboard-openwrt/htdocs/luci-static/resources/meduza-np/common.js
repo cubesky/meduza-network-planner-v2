@@ -32,7 +32,7 @@ return baseclass.extend({
 
 	badge: function(state) {
 		var s = String(state || '');
-		var good = /^(ok|up|running|healthy|registered|synced|established|done)$/.test(s);
+		var good = /^(ok|up|running|healthy|registered|synced|in-sync|established|done)$/.test(s);
 		var bad = /(fail|down|error|invalid|incompatible|conflict|missing)/.test(s);
 		return E('span', { 'class': 'label', 'style': 'background:' + (good ? '#2e7d32' : bad ? '#c62828' : '#757575') + ';color:#fff;padding:1px 6px;border-radius:3px' }, s || '—');
 	},

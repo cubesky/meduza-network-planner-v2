@@ -332,7 +332,13 @@ impl Registry {
         let mut out = Vec::new();
         for p in self.packages.values() {
             let service = enabled_services.get(p.short()).filter(|_| p.registered());
-            let caps = service.map(|s| enabled_capabilities(&p.manifest, s)).unwrap_or_default();
+            let console = matches!(p.manifest.role, PackageRole::UiClient | PackageRole::Cli);
+            let mut caps = service.map(|s| enabled_capabilities(&p.manifest, s)).unwrap_or_default();
+            // Management entry points have no services.* switch. Registration exposes their UI capabilities;
+            // other capabilities (including optional service switches) still follow the applied configuration.
+            if console && p.registered() {
+                caps.extend(p.manifest.provides.iter().filter(|cap| cap.starts_with("ui.")).cloned());
+            }
             let avail = if p.registered() {
                 self.availability(p, &caps)
             } else {
@@ -349,6 +355,9 @@ impl Registry {
                 let resolved = static_provider && self.providers.get(cap).is_some_and(|rp| rp.source == p.manifest.package);
                 // Planner's own features are in place once their revision applied (a failure rejects the apply).
                 let own = p.manifest.role == PackageRole::Controller;
+                // CLI/LuCI are not supervised daemons. For these capabilities up means the entry point is
+                // available; registration or dependency errors must still prevent a healthy result.
+                let entry_point = console && cap.starts_with("ui.") && avail.is_ok();
                 out.push(FeatureStatus {
                     id: cap.clone(),
                     package: p.manifest.package.clone(),
@@ -356,8 +365,8 @@ impl Registry {
                     registered: p.registered(),
                     enabled,
                     available: avail.is_ok(),
-                    running: enabled && (resolved || own || running.contains(p.short())),
-                    healthy: enabled && (resolved || own || healthy.contains(p.short())),
+                    running: enabled && (resolved || own || entry_point || running.contains(p.short())),
+                    healthy: enabled && (resolved || own || entry_point || healthy.contains(p.short())),
                     provider: provider.clone(),
                     reason_code: avail.as_ref().err().map(|e| e.0.clone()),
                     reason: avail.as_ref().err().map(|e| e.1.clone()),
@@ -520,6 +529,44 @@ mod tests {
         // Provider package registered but its binary is missing: slot is not silently served by the system.
         assert!(reg.get("meduza-np-openvpn-pkg").unwrap().registered());
         std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn console_features_need_registration_not_a_service_configuration() {
+        for dashboard in ["meduza-np-dashboard", "meduza-np-dashboard-openwrt"] {
+            let root = std::env::temp_dir().join(format!("mnp-registry-console-{}-{dashboard}", std::process::id()));
+            std::fs::create_dir_all(&root).unwrap();
+            write_pkg(&root, "planner", base("meduza-np-planner", "controller"));
+            write_pkg(&root, "cli", serde_json::from_str(include_str!("../../meduza-np-cli/manifest.json")).unwrap());
+            let manifest = if dashboard == "meduza-np-dashboard" {
+                include_str!("../../meduza-np-dashboard/manifest.json")
+            } else {
+                include_str!("../../meduza-np-dashboard-openwrt/manifest.json")
+            };
+            write_pkg(&root, "dashboard", serde_json::from_str(manifest).unwrap());
+            let plat = Platform { openwrt: dashboard == "meduza-np-dashboard-openwrt", ..Platform::default() };
+            let mut reg = scan(&root, &plat);
+            let features = reg.features(&BTreeMap::new(), &BTreeSet::new(), &BTreeSet::new());
+            assert_eq!(features.len(), 2);
+            assert!(features.iter().all(|f| f.registered && f.enabled && f.available && f.running && f.healthy), "{features:#?}");
+            // A missing runtime dependency is still an error, never a healthy console.
+            reg.packages.get_mut(dashboard).unwrap().manifest.system_dependencies = serde_json::from_value(json!([
+                {"kind": "binary", "name": "/nonexistent/meduza-np-console-test"}
+            ]))
+            .unwrap();
+            let features = reg.features(&BTreeMap::new(), &BTreeSet::new(), &BTreeSet::new());
+            let blocked = features.iter().find(|f| f.package == dashboard).unwrap();
+            assert!(blocked.enabled && !blocked.available && !blocked.running && !blocked.healthy);
+            assert_eq!(blocked.reason_code.as_deref(), Some("system-dependency-missing"));
+            // Incompatible or conflicted packages must not acquire enabled UI capabilities.
+            for state in [RegistrationState::Incompatible, RegistrationState::Conflict, RegistrationState::MissingDependency] {
+                reg.packages.get_mut(dashboard).unwrap().state = state;
+                let features = reg.features(&BTreeMap::new(), &BTreeSet::new(), &BTreeSet::new());
+                let blocked = features.iter().find(|f| f.package == dashboard).unwrap();
+                assert!(!blocked.registered && !blocked.enabled && !blocked.available && !blocked.running && !blocked.healthy);
+            }
+            std::fs::remove_dir_all(&root).unwrap();
+        }
     }
 
     #[test]

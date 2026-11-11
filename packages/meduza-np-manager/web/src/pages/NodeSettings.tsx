@@ -77,7 +77,7 @@ export function NodeSettings(props: { id: string; detail: NodeDetail; role: Role
         {section === "network" && <NetworkEditor spec={spec} onChange={setSpec} schema={nodeSchema.data} problems={problems} internalAsn={s.doc.routing?.internalAsn} />}
       </fieldset>
       {section === "features" && (
-        <FeaturesEditor node={props.id} detail={props.detail} spec={spec} onChange={setSpec} catalog={catalog.data} secrets={usable} problems={problems} role={props.role} reloadSecrets={secrets.reload} mihomo={s.doc.mihomo} />
+        <FeaturesEditor node={props.id} detail={props.detail} spec={spec} onChange={setSpec} catalog={catalog.data} secrets={usable} problems={problems} role={props.role} reloadSecrets={secrets.reload} mihomo={s.doc.mihomo} asAddresses={s.doc.asAddresses} />
       )}
       {section === "raw" && (
         <Card title={t("Node configuration (advanced)")}>
@@ -281,6 +281,7 @@ function FeaturesEditor(props: {
   role: Role;
   reloadSecrets: () => void;
   mihomo?: MihomoCatalog;
+  asAddresses?: Array<{ name: string; asn: number }>;
 }) {
   const [open, setOpen] = useState<Record<string, boolean>>({});
   const [secretReq, setSecretReq] = useState<null | { req: SecretRequest; resolve: (patch: Record<string, unknown> | undefined) => void }>(null);
@@ -403,6 +404,7 @@ function FeaturesEditor(props: {
                 onRefresh={(v) => props.onChange({ ...props.spec, services: { ...services, [short]: { ...cfg, refreshSeconds: v } } })} />
             )}
             <DescriptorView
+              numberOptions={{ remoteAsn: (props.asAddresses ?? []).filter((a) => a.name.trim() && Number.isInteger(a.asn) && a.asn > 0 && a.asn < 4294967295).map((a) => ({ value: a.asn, label: `${a.name} - AS${a.asn}` })) }}
               descriptor={binaryProvider && !present ? { ...c.ui!, settings: [], actions: [] } : c.ui!}
               schema={c.configSchema}
               value={props.spec}

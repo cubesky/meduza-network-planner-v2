@@ -52,6 +52,7 @@ export function ChangesButton(props: { onOpen: () => void }) {
 }
 
 const SECTION_LABELS: Record<string, string> = {
+  asAddresses: msg("Global settings: AS addresses"),
   routing: msg("Global settings: routing and Anycast"),
   mihomo: msg("Global settings: Mihomo subscriptions"),
   defaults: msg("Global settings: node defaults"),

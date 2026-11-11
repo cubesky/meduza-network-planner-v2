@@ -1,4 +1,8 @@
 {
+  "AS addresses": "AS 地址设置",
+  "Global settings: AS addresses": "全局设置：AS 地址设置",
+  "Name your AS numbers to select them in peer settings and show their names in the topology. Removing a name keeps existing peer ASNs.": "设置名称与 ASN 的映射，可在对端设置中选择，并在拓扑图上显示名称。删除名称不会更改已有对端的 ASN。",
+  "No AS addresses yet.": "尚未设置 AS 地址。",
   "Last-good recovery degraded": "恢复历史成功配置时降级",
   "Check for updates": "检查更新",
   "Upgrade now": "立即升级",

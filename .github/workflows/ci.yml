@@ -127,6 +127,8 @@ jobs:
       - run: pnpm -r run test
         env:
           MEDUZA_NP_SKIP_E2E: "1"
+      - name: LuCI status views
+        run: node --test packages/meduza-np-dashboard-openwrt/test/*.test.mjs
 
   e2e:
     name: planner ↔ manager end-to-end

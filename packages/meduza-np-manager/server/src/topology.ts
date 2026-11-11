@@ -11,6 +11,7 @@
 
 import type { Services } from "./app.js";
 import { overview } from "./views.js";
+import { isIPv4 } from "node:net";
 
 export type LinkState = "up" | "partial" | "down" | "unknown";
 
@@ -21,6 +22,8 @@ export interface TopologyVertex {
   asn?: number;
   /** peer vertices: the session address and, when reported, the router ID */
   address?: string;
+  /** all session addresses of a merged peer; address remains the first for older clients */
+  addresses?: string[];
   routerId?: string;
   /** node vertices: freshness and behavior from the overview */
   freshness?: string;
@@ -65,6 +68,7 @@ export interface TopologyLink {
 }
 
 export interface Topology {
+  asNames: Record<string, string>;
   internalAsn: number | null;
   vertices: TopologyVertex[];
   links: TopologyLink[];
@@ -78,6 +82,7 @@ interface CompiledTunnels {
 interface CompiledFrr {
   enabled?: boolean;
   localAsn?: number;
+  routerId?: string;
   internalNeighbors?: Array<{ id: string; node?: string; address: string; enabled?: boolean }>;
   externalNeighbors?: Array<{ id: string; address: string; remoteAsn: number; transport?: string; enabled?: boolean }>;
 }
@@ -87,6 +92,13 @@ const asVertex = (asn: number) => `as:${asn}`;
 const peerVertex = (asn: number, key: string) => `peer:${asn}:${key}`;
 /** FRR names the BGP daemon of a host "<host>-bgpd" when no hostname is configured for it */
 const hostLabel = (h: string) => h.replace(/-bgpd$/, "");
+const validRouterId = (value: unknown): string | undefined => typeof value === "string" && isIPv4(value) && value !== "0.0.0.0" ? value : undefined;
+const identityKey = (asn: number, id: string) => `${asn}:${id}`;
+/** A duplicate identity is ambiguous: never let enumeration order decide which managed node it names. */
+function recordIdentity(map: Map<string, string | null>, key: string, value: string): void {
+  if (!map.has(key)) map.set(key, value);
+  else if (map.get(key) !== value) map.set(key, null);
+}
 
 function stateOf(sessions: TopologySession[]): LinkState {
   const reported = sessions.filter((x) => x.bgpState !== "not reported");
@@ -97,15 +109,18 @@ function stateOf(sessions: TopologySession[]): LinkState {
 }
 
 export function topology(s: Services): Topology {
-  const nodes = overview(s).nodes.filter((n) => n.freshness !== "revoked");
+  const asNames = Object.fromEntries((s.config.currentDocument().document?.asAddresses ?? []).map((a) => [a.asn, a.name.trim()]));
+  const nodes = overview(s).nodes.filter((n) => n.freshness !== "revoked").sort((a, b) => a.id.localeCompare(b.id));
   let internalAsn: number | null = null;
   const asnOf = new Map<string, number>();
   const frrOf = new Map<string, CompiledFrr>();
+  const routerIdOf = new Map<string, string>();
+  const managedRouter = new Map<string, string | null>();
   // tunnel address → node: the managed node at the far end of an eBGP session
   const tunnelNode = new Map<string, string>();
   for (const n of nodes) {
     const rev = s.config.desired(n.id)?.revision;
-    const config = rev ? (s.config.snapshot(n.id, rev)?.config as { routing?: { internalAsn?: number }; services?: { frr?: CompiledFrr } & CompiledTunnels } | undefined) : undefined;
+    const config = rev ? (s.config.snapshot(n.id, rev)?.config as { node?: { routerId?: string }; routing?: { internalAsn?: number }; services?: { frr?: CompiledFrr } & CompiledTunnels } | undefined) : undefined;
     internalAsn ??= config?.routing?.internalAsn ?? null;
     for (const i of config?.services?.wireguard?.instances ?? []) if (i.enabled !== false) for (const a of i.addresses ?? []) tunnelNode.set(a.split("/")[0]!, n.id);
     for (const i of config?.services?.openvpn?.instances ?? []) if (i.enabled !== false && i.ifconfig?.local) tunnelNode.set(i.ifconfig.local.split("/")[0]!, n.id);
@@ -114,6 +129,11 @@ export function topology(s: Services): Topology {
     frrOf.set(n.id, frr);
     const asn = frr.localAsn ?? config?.routing?.internalAsn;
     if (asn !== undefined) asnOf.set(n.id, asn);
+    const routerId = validRouterId(frr.routerId ?? config?.node?.routerId);
+    if (routerId) {
+      routerIdOf.set(n.id, routerId);
+      if (asn !== undefined) recordIdentity(managedRouter, identityKey(asn, routerId), n.id);
+    }
   }
 
   // Reported neighbor state by node and neighbor id (`frr/main/bgp-<id>`).
@@ -154,6 +174,7 @@ export function topology(s: Services): Topology {
       freshness: n.freshness,
       behavior: n.behavior,
       ...(asnOf.has(n.id) ? { asn: asnOf.get(n.id) } : {}),
+      ...(routerIdOf.has(n.id) ? { routerId: routerIdOf.get(n.id) } : {}),
     });
   }
   const ensureAs = (asn: number): string => {
@@ -161,14 +182,17 @@ export function topology(s: Services): Topology {
     if (!vertices.has(v)) vertices.set(v, { id: v, kind: "as", label: `AS${asn}`, asn, ...(asn === internalAsn ? { internal: true } : {}) });
     return v;
   };
-  // One vertex per unmanaged router: by router ID when reported (sessions from several nodes to one router meet),
-  // else by session address.
-  const ensurePeer = (sess: TopologySession, asn: number): string => {
-    const v = peerVertex(asn, sess.routerId ?? sess.address);
+  // A learned router ID identifies a router, scoped to its AS. Keep every address/session when merging.
+  const ensurePeer = (sess: TopologySession, asn: number, routerId: string | undefined): string => {
+    const v = peerVertex(asn, routerId ?? sess.address);
     const known = vertices.get(v);
-    const label = sess.hostname ? hostLabel(sess.hostname) : sess.routerId ?? sess.address;
-    if (!known) vertices.set(v, { id: v, kind: "peer", label, asn, address: sess.address, ...(sess.routerId ? { routerId: sess.routerId } : {}) });
-    else if (sess.hostname && known.label === (known.routerId ?? known.address)) known.label = label;
+    const label = sess.hostname ? hostLabel(sess.hostname) : routerId ?? sess.address;
+    if (!known) vertices.set(v, { id: v, kind: "peer", label, asn, address: sess.address, addresses: [sess.address], ...(routerId ? { routerId } : {}) });
+    else {
+      if (sess.hostname && known.label === (known.routerId ?? known.address)) known.label = label;
+      known.addresses = [...new Set([...(known.addresses ?? []), sess.address])].sort();
+      known.address = known.addresses[0];
+    }
     return v;
   };
   const links = new Map<string, TopologyLink>();
@@ -181,6 +205,7 @@ export function topology(s: Services): Topology {
     return l;
   };
 
+  const external: Array<{ node: string; asn: number; sess: TopologySession }> = [];
   for (const [node, frr] of frrOf) {
     const r = reported(node);
     for (const n of frr.internalNeighbors ?? []) {
@@ -190,10 +215,26 @@ export function topology(s: Services): Topology {
     for (const n of frr.externalNeighbors ?? []) {
       if (n.enabled === false) continue;
       const sess = session(node, n.id, n.address, { remoteAs: n.remoteAsn, ...(n.transport ? { transport: n.transport } : {}) }, r);
-      const peer = tunnelNode.get(n.address);
-      if (peer && peer !== node && vertices.has(nodeVertex(peer))) link("ebgp", nodeVertex(node), nodeVertex(peer)).sessions.push(sess);
-      else link("ebgp", nodeVertex(node), ensurePeer(sess, n.remoteAsn)).sessions.push(sess);
+      external.push({ node, asn: n.remoteAsn, sess });
     }
+  }
+  // FRR learns this from the peer's OPEN and can retain it when the session goes down. Do not split a known
+  // router just because one of its sessions is reconnecting; a missing/zero/invalid ID remains unidentified.
+  const learnedId = (sess: TopologySession) => validRouterId(sess.routerId);
+  // One observer may not have established its own session yet. Reuse a confirmed, unambiguous identity for the
+  // same AS/address instead of drawing an address-only copy beside the router another observer already knows.
+  const addressRouter = new Map<string, string | null>();
+  for (const { asn, sess } of external) {
+    const id = learnedId(sess);
+    if (id) recordIdentity(addressRouter, identityKey(asn, sess.address), id);
+  }
+  for (const { node, asn, sess } of external) {
+    const routerId = learnedId(sess) ?? addressRouter.get(identityKey(asn, sess.address)) ?? undefined;
+    const byId = routerId ? managedRouter.get(identityKey(asn, routerId)) : undefined;
+    const byAddress = tunnelNode.get(sess.address);
+    const peer = byId ?? (byAddress && asnOf.get(byAddress) === asn ? byAddress : undefined);
+    if (peer && peer !== node && vertices.has(nodeVertex(peer))) link("ebgp", nodeVertex(node), nodeVertex(peer)).sessions.push(sess);
+    else link("ebgp", nodeVertex(node), ensurePeer(sess, asn, routerId)).sessions.push(sess);
   }
 
   // ASes behind the unmanaged routers, from the AS paths of the routes they send. A hop stops at an AS drawn already
@@ -223,5 +264,5 @@ export function topology(s: Services): Topology {
   for (const [node, frr] of frrOf) if ((frr.externalNeighbors ?? []).some((n) => n.enabled !== false)) vertices.get(nodeVertex(node))!.edge = true;
   // a path hop exists as long as routes carry it: drawn as up
   for (const l of links.values()) l.state = l.kind === "path" ? "up" : stateOf(l.sessions);
-  return { internalAsn, vertices: [...vertices.values()], links: [...links.values()] };
+  return { asNames, internalAsn, vertices: [...vertices.values()], links: [...links.values()] };
 }
