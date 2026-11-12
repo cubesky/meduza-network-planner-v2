@@ -17,6 +17,22 @@ test("LDAP settings refuse clear-text password transport", () => {
   assert.ok(validateLdapSettings({ ...base, url: "ldaps://x", userFilter: "(uid=*)" }).some((p) => p.includes("{username}")));
 });
 
+test("LDAP save returns actionable problems and preserves settings on rejected plaintext", async () => {
+  const { app, s } = await startManager();
+  try {
+    const headers = await adminHeaders(app);
+    const settings = { ...DEFAULT_LDAP, url: "ldap://host.containers.internal", startTls: true,
+      baseDn: "dc=example,dc=test", bindDn: "cn=readonly,dc=example,dc=test", useMemberOf: true, verifyCertificate: false };
+    assert.equal((await app.inject({ method: "PUT", url: "/api/v1/access/ldap", headers, payload: settings })).statusCode, 200);
+    const rejected = await app.inject({ method: "PUT", url: "/api/v1/access/ldap", headers, payload: { ...settings, startTls: false } });
+    assert.equal(rejected.statusCode, 422);
+    assert.deepEqual(rejected.json(), { error: "invalid-settings", problems: ["plain ldap:// requires StartTLS; passwords are never sent in clear text"] });
+    assert.deepEqual(s.access.settings(), settings, "invalid transport cannot overwrite the saved TLS settings");
+    const ldaps = { ...settings, url: "ldaps://host.containers.internal", startTls: false };
+    assert.equal((await app.inject({ method: "PUT", url: "/api/v1/access/ldap", headers, payload: ldaps })).statusCode, 200);
+  } finally { await app.close(); }
+});
+
 test("Access authentication denies by default", async () => {
   const { app, s } = await startManager();
   s.nodes.createNode({ id: "gw-a" }, "test");

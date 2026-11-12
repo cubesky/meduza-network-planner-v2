@@ -322,6 +322,8 @@ table.table { width: 100%; border-collapse: collapse; }
 .topology-main > .topstrip { flex-shrink: 0; }
 .topology-page, .topology-view { display: flex; flex-direction: column; flex: 1; min-height: 0; min-width: 0; }
 .topology-page > .page-head { flex-shrink: 0; }
+.topology-page > .tabs { flex-shrink: 0; }
+.topology-page > .bgp-paths { min-height: 0; overflow: auto; }
 .graph-toolbar { flex: 0 1 auto; min-height: 0; max-height: 55%; overflow: auto; }
 .topology-details { flex: 0 1 auto; min-height: 0; max-height: 35%; overflow: auto; margin-top: 12px; }
 .topology-details > .card { margin-bottom: 0; }

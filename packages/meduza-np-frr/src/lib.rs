@@ -19,6 +19,7 @@
 //! only transit are de-preferred so traffic crosses them only when no other path exists.
 
 pub mod guard;
+pub mod paths;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr};
@@ -1219,8 +1220,6 @@ pub fn plan(cfg: &FrrConfig, req: &PluginRequest, identity: &DaemonIdentity) -> 
 
 /// Routes reported per BGP neighbor (the topology view lists them; the counts stay exact).
 pub const ROUTES_PER_NEIGHBOR: usize = 64;
-/// Distinct AS paths reported per external neighbor (the topology view draws the ASes behind it).
-pub const AS_PATHS_PER_NEIGHBOR: usize = 32;
 
 /// `show bgp ipv4 unicast json` → the prefixes each neighbor (by address) sent and that were accepted (valid paths).
 pub fn bgp_routes_by_peer(json: &Value) -> BTreeMap<String, Vec<String>> {
@@ -1231,7 +1230,7 @@ pub fn bgp_routes_by_peer(json: &Value) -> BTreeMap<String, Vec<String>> {
             if path.get("valid").and_then(Value::as_bool) != Some(true) {
                 continue;
             }
-            let Some(peer) = path.get("peerId").and_then(Value::as_str).filter(|p| p.parse::<IpAddr>().is_ok()) else { continue };
+            let Some(peer) = path.get("peerId").and_then(Value::as_str).and_then(|p| p.parse::<IpAddr>().ok()) else { continue };
             let list = out.entry(peer.to_string()).or_default();
             if !list.contains(prefix) {
                 list.push(prefix.clone());
@@ -1254,19 +1253,16 @@ pub fn announced_networks(cfg: &FrrConfig, req: &PluginRequest) -> Vec<IpNet> {
     out
 }
 
-/// `show bgp ipv4 unicast json` → the distinct AS paths of the valid routes each neighbor (by address) sent, as AS
+/// Compatibility graph sequences from every retained candidate, including invalid/non-best paths, as AS
 /// numbers with prepending collapsed ("65100 65100 65200" → [65100, 65200]); AS sets and confederation segments
 /// (`{..}`, `(..)`) are left out, they say nothing about which AS is behind which.
 pub fn bgp_as_paths_by_peer(json: &Value) -> BTreeMap<String, Vec<Vec<u32>>> {
-    let mut out: BTreeMap<String, Vec<Vec<u32>>> = BTreeMap::new();
-    let Some(routes) = json.get("routes").and_then(Value::as_object) else { return out };
+    let mut out: BTreeMap<String, BTreeSet<Vec<u32>>> = BTreeMap::new();
+    let Some(routes) = json.get("routes").and_then(Value::as_object) else { return BTreeMap::new() };
     for paths in routes.values() {
         for path in paths.as_array().into_iter().flatten() {
-            if path.get("valid").and_then(Value::as_bool) != Some(true) {
-                continue;
-            }
-            let Some(peer) = path.get("peerId").and_then(Value::as_str).filter(|p| p.parse::<IpAddr>().is_ok()) else { continue };
-            let Some(text) = path.get("path").and_then(Value::as_str) else { continue };
+            let Some(peer) = path.get("peerId").and_then(Value::as_str).and_then(|p| p.parse::<IpAddr>().ok()) else { continue };
+            let Some(text) = paths::as_path(path) else { continue };
             let mut asns: Vec<u32> = Vec::new();
             for asn in text.split_whitespace().map_while(|t| t.parse::<u32>().ok()) {
                 if asns.last() != Some(&asn) {
@@ -1276,13 +1272,10 @@ pub fn bgp_as_paths_by_peer(json: &Value) -> BTreeMap<String, Vec<Vec<u32>>> {
             if asns.is_empty() {
                 continue;
             }
-            let list = out.entry(peer.to_string()).or_default();
-            if !list.contains(&asns) && list.len() < AS_PATHS_PER_NEIGHBOR {
-                list.push(asns);
-            }
+            out.entry(peer.to_string()).or_default().insert(asns);
         }
     }
-    out
+    out.into_iter().map(|(peer, paths)| (peer, paths.into_iter().collect())).collect()
 }
 
 /// `show bgp neighbors json` → the router ID each neighbor (by address) announced.
@@ -1350,7 +1343,14 @@ pub struct PeerDetails {
 /// `show bgp summary json` (+ the routes, AS paths and router IDs per neighbor) → per-neighbor state.
 pub fn bgp_statuses(cfg: &FrrConfig, json: &Value, peers_of: &PeerDetails, ts: &str) -> Vec<InstanceStatus> {
     let routes = &peers_of.routes;
-    let peers = json.pointer("/ipv4Unicast/peers").and_then(Value::as_object).cloned().unwrap_or_default();
+    let mut peers = json.pointer("/ipv6Unicast/peers").and_then(Value::as_object).cloned().unwrap_or_default();
+    peers.extend(
+        json.pointer("/ipv4Unicast/peers")
+            .and_then(Value::as_object)
+            .into_iter()
+            .flatten()
+            .map(|(key, value)| (key.clone(), value.clone())),
+    );
     let mut out = Vec::new();
     let neighbors: Vec<(String, IpAddr, &'static str, Option<&String>)> = cfg
         .internal_neighbors
@@ -1964,7 +1964,7 @@ mod tests {
         let routes = bgp_routes_by_peer(&table);
         assert_eq!(routes.keys().collect::<Vec<_>>(), ["10.42.1.2", "203.0.113.1"], "invalid paths and local routes are not a peer's");
         let as_paths = bgp_as_paths_by_peer(&table);
-        assert_eq!(as_paths["203.0.113.1"], vec![vec![65100, 65200], vec![65100]], "prepending collapsed, AS sets dropped, distinct");
+        assert_eq!(as_paths["203.0.113.1"], vec![vec![65100], vec![65100, 65200]], "prepending collapsed, AS sets dropped, distinct");
         assert!(!as_paths.contains_key("10.42.1.2"), "an empty (iBGP-learned local) path is no AS path");
         let ids = bgp_router_ids(&json!({"203.0.113.1": {"remoteRouterId": "10.70.0.1"}, "10.42.1.2": {"remoteRouterId": "0.0.0.0"}}));
         assert_eq!(ids.into_iter().collect::<Vec<_>>(), [("203.0.113.1".to_string(), "10.70.0.1".to_string())]);
@@ -1974,7 +1974,7 @@ mod tests {
         assert_eq!(st[0].state, ServiceState::Up);
         assert_eq!(st[0].detail["prefixesReceived"], json!(3));
         assert_eq!(st[0].detail["routes"], json!(["10.62.0.0/24", "10.63.0.0/24"]));
-        assert_eq!(st[1].detail["asPaths"], json!([[65100, 65200], [65100]]));
+        assert_eq!(st[1].detail["asPaths"], json!([[65100], [65100, 65200]]));
         assert_eq!(st[1].detail["routerId"], json!("10.70.0.1"));
         assert!(!st[0].detail.contains_key("asPaths"), "AS paths only for external neighbors");
         assert_eq!(st[1].state, ServiceState::Down, "Active is not established");

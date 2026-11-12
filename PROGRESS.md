@@ -10,6 +10,68 @@ scheduled "continue" task) must:
 
 Design decisions live in `docs/DECISIONS.md`.
 
+### 2026-11-13 — D100: LDAP save error details and transport hints
+
+The user's ldap:// plus startTls=false is correctly rejected by the existing TLS-only password policy;
+verifyCertificate=false does not allow plaintext. The UI incorrectly treated textual problems as
+path/message objects, producing undefined. Extracted pure ApiError/errorText formatting supporting
+both forms, malformed-entry filtering and useful fallback text, preserving existing API imports.
+
+Added translated URL transport errors and blocked incompatible combinations before settings or bind
+password writes. No automatic protocol changes and no backend TLS policy change. Authenticated API
+regression confirms direct 422 requests preserve prior settings and both TLS combinations save.
+All twelve API-error/Access/i18n tests, server/web typechecks and production build pass. Real Chrome
+with synthetic responses verifies actual form validation, no invalid-transport writes, visible textual
+422 details and successful corrected saves. Logs: target/check-ldap-save-tests.log,
+target/check-ldap-save-browser.log and target/check-ldap-save-build.log. New source:
+packages/meduza-np-manager/web/src/api-error.ts. No real LDAP/production changes, deployment or Git
+staging/commit.
+
+### 2026-11-13 — D99: AS headings stay near stable owners
+
+Replaced distant candidate rings/global fallback with bounded local AS placement. Group headings now
+follow a deterministic primary/ID member at its depth instead of a potentially huge bubble perimeter.
+All AS placement uses stable identity order, independently of painter depth. Reserve hidden fixed
+router panels to prevent hover-induced repacking and keep state across view operations/report order.
+Significant persistent collisions must survive twelve draws before a slot switch, followed by at most
+four pixels of local offset movement per draw. Long names cannot increase the title-center distance.
+Dense views prefer bounded overlap to detached labels;
+Node attachment, two-line names, translucent depth rendering and leader-free interaction are preserved.
+
+Verification: all 29 graph tests, Manager server/web typechecks and production build pass. Regressions
+cover forty crowded headings staying local and settling, long names/zoom, a wide cluster member anchor, depth ties,
+hover/view persistence and bounded smooth collision recovery. Actual Chrome verifies the real Manager
+page's label interactions, framing, polling, collapsed roots, four viewport sizes, three orbit cases and
+forty dense AS headings stable for thirty additional draws. Evidence:
+target/check-as-label-placement-tests.log, target/check-as-label-placement-browser.log,
+target/check-as-label-placement-build.log and
+target/as-label-attached-overview.png. No deployment, production mutation or Git staging/commit.
+
+### 2026-11-13 — D98: full retained BGP paths and multi-hop topology
+
+The user selects all FRR-retained post-policy paths, including non-best and invalid candidates;
+pre-policy rejected routes and automatic soft-reconfiguration are out of scope. Read-only live
+summaries identify known-AS traversal truncation as the immediate graph issue, with the old 32-path
+sample, valid-only and IPv4-only collection also removed. No production routing changes are made.
+
+FRR publishes a full IPv4/IPv6 snapshot with original AS_PATH, prefix, flags and next hops. Extract
+each native table sequentially to reduce memory and retain bounded query/transport limits with
+explicit incomplete/error reporting. Manager continues paths through known AS and managed/iBGP peers,
+canonicalizes IPv6 anchors, retains ordered suffixes after sets, and avoids invented unordered links.
+The new BGP paths tab and selected-object details search/filter/page all records, including AS names,
+with raw notation preserved and old-agent/incomplete notices. Reset/direct and fit-all remain distinct.
+
+Verification: 20 FRR tests, all-target Clippy -D warnings, Manager server/web typechecks, 90 Manager
+tests passing (three skipped), production Vite build, native rustfmt and git diff --check. A real-plugin
+synthetic probe retains all 286 candidates and verifies failed/oversized query diagnostics. Real Chrome
+checks 124 synthetic records over three pages, invalid filter, IPv6/AS_SET, AS-name search, known-AS
+transit, framing and responsive sizing. Logs: target/check-all-bgp-paths-final.log,
+target/check-all-bgp-paths-manager-suite.log, target/check-all-bgp-browser.log and
+target/check-all-bgp-paths-build.log. Automatic approval rejected optional local persistence of live
+full-table topology metadata; no live-table files were created and synthetic acceptance completes
+validation. Upgrade Manager and the node meduza-np-frr adapter together. No remote mutations,
+deployment, Git staging or commit.
+
 ### 2026-11-13 — D97: optional OpenVPN management and independent liveness
 
 Diagnosed 10.42.11.2 read-only: /usr/sbin/openvpn 2.7.4 rejects management and --help is unavailable.

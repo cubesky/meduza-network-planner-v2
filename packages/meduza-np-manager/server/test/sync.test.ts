@@ -578,8 +578,8 @@ MEgCQQ${x}
   assert.equal((byId.get("ebgp:node:gw-a|peer:65100:192.0.2.1") as any).sessions[0].remoteAs, 65100, "an unmanaged peer ends at its router");
   assert.deepEqual(
     [...byId.keys()].filter((k) => String(k).startsWith("path:")).sort(),
-    ["path:as:65200|as:65300", "path:peer:65100:192.0.2.1|as:65200"],
-    "AS path hops in order; a path back into a managed AS stops there",
+    ["path:as:65200|as:65300", "path:peer:65100:192.0.2.1|as:65200", "path:peer:65100:192.0.2.1|node:gw-a"],
+    "all reported AS path hops remain visible, reusing a known AS representative instead of truncating",
   );
   assert.deepEqual((byId.get("path:peer:65100:192.0.2.1|as:65200") as any).via, ["gw-a"]);
   assert.ok(![...byId.keys()].some((k) => String(k).includes("as:65010") || String(k).startsWith("provides")));

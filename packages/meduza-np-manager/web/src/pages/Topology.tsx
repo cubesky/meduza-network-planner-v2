@@ -6,7 +6,9 @@
 // single AS vertex, hiding its routers. Click a vertex, link or cluster for its sessions and the routes learned.
 
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
-import { Badge, Button, Card, Checkbox, Loadable, PageHead, Table, t, useAsync } from "@meduza-np/ui-kit";
+import { Badge, Button, Card, Checkbox, Loadable, PageHead, Table, Tabs, t, useAsync } from "@meduza-np/ui-kit";
+import { BgpPaths, type BgpPath, type BgpPathReport } from "../bgp-paths.tsx";
+import { asPathSegments } from "../../../server/src/bgp-paths.ts";
 import { get } from "../api.ts";
 import { ForceGraph3D, type GraphGroup, type GraphItem, type GraphLink, type GraphVertex } from "../graph3d.ts";
 
@@ -55,6 +57,8 @@ interface Link {
   sessions: Session[];
   via?: string[];
   paths?: number;
+  asSource?: number;
+  asTarget?: number;
 }
 
 interface Topology {
@@ -62,6 +66,8 @@ interface Topology {
   internalAsn: number | null;
   vertices: Vertex[];
   links: Link[];
+  bgpPaths?: BgpPath[];
+  pathReports?: BgpPathReport[];
 }
 
 /** An AS cluster: the managed nodes and the unmanaged routers we peer with of one AS. */
@@ -134,7 +140,7 @@ function present(topo: Topology, collapse: boolean): View {
     if (v.kind === "node") c.external = false;
     clusters.set(v.asn, c);
   }
-  return { asNames: topo.asNames, internalAsn: topo.internalAsn, vertices, links: [...links.values()], clusters: [...clusters.values()].sort((a, b) => a.asn - b.asn) };
+  return { asNames: topo.asNames, internalAsn: topo.internalAsn, vertices, links: [...links.values()], clusters: [...clusters.values()].sort((a, b) => a.asn - b.asn), bgpPaths: topo.bgpPaths, pathReports: topo.pathReports };
 }
 
 /** Graph styling from the theme tokens (re-read when the theme changes). */
@@ -146,7 +152,7 @@ function toGraph(view: View, show: { ibgp: boolean; ebgp: boolean; paths: boolea
   const links = view.links.filter((l) => (l.kind === "ibgp" ? show.ibgp : l.kind === "ebgp" ? show.ebgp : show.ebgp && show.paths));
   const used = new Set(links.flatMap((l) => [l.source, l.target]));
   const vertices = view.vertices
-    .filter((v) => v.kind === "node" || used.has(v.id) || v.members?.length)
+    .filter((v) => v.kind === "node" || used.has(v.id) || v.members?.length || (v.kind === "as" && show.ebgp && show.paths))
     .map<GraphVertex>((v) =>
       v.kind === "as"
         ? // collapsed ASes solid, ASes known only from AS paths hollow-looking (faint ring) and smaller
@@ -230,10 +236,12 @@ const loadSpacing = () => {
 
 export function TopologyPage() {
   const topo = useAsync(() => get<Topology>("/api/v1/topology"), [], 10_000);
+  const [tab, setTab] = useState("graph");
   return (
     <div class="topology-page">
       <PageHead title={t("Topology")} sub={t("BGP sessions between the nodes, from the published configuration and the nodes' FRR reports.")} />
-      <Loadable state={topo}>{(data) => <TopologyView topo={data} />}</Loadable>
+      <Tabs active={tab} onChange={setTab} tabs={[{ id: "graph", label: t("Graph") }, { id: "paths", label: t("BGP paths"), count: topo.data?.bgpPaths?.length ?? 0 }]} />
+      <Loadable state={topo}>{(data) => tab === "graph" ? <TopologyView topo={data} /> : <BgpPaths paths={data.bgpPaths ?? []} reports={data.pathReports} names={data.asNames} />}</Loadable>
     </div>
   );
 }
@@ -347,7 +355,7 @@ function TopologyView(props: { topo: Topology }) {
             ) : tip.item.kind === "group" ? (
               <ClusterTip names={view.asNames} c={view.clusters.find((c) => c.id === tip.item.id)} label={(id) => vertex(id)?.label ?? id} />
             ) : (
-              <LinkTip l={link(tip.item.id)} label={(id) => vertex(id)?.label ?? id} />
+              <LinkTip l={link(tip.item.id)} label={(id) => vertex(id)?.label ?? id} names={view.asNames} />
             )}
           </div>
         )}
@@ -395,13 +403,13 @@ function ClusterTip(props: { names?: Record<string, string>; c: Cluster | undefi
   );
 }
 
-function LinkTip(props: { l: Link | undefined; label: (id: string) => string }) {
+function LinkTip(props: { l: Link | undefined; label: (id: string) => string; names?: Record<string, string> }) {
   const l = props.l;
   if (!l) return null;
   if (l.kind === "path") {
     return (
       <div>
-        <strong>{t("AS path")}</strong> {props.label(l.source)} → {props.label(l.target)}
+        <strong>{t("AS path")}</strong> {l.asSource !== undefined ? namedAs(l.asSource, props.names) : props.label(l.source)} → {l.asTarget !== undefined ? namedAs(l.asTarget, props.names) : props.label(l.target)}
         <div class="muted">{t("Routes learned by {nodes} pass this hop; how the two ASes connect is not known.", { nodes: (l.via ?? []).join(", ") })}</div>
       </div>
     );
@@ -437,7 +445,7 @@ function Details(props: { item: GraphItem; view: View; onClose: () => void }) {
     : v
       ? v.label
       : pathLink
-        ? `${t("AS path")} ${label(pathLink.source)} → ${label(pathLink.target)}`
+        ? `${t("AS path")} ${pathLink.asSource !== undefined ? namedAs(pathLink.asSource, props.view.asNames) : label(pathLink.source)} → ${pathLink.asTarget !== undefined ? namedAs(pathLink.asTarget, props.view.asNames) : label(pathLink.target)}`
         : links[0]
           ? `${links[0].kind === "ibgp" ? "iBGP" : "eBGP"} ${label(links[0].source)} — ${label(links[0].target)}`
           : "";
@@ -460,6 +468,15 @@ function Details(props: { item: GraphItem; view: View; onClose: () => void }) {
             : null;
   // the AS paths of the routes an external router sends
   const asPaths = v?.kind === "peer" ? [...new Set(sessions.flatMap((s) => s.asPaths ?? []).map((p) => p.map((a) => namedAs(a, props.view.asNames)).join(" → ")))] : [];
+  const sessionKeys = new Set(sessions.map((s) => `${s.node}|${s.address}`));
+  const retained = (props.view.bgpPaths ?? []).filter((p) => {
+    if (pathLink) {
+      const asns = asPathSegments(p.asPath ?? "").flatMap((s) => s.asns);
+      return (pathLink.asTarget === undefined || asns.includes(pathLink.asTarget)) && (!pathLink.via?.length || pathLink.via.includes(p.node));
+    }
+    if (v?.kind === "as" || cluster) return asPathSegments(p.asPath ?? "").some((s) => s.asns.includes(v?.asn ?? cluster!.asn)) || sessionKeys.has(`${p.node}|${p.address}`);
+    return sessionKeys.has(`${p.node}|${p.address}`);
+  });
   return (
     <Card
       title={title}
@@ -471,11 +488,12 @@ function Details(props: { item: GraphItem; view: View; onClose: () => void }) {
       }
     >
       {about && <p class="small muted">{about}</p>}
-      {asPaths.length > 0 && (
+      {asPaths.length > 0 && retained.length === 0 && (
         <p class="small">
           <strong>{t("AS paths of its routes:")}</strong> <span class="mono">{asPaths.join(" · ")}</span>
         </p>
       )}
+      {retained.length > 0 && <details><summary>{t("Retained BGP paths ({count})", { count: retained.length })}</summary><BgpPaths paths={retained} names={props.view.asNames} /></details>}
       {!pathLink && !(v?.kind === "as" && !v.members?.length) && <Table
         rows={sessions as unknown as Record<string, unknown>[]}
         rowKey={(r) => `${r.link}/${r.node}/${r.neighbor}`}

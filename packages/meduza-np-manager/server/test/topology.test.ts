@@ -26,6 +26,79 @@ const node = (routerId: string, externalNeighbors: ReturnType<typeof neighbor>[]
   node: { routerId }, routing: { internalAsn: 65010 }, services: { frr: { localAsn: asn, externalNeighbors } },
 });
 
+const pathSnapshot = (pathsByNeighbor: Record<string, unknown[]>, complete = true, errors: string[] = []) => ({
+  id: "frr/main/paths", kind: "bgp-paths", scope: "retained-post-policy", complete, errors,
+  addressFamilies: ["ipv4", "ipv6"], pathsByNeighbor,
+});
+const path = (asPath: string, extra: Record<string, unknown> = {}) => ({ prefix: "192.0.2.0/24", family: "ipv4", asPath, valid: true, best: false, nextHops: [], ...extra });
+
+test("topology: paths continue after known ASes and managed external endpoints without duplicate AS vertices", () => {
+  const f = fixture({ a: node("10.0.0.1", [neighbor("one", "203.0.113.1"), neighbor("middle", "203.0.113.2", 65200)]), b: node("10.1.0.1", [], 65100) }, {
+    a: [bgp("one", "10.1.0.1"), bgp("middle", "10.2.0.1"), pathSnapshot({ "203.0.113.1": [path("65100 65100 65200 65300 65400")] })],
+  });
+  const t = f.read();
+  const middle = t.vertices.find((v) => v.kind === "peer" && v.asn === 65200)!;
+  assert.ok(t.links.some((l) => l.kind === "path" && l.source === "node:b" && l.target === middle.id));
+  assert.ok(t.links.some((l) => l.kind === "path" && l.source === middle.id && l.target === "as:65300"));
+  assert.ok(t.links.some((l) => l.kind === "path" && l.source === "as:65300" && l.target === "as:65400"));
+  assert.ok(!t.vertices.some((v) => v.kind === "as" && [65100, 65200].includes(v.asn!)));
+  assert.equal(t.bgpPaths[0]?.asPath, "65100 65100 65200 65300 65400", "the path list keeps prepends");
+});
+
+test("topology: all retained prefixes, alternatives and IPv6 paths are reported without a 32/64 sample", () => {
+  const paths = Array.from({ length: 100 }, (_, i) => path(`65100 ${65200 + i} 65500`, { prefix: `10.0.${i}.0/24`, valid: i % 2 === 0, best: i === 0 }));
+  const f = fixture({ a: node("10.0.0.1", [neighbor("one", "203.0.113.1")]) }, {
+    a: [bgp("one", undefined, "Established", { asPaths: [[65100, 65500]] }), pathSnapshot({
+      "203.0.113.1": paths,
+      "2001:db8::1": [path("65100 66000", { family: "ipv6", prefix: "2001:db8::/32" })],
+    })],
+  });
+  const t = f.read();
+  assert.equal(t.bgpPaths.length, 101);
+  assert.equal(t.bgpPaths.filter((p) => p.valid === false).length, 50);
+  assert.ok(t.bgpPaths.some((p) => p.family === "ipv6" && p.prefix === "2001:db8::/32"));
+  assert.ok(t.vertices.some((v) => v.asn === 65299), "even the final path is drawn");
+  assert.ok(t.vertices.some((v) => v.asn === 66000), "unconfigured observed neighbors are retained too");
+  assert.equal(t.pathReports[0]?.complete, true);
+  assert.ok(!t.links.some((l) => l.kind === "path" && l.asSource === 65100 && l.asTarget === 65500), "legacy samples do not add duplicate/fabricated links beside full paths");
+});
+
+test("topology: unordered sets do not fabricate adjacency or truncate following segments", () => {
+  const text = "65100 {65200,65201} 65300 65400 (1.10 65510) [65511,65512] 65520 65521";
+  const t = fixture({ a: node("10.0.0.1", [neighbor("one", "203.0.113.1")]) }, {
+    a: [bgp("one"), pathSnapshot({ "203.0.113.1": [path(text, { valid: false })] })],
+  }).read();
+  assert.equal(t.bgpPaths[0]?.asPath, text);
+  assert.ok(t.vertices.some((v) => v.asn === 65546), "ASDOT notation is converted correctly for the graph");
+  assert.ok(t.links.some((l) => l.kind === "path" && l.asSource === 65300 && l.asTarget === 65400));
+  assert.ok(t.links.some((l) => l.kind === "path" && l.asSource === 65520 && l.asTarget === 65521));
+  assert.ok(!t.links.some((l) => l.kind === "path" && l.asSource === 65200 && l.asTarget === 65201));
+  assert.ok(t.links.filter((l) => l.kind === "path").every((l) => l.state === "unknown"), "invalid retained paths do not assert operational links");
+});
+
+test("topology: IPv6 spelling differences keep paths attached to the configured neighbor", () => {
+  const t = fixture({ a: node("10.0.0.1", [neighbor("six", "2001:0db8::1")]) }, {
+    a: [bgp("six", "10.1.0.1"), pathSnapshot({ "2001:db8::1": [path("65100 65200", { family: "ipv6", prefix: "2001:db8::/32" })] })],
+  }).read();
+  assert.equal(t.bgpPaths[0]?.neighbor, "six");
+  assert.ok(!t.links.some((l) => l.kind === "path" && l.source === "node:a"), "the direct peer remains the path anchor");
+});
+
+test("topology: iBGP-learned paths and collection failures are explicit, and legacy paths remain usable", () => {
+  const cfg = node("10.0.0.1");
+  (cfg.services.frr as any).internalNeighbors = [{ id: "mesh", node: "b", address: "10.0.0.2" }];
+  const f = fixture({ a: cfg, b: node("10.0.0.2", [neighbor("one", "203.0.113.1")]) }, {
+    a: [pathSnapshot({ "10.0.0.2": [path("65100 65200")] }, false, ["ipv6: query timed out"])],
+    b: [bgp("one", undefined, "Established", { asPaths: [[65100, 65300, 65400]] })],
+  });
+  const t = f.read();
+  assert.ok(t.vertices.some((v) => v.asn === 65200));
+  assert.ok(t.vertices.some((v) => v.asn === 65400));
+  assert.deepEqual(t.pathReports.map((r) => [r.node, r.complete, r.available]), [["a", false, true], ["b", false, false]]);
+  f.reports.a = [{ id: "frr/probe", kind: "probe", reason: "plugin response too large" }];
+  assert.deepEqual(f.read().pathReports[0]?.errors, ["plugin response too large"]);
+});
+
 test("topology: an established remote router ID merges an external peer into its managed node without tunnel-address equality", () => {
   const f = fixture({ a: node("10.0.0.1", [neighbor("uplink", "203.0.113.1")]), b: node("10.1.0.1", [], 65100) }, {
     a: [bgp("uplink", "10.1.0.1", "Established", { routes: ["192.0.2.0/24"], prefixesReceived: 1 })],

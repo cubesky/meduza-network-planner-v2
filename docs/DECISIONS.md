@@ -2318,3 +2318,106 @@ tests pass. No production deployment, package installation or Git commit is perf
 Sources: [OpenWrt build option](https://github.com/openwrt/packages/blob/master/net/openvpn/Config-openssl.in),
 [OpenVPN option parsing](https://github.com/OpenVPN/openvpn/blob/v2.7.4/src/openvpn/options.c),
 [OpenVPN initialization order](https://github.com/OpenVPN/openvpn/blob/v2.7.4/src/openvpn/openvpn.c).
+
+## D98 — retain all received BGP candidates and continue known-AS paths (2026-11-13)
+
+The user explicitly selects all paths currently retained by FRR, including non-best and invalid
+candidates, rather than pre-policy rejected routes. Do not enable soft-reconfiguration or change
+production routing to collect them. Read-only summaries show about 65 prefixes and 250 candidates;
+the immediate topology loss is traversal stopping at an already-known ASN, although the old 32-path
+sample and IPv4/valid-only collection would also hide data in larger or different RIBs.
+
+meduza-np-frr now queries both unicast address families and publishes one bgp-paths snapshot with
+every received candidate: observer/neighbor identity, prefix, family, exact raw AS_PATH, validity,
+best-path flag and next hops. Local-origin entries without a remote peer are excluded. Distinct
+prefixes and equal AS_PATH candidates remain separate records. The legacy compact AS-path list has
+no 32-entry cap; the legacy 64-prefix neighbor sample does not limit the new full records. Extract
+the needed fields sequentially and release each larger native JSON table before querying the next
+family. Preserve five-second/four-MiB native-query and existing plugin-frame limits: timeout, failed
+command, invalid table or overflow produces explicit incomplete/unavailable diagnostics. Very large
+Internet RIBs are not promised to fit the existing bounded reporting transport.
+
+Manager consumes full snapshots from configured and observed peers, including managed eBGP and iBGP
+observers. Continue beyond known ASNs using a deterministic existing representative instead of
+creating duplicate AS nodes. These inferred links express AS-level evidence, not verified physical
+router adjacency. Match IPv6 peer spellings canonically and retain path direction. Collapse prepends
+only for drawing. Preserve ASDOT, sets and confederations in the table; unordered/unknown segments
+break inferred adjacency without discarding later ordered segments or inventing set-member order.
+Legacy node reports retain their compact graph fallback and show an upgrade notice.
+
+Topology has Graph/BGP paths tabs and matching selection details. The full table defaults to all
+candidates, supports node/neighbor/prefix/ASN/AS-name search, best/non-best/invalid filters and fifty
+rows per page. Original path notation and flags remain visible; AS names supplement rather than
+replace numbers. Partial collection is explicit. Keep direct-connection reset framing separate from
+fit-all, and allow the table to scroll inside the existing viewport. Upgrade both Manager and the
+node meduza-np-frr adapter for full reporting; no protocol schema changes are required.
+
+Validation: 20 FRR tests, all-target Clippy with warnings denied, Manager typechecks, 90 passing Manager
+tests (three skipped) and production build. A real adapter over synthetic vtysh responses retains all
+286 IPv4/IPv6 candidates and reports query failure/output overflow without losing the other family.
+Real Chrome over the actual topology page verifies 124 synthetic candidates across three pages,
+invalid filtering, IPv6/AS_SET and AS-name search, known-AS transit, direct/reset versus fit-all,
+and viewport sizing. The optional live full-table local-save check was rejected by automatic approval
+because of sensitive topology metadata; no such live-table files were created and acceptance uses
+synthetic data. No device mutation, deployment, Git staging or commit.
+
+Source: [FRR BGP route inspection](https://docs.frrouting.org/en/latest/bgp.html).
+
+## D99 — keep AS headings near stable owners without slot jumping (2026-11-13)
+
+AS labels could escape hundreds of pixels from their nodes: candidate rings extended far outward and
+the dense-view fallback placed a heading beyond every other panel. That fallback was transient, so its
+cached slot could disappear on the next frame. Group placement also followed painter-depth order,
+and its projected sphere edge could be far from every actual member. Hover-revealed router panels
+and cleared caches on view changes caused further unnecessary repacking.
+
+Anchor a group heading to a deterministic member (primary first, then ID) at that member's depth;
+collapsed/remote AS headings keep their own vertex anchor. Allocate all AS headings by stable identity
+independently of drawing depth. Search eight directions with only 0/12/24-pixel extra clearance after
+the six-pixel glyph gap. Bound horizontal title-center distance independently of long name width.
+There is no viewport-edge attraction or global fallback. In a completely
+crowded view minimize local overlap instead of disconnecting the text visually from its owner;
+zooming/selection remains available, and full title/name text is retained.
+
+Reserve fixed router text even while it is hidden, so hover and selection cannot trigger AS relocation.
+Preserve AS slots/offsets through reset, fit, focus, resizing and reordered reports, removing deleted
+objects' state. Require a substantially better slot for twelve consecutive draws before changing sides;
+then move its local offset at most four pixels per draw. Bounds shrink immediately when zoom/text size
+changes would otherwise preserve a stale distant offset. Small overlap/depth fluctuations do not cause
+instant flips. Panels retain translucent, two-line, depth-sorted rendering and no leader lines; ordinary
+Node labels still have their D93 fixed glyph-edge attachment.
+
+All 29 graph/controller regressions pass, including forty coincident AS labels staying local and settling,
+a wide 3D cluster with a stable member anchor, long-name center bounds across zoom, depth-tie/hover/view persistence, and transient versus
+persistent collisions with bounded transition steps. A renamed cluster still yields to fixed router text
+after its smooth repack. Manager typechecks and production build pass. Actual Chrome verifies the
+existing label interactions, framing and four viewport sizes, plus three orbit cases and forty dense
+headings stable over thirty further draws. Evidence: target/check-as-label-placement-tests.log,
+target/check-as-label-placement-browser.log, target/check-as-label-placement-build.log and
+target/as-label-attached-overview.png. Source-only; no production changes or Git staging/commit.
+
+## D100 — actionable LDAP save errors and transport validation (2026-11-13)
+
+The reported request uses ldap:// with startTls=false. Its 422 response is intentional under §6.5:
+password authentication requires LDAPS or successful StartTLS. verifyCertificate=false changes certificate
+verification, not this transport requirement. No plaintext opt-in or automatic TLS downgrade is added.
+
+The actual UI defect is generic errorText assuming every problems entry has path/message, although the
+LDAP endpoint returns strings. Extract the browser's ApiError/errorText into a pure module and accept
+both textual and structured field problems, preserving optional paths, limiting details to three valid
+entries, ignoring malformed entries and keeping meaningful code/HTTP fallbacks. Preserve existing
+imports and the API response shape; do not change LDAP connection or authentication behavior.
+
+The Access form displays localized transport errors beside URL and blocks save before either settings
+or a newly entered bind password is written. ldap:// requires StartTLS; ldaps:// must not also enable it.
+Do not silently change the selected protocol or assume the directory supports TLS. Both supported
+combinations can be saved after correction; backend validation still rejects direct invalid requests
+without overwriting the previously saved configuration.
+
+All twelve API-error/Access/i18n tests pass, including the exact textual 422 body, mixed structured
+problems, malformed detail fallback and authenticated settings requests. Manager server/web typechecks
+and production build pass. Real Chrome with synthetic responses verifies localized prevalidation, zero
+invalid-transport settings/secret writes, rendered textual 422 without undefined, and corrected StartTLS
+and LDAPS saves. Evidence: target/check-ldap-save-tests.log, target/check-ldap-save-browser.log and
+target/check-ldap-save-build.log. No actual LDAP connection, production settings change, deployment or
+Git staging/commit.

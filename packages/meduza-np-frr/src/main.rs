@@ -8,18 +8,34 @@ use serde_json::Value;
 
 struct Frr;
 
-fn vtysh(req: &PluginRequest, cmd: &str) -> Option<Value> {
-    let provider = req.providers.get(frr::SLOT)?.path.clone();
-    let dir = std::path::Path::new(&provider).parent()?.to_path_buf();
+fn vtysh_result(req: &PluginRequest, cmd: &str) -> Result<Value, String> {
+    let provider = req.providers.get(frr::SLOT).ok_or("FRR provider unavailable")?.path.clone();
+    let dir = std::path::Path::new(&provider).parent().ok_or("FRR provider has no directory")?.to_path_buf();
     // vtysh lives in /usr/bin on most systems, next to the daemons on some builds.
     let candidates = [dir.join("vtysh"), "/usr/bin/vtysh".into(), "/usr/sbin/vtysh".into()];
-    let vtysh = candidates.iter().find(|p| p.exists())?;
-    let out =
-        run_status_command(&vtysh.to_string_lossy(), &["-N", frr::PATHSPACE, "-c", cmd], Duration::from_secs(5), 4 * 1024 * 1024).ok()?;
-    if out.status != Some(0) {
-        return None;
+    let vtysh = candidates.iter().find(|p| p.exists()).ok_or("vtysh unavailable")?;
+    let out = run_status_command(&vtysh.to_string_lossy(), &["-N", frr::PATHSPACE, "-c", cmd], Duration::from_secs(5), 4 * 1024 * 1024)
+        .map_err(|e| e.to_string())?;
+    if out.timed_out {
+        return Err("query timed out".into());
     }
-    serde_json::from_str(&out.stdout).ok()
+    if out.status != Some(0) {
+        if out.stdout.len() >= 4 * 1024 * 1024 {
+            return Err("query exceeded the 4 MiB collection limit".into());
+        }
+        return Err(format!("vtysh exit {:?}", out.status));
+    }
+    serde_json::from_str(&out.stdout).map_err(|_| {
+        if out.stdout.len() >= 4 * 1024 * 1024 {
+            "query exceeded the 4 MiB collection limit".into()
+        } else {
+            "invalid JSON response".into()
+        }
+    })
+}
+
+fn vtysh(req: &PluginRequest, cmd: &str) -> Option<Value> {
+    vtysh_result(req, cmd).ok()
 }
 
 impl Plugin for Frr {
@@ -43,20 +59,50 @@ impl Plugin for Frr {
         let ts = meduza_np_plugin_sdk::now_rfc3339();
         let mut instances = Vec::new();
         let summary = vtysh(req, "show bgp summary json").unwrap_or(Value::Null);
-        let table = if summary.is_null() { None } else { vtysh(req, "show bgp ipv4 unicast json") };
-        let details = frr::PeerDetails {
-            routes: table.as_ref().map(frr::bgp_routes_by_peer).unwrap_or_default(),
-            as_paths: table.as_ref().map(frr::bgp_as_paths_by_peer).unwrap_or_default(),
-            // the router ID names an unmanaged peer in the topology view; managed peers are known by name
-            router_ids: if summary.is_null() || !cfg.external_neighbors.iter().any(|n| n.enabled) {
-                BTreeMap::new()
-            } else {
-                vtysh(req, "show bgp neighbors json").as_ref().map(frr::bgp_router_ids).unwrap_or_default()
-            },
+        let mut snapshot = frr::paths::Snapshot::default();
+        let mut has_tables = false;
+        let mut local_routes = std::collections::BTreeSet::new();
+        let mut details = frr::PeerDetails::default();
+        let mut errors = Vec::new();
+        if summary.is_null() {
+            errors.push("BGP summary unavailable".into());
+        } else {
+            for family in ["ipv4", "ipv6"] {
+                match vtysh_result(req, &format!("show bgp {family} unicast json")) {
+                    Ok(table) if table.get("routes").is_some_and(Value::is_object) => {
+                        snapshot.add_table(family, &table);
+                        has_tables = true;
+                        local_routes.extend(frr::local_routes(&table));
+                        for (peer, routes) in frr::bgp_routes_by_peer(&table) {
+                            details.routes.entry(peer).or_default().extend(routes);
+                        }
+                        for (peer, paths) in frr::bgp_as_paths_by_peer(&table) {
+                            details.as_paths.entry(peer).or_default().extend(paths);
+                        }
+                    }
+                    Ok(_) => errors.push(format!("{family}: routing table unavailable")),
+                    Err(error) => errors.push(format!("{family}: {error}")),
+                }
+            }
+        }
+        // The router ID names an unmanaged peer in the topology view; managed peers are known by name.
+        details.router_ids = if summary.is_null() || !cfg.external_neighbors.iter().any(|n| n.enabled) {
+            BTreeMap::new()
+        } else {
+            vtysh(req, "show bgp neighbors json").as_ref().map(frr::bgp_router_ids).unwrap_or_default()
         };
+        for routes in details.routes.values_mut() {
+            routes.sort();
+            routes.dedup();
+        }
+        for paths in details.as_paths.values_mut() {
+            paths.sort();
+            paths.dedup();
+        }
         instances.extend(frr::bgp_statuses(&cfg, &summary, &details, &ts));
-        if let Some(table) = &table {
-            instances.extend(frr::origination_status(&frr::announced_networks(&cfg, req), &frr::local_routes(table), &ts));
+        instances.push(snapshot.status(&errors, &ts));
+        if has_tables {
+            instances.extend(frr::origination_status(&frr::announced_networks(&cfg, req), &local_routes, &ts));
         }
         if !cfg.bfd.profiles.is_empty() || !cfg.bfd.peers.is_empty() {
             if let Some(bfd) = vtysh(req, "show bfd peers json") {

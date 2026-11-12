@@ -434,7 +434,7 @@ test("topology: a renamed AS cluster yields to an anchored router without reheat
   graph.alpha = 0;
   const name = "Long registered upstream network name";
   graph.setData(vertices, [], [{ id: "asn:1", label: "AS65100", subtitle: name, color: "#5cb" }]);
-  graph.draw();
+  for (let i = 0; i < 100; i++) graph.draw(); // Persistent overlap is repacked smoothly, without teleporting.
   assert.equal(graph.alpha, 0, "renaming metadata does not restart physics");
   assert.deepEqual(graph.labelHits.find((p: any) => p.item.id === "external"), router, "growing AS text cannot move the router label");
   const as = graph.labelHits.find((p: any) => p.item.kind === "group");
@@ -552,6 +552,134 @@ test("topology: close AS clusters avoid each other's complete title/name panels"
   assert.ok(a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y, "neither AS line overlaps the other group panel");
   graph.hover = { kind: "group", id: "a" }; graph.draw();
   assert.deepEqual(graph.labelHits.filter((p: any) => p.item.kind === "group"), panels, "hover does not relocate the separated headings");
+  graph.destroy();
+});
+
+test("topology: crowded AS panels stay near their owners without a distant global fallback", () => {
+  const { graph } = setup(1000, 650);
+  const vertices = Array.from({ length: 40 }, (_, i) => ({
+    id: `as:${i}`, label: `AS${65000 + i}`, subtitle: `Network ${i}`, labelPriority: 1,
+    radius: 10, shape: "diamond", color: "#5cb",
+  }));
+  graph.setData(vertices, []);
+  graph.yaw = graph.pitch = 0; graph.distance = 600; graph.target = { x: 0, y: 0, z: 0 };
+  vertices.forEach((v, i) => Object.assign(graph.vertices.get(v.id), { x: i % 5, y: Math.floor(i / 5), z: 0 }));
+  graph.draw();
+  for (let frame = 0; frame < 180; frame++) {
+    graph.draw();
+    assert.equal(graph.labelHits.length, 40, "dense overview keeps every AS heading");
+    for (const panel of graph.labelHits) {
+      const v = graph.vertices.get(panel.item.id), p = graph.project(v.x, v.y, v.z);
+      const dx = Math.max(panel.x - p.sx, p.sx - panel.x - panel.w, 0);
+      const dy = Math.max(panel.y - p.sy, p.sy - panel.y - panel.h, 0);
+      assert.ok(Math.hypot(dx, dy) <= Math.SQRT2 * (v.radius * p.scale * 1.25 + 30) + 0.001,
+        "even when no local slot is clear, a panel cannot escape to the far side of the canvas");
+    }
+  }
+  const before = structuredClone(graph.labelHits);
+  for (let i = 0; i < 30; i++) graph.draw();
+  assert.deepEqual(graph.labelHits, before, "a static crowded scene settles rather than cycling between slots");
+  graph.destroy();
+});
+
+test("topology: cluster headings attach to a stable member instead of a distant bubble edge", () => {
+  const { graph } = setup(1200, 800);
+  const vertices = ["primary", "left", "right"].map((id) => ({ id, label: id, group: "asn:1", primary: id === "primary", radius: 10, shape: "circle", color: "#5cb" }));
+  const groups = [{ id: "asn:1", label: "AS65100", subtitle: "Wide spatial cluster", color: "#5cb" }];
+  graph.setData(vertices, [], groups);
+  graph.yaw = graph.pitch = 0; graph.distance = 1000; graph.target = { x: 0, y: 0, z: 0 };
+  Object.assign(graph.vertices.get("primary"), { x: 0, y: 0, z: 0 });
+  Object.assign(graph.vertices.get("left"), { x: -500, y: 150, z: -300 });
+  Object.assign(graph.vertices.get("right"), { x: 500, y: -150, z: 300 });
+  graph.draw();
+  const panel = () => graph.labelHits.find((p: any) => p.item.kind === "group");
+  const before = { ...panel() };
+  assert.ok(Math.abs(before.y + before.h / 2 - 400) < 60, "heading stays close to the primary member despite a huge bubble");
+  graph.alpha = 0;
+  graph.setData([...vertices].reverse(), [], groups);
+  Object.assign(graph.vertices.get("left"), { z: 300 });
+  Object.assign(graph.vertices.get("right"), { z: -300 });
+  graph.draw();
+  assert.deepEqual(panel(), before, "member report order or bubble depth changes cannot choose another owner");
+  graph.destroy();
+});
+
+test("topology: long AS names cannot detach the centered AS number during side attachment or zoom", () => {
+  const { graph } = setup(1200, 800);
+  graph.setData(Array.from({ length: 8 }, (_, i) => ({
+    id: `as:${i}`, label: `AS${65100 + i}`, subtitle: "An exceptionally long registered network name ".repeat(4),
+    labelPriority: 1, radius: 10, shape: "diamond", color: "#5cb",
+  })), []);
+  graph.yaw = graph.pitch = 0; graph.distance = 600; graph.target = { x: 0, y: 0, z: 0 };
+  for (const v of graph.vertices.values()) Object.assign(v, { x: 0, y: 0, z: 0 });
+  for (const distance of [600, 1200, 300]) {
+    graph.distance = distance;
+    for (let i = 0; i < 100; i++) {
+      graph.draw();
+      for (const panel of graph.labelHits) {
+        const v = graph.vertices.get(panel.item.id), p = graph.project(v.x, v.y, v.z), r = v.radius * p.scale * 1.25;
+        assert.ok(Math.abs(panel.x + panel.w / 2 - p.sx) <= r + 94.001, "AS number center has a fixed distance bound independent of name width");
+        assert.ok(Math.abs(panel.y + panel.h / 2 - p.sy) <= r + panel.h / 2 + 30.001);
+      }
+    }
+  }
+  graph.destroy();
+});
+
+test("topology: AS attachments survive depth ties, hover disclosure and view operations", () => {
+  const { graph, resize } = setup(1000, 650);
+  const vertices = [
+    { id: "router", label: "router.example", radius: 4, shape: "circle", color: "#5cb" },
+    ...["a", "b"].map((id) => ({ id, group: id, label: id, radius: 4, shape: "circle", color: "#5cb" })),
+  ];
+  const groups = ["a", "b"].map((id, i) => ({ id, label: `AS${65100 + i}`, subtitle: `Network ${id}`, color: "#5cb" }));
+  graph.setData(vertices, [], groups);
+  graph.yaw = graph.pitch = 0; graph.distance = 600; graph.target = { x: 0, y: 0, z: 0 };
+  Object.assign(graph.vertices.get("a"), { x: 0, y: 0, z: -0.001 });
+  Object.assign(graph.vertices.get("b"), { x: 25, y: 0, z: 0.001 });
+  Object.assign(graph.vertices.get("router"), { x: 35, y: -35, z: 0 });
+  for (let i = 0; i < 100; i++) graph.draw();
+  const panels = () => graph.labelHits.filter((p: any) => p.item.kind === "group");
+  const before = structuredClone(panels()), slots = [...graph.groupLabelSlots];
+  graph.hover = { kind: "vertex", id: "router" }; graph.draw();
+  assert.deepEqual(panels(), before, "revealing router text cannot repack AS panels");
+  for (let i = 0; i < 40; i++) {
+    graph.vertices.get("a").z *= -1; graph.vertices.get("b").z *= -1; graph.draw();
+    for (const p of panels()) {
+      const old = before.find((b: any) => b.item.id === p.item.id);
+      assert.ok(Math.hypot(p.x - old.x, p.y - old.y) < 0.01, "crossing a painter depth tie cannot swap label sides");
+    }
+  }
+  graph.resetView(); graph.fitGraph(); resize(900, 700);
+  assert.deepEqual([...graph.groupLabelSlots], slots, "camera operations preserve stable AS attachment slots");
+  graph.destroy();
+});
+
+test("topology: persistent AS collisions repack with hysteresis and bounded per-frame movement", () => {
+  const { graph } = setup(1000, 650);
+  graph.setData([
+    { id: "as", label: "AS65100", subtitle: "Upstream", labelPriority: 1, radius: 10, shape: "diamond", color: "#5cb" },
+    { id: "router", label: "A long router identifier", radius: 10, shape: "circle", color: "#5cb" },
+  ], []);
+  graph.yaw = graph.pitch = 0; graph.distance = 600; graph.target = { x: 0, y: 0, z: 0 };
+  Object.assign(graph.vertices.get("as"), { x: 0, y: 0, z: 0 });
+  Object.assign(graph.vertices.get("router"), { x: 300, y: 200, z: 0 });
+  graph.draw();
+  const panel = () => graph.labelHits.find((p: any) => p.item.id === "as");
+  const initial = { ...panel() }, initialSlot = graph.labelSlots.get("as");
+  const router = graph.vertices.get("router"), p = graph.project(router.x, router.y, router.z);
+  Object.assign(router, { x: initial.x - 516, y: initial.y + initial.h / 2 - 325, z: 0 });
+  assert.equal(p.scale, 1);
+  for (let i = 0; i < 5; i++) { graph.draw(); assert.deepEqual(panel(), initial, "a brief overlap does not trigger a side switch"); }
+  let previous = { ...panel() };
+  for (let i = 0; i < 100; i++) {
+    graph.draw(); const next = { ...panel() };
+    assert.ok(Math.hypot(next.x - previous.x, next.y - previous.y) <= 4.001, "persistent collision moves the AS panel smoothly");
+    previous = next;
+  }
+  assert.notEqual(graph.labelSlots.get("as"), initialSlot, "persistent large overlap eventually chooses a better local slot");
+  const node = graph.labelHits.find((p: any) => p.item.id === "router"), as = panel();
+  assert.ok(as.x + as.w <= node.x || node.x + node.w <= as.x || as.y + as.h <= node.y || node.y + node.h <= as.y);
   graph.destroy();
 });
 

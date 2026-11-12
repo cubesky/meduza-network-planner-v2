@@ -12,7 +12,7 @@ export interface GraphVertex {
   id: string;
   label: string;
   subtitle?: string;
-  /** AS landmark label: always visible and avoids the fixed node/router panels. */
+  /** AS landmark label: always visible, with bounded local avoidance around its owner. */
   labelPriority?: number;
   /** A managed node (also retained by a collapsed managed AS): root of the outward layout. */
   primary?: boolean;
@@ -101,6 +101,7 @@ export class ForceGraph3D {
   private viewFrame: "all" | "direct" | string[] | null = "direct";
   private labelSlots = new Map<string, number>();
   private groupLabelSlots = new Map<string, number>();
+  private asLabelPositions = new Map<string, { x: number; y: number; pending: number; frames: number }>();
   private labelHits: Array<{ item: GraphItem; depth: number; x: number; y: number; w: number; h: number }> = [];
   private detailedLabels = new Set<string>();
   private frame = 0;
@@ -198,6 +199,9 @@ export class ForceGraph3D {
     for (const id of this.labelSlots.keys()) if (!next.has(id)) this.labelSlots.delete(id);
     for (const id of this.detailedLabels) if (!next.has(id)) this.detailedLabels.delete(id);
     for (const id of this.groupLabelSlots.keys()) if (!this.groups.some((g) => g.id === id)) this.groupLabelSlots.delete(id);
+    for (const key of this.asLabelPositions.keys()) {
+      if (key.startsWith("group:") ? !this.groupLabelSlots.has(key.slice(6)) : !this.labelSlots.has(key.slice(7))) this.asLabelPositions.delete(key);
+    }
     if (Array.isArray(this.viewFrame) && !this.viewFrame.some((id) => next.has(id))) {
       this.viewFrame = "direct";
       this.userView = false;
@@ -212,7 +216,6 @@ export class ForceGraph3D {
     this.viewFrame = "direct";
     this.userView = false;
     this.fitting = this.alpha >= 0.002;
-    this.labelSlots.clear();
     this.frameVertices(this.framedVertices());
   }
 
@@ -220,7 +223,6 @@ export class ForceGraph3D {
     this.fitting = this.alpha >= 0.002;
     this.userView = true;
     this.viewFrame = "all";
-    this.labelSlots.clear();
     this.frameVertices([...this.vertices.values()]);
   }
 
@@ -235,7 +237,6 @@ export class ForceGraph3D {
     this.fitting = false;
     this.userView = true;
     this.viewFrame = vertices.map((v) => v.id);
-    this.labelSlots.clear();
     this.frameVertices(vertices);
   }
 
@@ -518,7 +519,6 @@ export class ForceGraph3D {
       this.panX *= this.width / oldWidth;
       this.panY *= this.height / oldHeight;
     }
-    this.labelSlots.clear();
     // Assigning canvas dimensions clears its bitmap; redraw in this resize callback, not a later frame.
     this.draw();
   }
@@ -566,11 +566,10 @@ export class ForceGraph3D {
     const lit = (id: string) => !this.highlight || activeNodes.has(id) || activeLinks.has(id);
     const t = performance.now() / 1000;
     const occupied: Array<{ x: number; y: number; w: number; h: number; weight?: number }> = [];
-    const reservedLabels: Array<{ x: number; y: number; w: number; h: number }> = [];
+    const asPanels: Array<{ key: string; item: GraphItem; label: string; subtitle?: string; color: string; sx: number; sy: number; r: number; depth: number; opacity: number }> = [];
     // Camera-facing text belongs to its object's depth plane, just like the AS labels. Geometry at the same
     // depth wins ties; split long depth-spanning links so their foreground sections stay in front of text.
     const scene: Array<{ depth: number; layer: number; draw: () => void }> = [];
-    const edges: Array<{ sx: number; sy: number; ex: number; ey: number; width: number }> = [];
     // One camera-facing translucent panel renderer for AS headings and router/node labels. Panels share
     // the object's depth plane; there are no label-to-object leader lines or final screen-overlay pass.
     const labelSize = (label: string, subtitle?: string) => {
@@ -609,16 +608,15 @@ export class ForceGraph3D {
       if (p.sx + r < 0 || p.sx - r > this.width || p.sy + r < 0 || p.sy - r > this.height) continue;
       if (r >= 8) this.detailedLabels.add(p.v.id);
       else if (r < 6) this.detailedLabels.delete(p.v.id);
-      if (!this.detailedLabels.has(p.v.id) && !emphasized(p.v.id)) continue;
       const { w, h } = labelSize(p.v.label, p.v.subtitle);
       const extent = r * (p.v.shape === "triangle" ? 1.1 : p.v.shape === "square" ? 0.9 : 1);
       const box = { x: p.sx + extent + 6, y: p.sy - h / 2, w, h };
-      nodePanels.set(p.v.id, box);
+      if (this.detailedLabels.has(p.v.id) || emphasized(p.v.id)) nodePanels.set(p.v.id, box);
+      // Reserve even currently hidden router text: hover/selection must never move an AS heading.
       occupied.push({ ...box, weight: 16 });
-      reservedLabels.push(box);
     }
 
-    // AS bubbles sit behind the scene; their labels join nodes and links at the cluster's projected depth.
+    // AS bubbles sit behind the scene; their headings use a stable member's anchor and depth.
     const bubbles = this.bubbles()
       .map((b) => ({ b, ...this.project(b.x, b.y, b.z) }))
       .filter((p) => p.visible && p.b.r * p.scale < Math.max(this.width, this.height) * 2)
@@ -638,35 +636,14 @@ export class ForceGraph3D {
       ctx.setLineDash([6, 5]);
       ctx.stroke();
       ctx.setLineDash([]);
-      const { w, h } = labelSize(b.group.label, b.group.subtitle);
-      const candidates = Array.from({ length: 8 }, (_, i) => i * 18).flatMap((offset) => [
-        { x: sx - w / 2, y: sy - r - h - 6 - offset, w, h },
-        { x: sx - w / 2, y: sy + r + 6 + offset, w, h },
-        { x: sx + r + 6 + offset, y: sy - h / 2, w, h },
-        { x: sx - r - w - 6 - offset, y: sy - h / 2, w, h },
-      ]);
-      const clear = (box: typeof candidates[number]) => !reservedLabels.some((a) =>
-        box.x < a.x + a.w + 4 && box.x + w + 4 > a.x && box.y < a.y + a.h + 4 && box.y + h + 4 > a.y);
-      let slot = this.groupLabelSlots.get(b.group.id);
-      if (slot === undefined || !candidates[slot] || !clear(candidates[slot]!)) {
-        let eligible = candidates.map((_, i) => i).filter((i) => clear(candidates[i]!));
-        if (!eligible.length) {
-          candidates.push({ x: sx - w / 2, y: Math.min(...reservedLabels.map((a) => a.y)) - h - 6, w, h });
-          eligible = [candidates.length - 1];
-        }
-        const score = (index: number) => {
-          const box = candidates[index]!;
-          const outside = Math.max(0, -box.x) + Math.max(0, -box.y) + Math.max(0, box.x + w - this.width) + Math.max(0, box.y + h - this.height);
-          return outside * 1000 + Math.hypot(box.x + w / 2 - sx, box.y + h / 2 - sy);
-        };
-        slot = eligible.reduce((best, i) => score(i) < score(best) ? i : best, eligible[0]!);
-      }
-      this.groupLabelSlots.set(b.group.id, slot);
-      const box = candidates[slot]!;
-      const opacity = fog(depth) * (on ? 1 : 0.4);
-      labelPanel(b.group.label, b.group.subtitle, b.group.color, depth, opacity, box, { kind: "group", id: b.group.id });
-      occupied.push({ ...box, weight: 16 });
-      reservedLabels.push(box);
+      // A large 3D bubble's projected edge can be hundreds of pixels from every actual member.
+      // Attach its heading to a stable member instead; neither camera depth nor hover chooses the owner.
+      const member = [...proj.values()].filter((p) => p.v.group === b.group.id)
+        .sort((a, c) => Number(!!c.v.primary) - Number(!!a.v.primary) || a.v.id.localeCompare(c.v.id))[0];
+      if (member?.visible) asPanels.push({ key: `group:${b.group.id}`, item: { kind: "group", id: b.group.id },
+        label: b.group.label, subtitle: b.group.subtitle, color: b.group.color,
+        sx: member.sx, sy: member.sy, r: member.v.radius * member.scale * 1.25,
+        depth: member.depth, opacity: fog(member.depth) * (on ? 1 : 0.4) });
     }
 
     for (const l of this.links) {
@@ -681,7 +658,6 @@ export class ForceGraph3D {
         const start = point(from), end = point(to);
         const depth = (start.depth + end.depth) / 2;
         const scale = (start.scale + end.scale) / 2;
-        edges.push({ sx: start.sx, sy: start.sy, ex: end.sx, ey: end.sy, width: Math.max(2, l.width * scale) });
         scene.push({ depth, layer: 1, draw: () => {
           ctx.globalAlpha = fog(depth) * (linked ? (this.highlight || this.hover?.id === l.id ? 0.95 : 0.55) : 0.1);
           ctx.strokeStyle = l.color;
@@ -751,9 +727,7 @@ export class ForceGraph3D {
       } });
       occupied.push({ x: p.sx - r - 3, y: p.sy - r - 3, w: (r + 3) * 2, h: (r + 3) * 2, weight: 30 });
     }
-    // Only AS vertices choose an avoidance slot. Node/router labels stay attached to their glyph regardless
-    // of AS title changes, depth-order crossings, hover, selection or overlapping links.
-    order.sort((a, b) => (b.v.labelPriority ?? 0) - (a.v.labelPriority ?? 0) || a.v.id.localeCompare(b.v.id));
+    // Node/router labels stay attached to their glyph regardless of AS placement.
     for (const p of order) {
       const r = p.v.radius * p.scale;
       if (p.sx + r < 0 || p.sx - r > this.width || p.sy + r < 0 || p.sy - r > this.height) continue;
@@ -763,46 +737,53 @@ export class ForceGraph3D {
         if (box) labelPanel(p.v.label, p.v.subtitle, text, p.depth, opacity, box, { kind: "vertex", id: p.v.id });
         continue;
       }
-      const { w, h } = labelSize(p.v.label, p.v.subtitle);
-      // Keep slot indexes stable, including when a long AS name requires a more distant position.
-      const candidates = Array.from({ length: 16 }, (_, i) => i * 22).flatMap((offset) => [
-        { x: p.sx - w / 2, y: p.sy + r + 5 + offset, w, h },
-        { x: p.sx - w / 2, y: p.sy - r - h - 5 - offset, w, h },
-        { x: p.sx + r + 5 + offset, y: p.sy - h / 2, w, h },
-        { x: p.sx - r - w - 5 - offset, y: p.sy - h / 2, w, h },
-        { x: p.sx + r + 5 + offset, y: p.sy + r + 5 + offset, w, h },
-        { x: p.sx - r - w - 5 - offset, y: p.sy + r + 5 + offset, w, h },
-        { x: p.sx + r + 5 + offset, y: p.sy - r - h - 5 - offset, w, h },
-        { x: p.sx - r - w - 5 - offset, y: p.sy - r - h - 5 - offset, w, h },
-      ]);
-      const score = (b: typeof candidates[number]) => {
-        const outside = Math.max(0, 2 - b.x) + Math.max(0, 2 - b.y) + Math.max(0, b.x + w - this.width + 2) + Math.max(0, b.y + h - this.height + 2);
-        return outside * 1000 + occupied.reduce((sum, o) => sum +
-          Math.max(0, Math.min(b.x + w + 2, o.x + o.w + 2) - Math.max(b.x, o.x)) *
-          Math.max(0, Math.min(b.y + h + 2, o.y + o.h + 2) - Math.max(b.y, o.y)) * (o.weight ?? 1), 0) +
-          edges.reduce((sum, e) => sum + segmentBoxOverlap(e.sx, e.sy, e.ex, e.ey, b) * e.width * 4, 0);
-      };
-      const previous = this.labelSlots.get(p.v.id);
-      const clearOfAs = (b: typeof candidates[number]) => !reservedLabels.some((a) =>
-        b.x < a.x + a.w + 4 && b.x + b.w + 4 > a.x && b.y < a.y + a.h + 4 && b.y + b.h + 4 > a.y);
-      let slot = previous;
-      if (slot === undefined || !candidates[slot] || !clearOfAs(candidates[slot]!)) {
-        let eligible = candidates.map((_, i) => i).filter((i) => clearOfAs(candidates[i]!));
-        // In very dense views extend beyond every AS block rather than accepting an overlapping label.
-        if (!eligible.length) {
-          const y = Math.max(...reservedLabels.map((a) => a.y + a.h)) + 8;
-          candidates.push({ x: p.sx - w / 2, y, w, h });
-          eligible = [candidates.length - 1];
-        }
-        slot = eligible.reduce((best, i) => score(candidates[i]!) < score(candidates[best]!) ? i : best, eligible[0]!);
+      asPanels.push({ key: `vertex:${p.v.id}`, item: { kind: "vertex", id: p.v.id }, label: p.v.label,
+        subtitle: p.v.subtitle, color: p.v.color, sx: p.sx, sy: p.sy, r: r * 1.25, depth: p.depth, opacity });
+    }
+    // Allocate all AS panels in stable identity order, independent of painter depth. Never search beyond
+    // a 24px neighborhood or use an unbounded "outside every label" fallback in a crowded overview.
+    for (const p of asPanels.sort((a, b) => a.key.localeCompare(b.key))) {
+      const { w, h } = labelSize(p.label, p.subtitle);
+      // A wide registered name must not push the centered AS number far away in a side attachment.
+      const halfWidth = Math.min(w / 2, 64);
+      const candidates = [0, 12, 24].flatMap((offset) => {
+        const x = p.r + 6 + offset + halfWidth, y = p.r + 6 + offset + h / 2;
+        return [{ x: 0, y: -y }, { x: 0, y }, { x, y: 0 }, { x: -x, y: 0 },
+          { x, y: -y }, { x: -x, y: -y }, { x, y }, { x: -x, y }];
+      });
+      const boxAt = (offset: { x: number; y: number }) => ({ x: p.sx + offset.x - w / 2, y: p.sy + offset.y - h / 2, w, h });
+      const overlap = (box: ReturnType<typeof boxAt>) => occupied.reduce((sum, o) => sum +
+        Math.max(0, Math.min(box.x + w + 4, o.x + o.w + 4) - Math.max(box.x, o.x)) *
+        Math.max(0, Math.min(box.y + h + 4, o.y + o.h + 4) - Math.max(box.y, o.y)) * (o.weight ?? 1), 0);
+      const scores = candidates.map((c, i) => overlap(boxAt(c)) + Math.floor(i / 8) * 96 + i % 8);
+      const best = scores.reduce((a, score, i) => score < scores[a]! ? i : a, 0);
+      const slots = p.item.kind === "group" ? this.groupLabelSlots : this.labelSlots;
+      let slot = slots.get(p.item.id);
+      let state = this.asLabelPositions.get(p.key);
+      if (slot === undefined || !candidates[slot] || !state) {
+        slot = best;
+        state = { ...candidates[slot]!, pending: -1, frames: 0 };
+        this.asLabelPositions.set(p.key, state);
+      } else {
+        // A tiny collision/depth change cannot flip the attachment. Require a substantially better slot
+        // for twelve consecutive frames, then ease the local offset instead of teleporting the heading.
+        if (best !== slot && scores[slot]! - scores[best]! > Math.max(160, w * h * 0.1)) {
+          state.frames = state.pending === best ? state.frames + 1 : 1;
+          state.pending = best;
+          if (state.frames >= 12) { slot = best; state.frames = 0; }
+        } else { state.pending = -1; state.frames = 0; }
+        const target = candidates[slot]!;
+        const dx = target.x - state.x, dy = target.y - state.y, distance = Math.hypot(dx, dy);
+        const step = Math.min(1, 4 / Math.max(0.001, distance));
+        state.x += dx * step; state.y += dy * step;
+        // Zoom and renamed text can change the bounds instantly; do not retain an obsolete far offset.
+        state.x = Math.max(-p.r - halfWidth - 30, Math.min(p.r + halfWidth + 30, state.x));
+        state.y = Math.max(-p.r - h / 2 - 30, Math.min(p.r + h / 2 + 30, state.y));
       }
-      this.labelSlots.set(p.v.id, slot);
-      // Like AS labels, follow the projected object; let the canvas clip at its edge instead of pinning text
-      // to the viewport as an overlay while the router continues to move through the scene.
-      const box = candidates[slot]!;
+      slots.set(p.item.id, slot);
+      const box = boxAt(state);
       occupied.push({ ...box, weight: 16 });
-      reservedLabels.push(box);
-      labelPanel(p.v.label, p.v.subtitle, p.v.labelPriority ? p.v.color : text, p.depth, opacity, box, { kind: "vertex", id: p.v.id });
+      labelPanel(p.label, p.subtitle, p.color, p.depth, p.opacity, box, p.item);
     }
     scene.sort((a, b) => b.depth - a.depth || a.layer - b.layer);
     for (const item of scene) item.draw();
@@ -1000,19 +981,6 @@ export class ForceGraph3D {
     } else return;
     e.preventDefault();
   };
-}
-
-/** Length of a projected link inside a padded label box (Liang-Barsky clipping). */
-function segmentBoxOverlap(ax: number, ay: number, bx: number, by: number, box: { x: number; y: number; w: number; h: number }): number {
-  const dx = bx - ax, dy = by - ay;
-  let from = 0, to = 1;
-  for (const [p, q] of [[-dx, ax - box.x + 2], [dx, box.x + box.w + 2 - ax], [-dy, ay - box.y + 2], [dy, box.y + box.h + 2 - ay]] as const) {
-    if (p === 0) { if (q < 0) return 0; else continue; }
-    const t = q / p;
-    if (p < 0) from = Math.max(from, t); else to = Math.min(to, t);
-    if (from > to) return 0;
-  }
-  return Math.hypot(dx, dy) * (to - from);
 }
 
 function segmentDistance(px: number, py: number, ax: number, ay: number, bx: number, by: number): number {

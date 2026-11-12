@@ -619,3 +619,36 @@ Precise p2p session state is explicitly unavailable rather than guessed from a r
 full session observations and selective client disconnection, use a management-enabled provider;
 meduza-np-openvpn-pkg already includes management support. No provider is automatically replaced just
 because a system binary has reduced monitoring capabilities.
+
+### Full retained BGP paths in Manager
+
+Upgrade Manager and each observing node's meduza-np-frr adapter, then open Topology → BGP paths.
+The default table includes every received IPv4/IPv6 candidate currently saved in FRR's post-policy
+unicast RIB, including non-best and invalid paths. It excludes routes rejected before storage and
+does not enable extra Adj-RIB-In retention. Search by node, peer, prefix, AS number/name or next hop;
+use the state filter and page controls to inspect the complete report. The table preserves original
+AS prepends, sets and confederation notation alongside prefix, family, flags and next hops.
+
+The graph continues AS paths beyond already-known ASNs, including observations learned through
+managed peers or iBGP. An AS-level inferred link does not establish which physical router inside
+that AS forwards the route. Unordered AS sets do not imply ordered links. Reset still frames managed
+nodes and configured direct peers; Fit all includes remote path nodes.
+
+An older node displays an upgrade notice. Query failures, timeouts or output exceeding the existing
+four-MiB/five-second query limits display incomplete collection; inspect the reported family/error
+instead of treating missing records as an empty RIB. Existing plugin-response bounds also apply, so
+full Internet tables may exceed this transport. Neither the view nor the adapter changes BGP policies,
+neighbor configuration or forwarding state.
+
+### LDAP settings rejected with HTTP 422
+
+For ldap:// URLs, enable StartTLS and ensure the directory supports it. Alternatively use ldaps://
+with StartTLS disabled, since TLS is already established by that protocol. Disabling certificate
+verification does not permit plaintext LDAP. Prefer a trusted CA and certificate verification.
+Saving settings does not itself prove that the directory connection succeeds; use the connection
+test after saving the corrected configuration.
+
+Manager now explains incompatible transport choices beside URL and blocks save before changing the
+bind password. Older interfaces may display undefined for a textual validation problem; inspect the
+response's problems array or update Manager to obtain the actual reason. Backend rejection leaves
+the previous LDAP settings intact.

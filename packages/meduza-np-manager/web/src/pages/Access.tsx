@@ -93,6 +93,9 @@ function LdapSettings() {
   }, [state.data]);
   if (!s) return <Loadable state={state}>{() => null}</Loadable>;
   const set = <K extends keyof Ldap>(k: K, v: Ldap[K]) => setS({ ...s, [k]: v });
+  const transportError = /^ldap:\/\//i.test(s.url) && !s.startTls
+    ? t("Enable StartTLS for ldap://, or use ldaps://. Disabling certificate verification does not enable plain LDAP.")
+    : /^ldaps:\/\//i.test(s.url) && s.startTls ? t("Disable StartTLS for ldaps://; TLS is already enabled by the URL.") : undefined;
   return (
     <Card
       title={t("OpenLDAP connection")}
@@ -106,8 +109,9 @@ function LdapSettings() {
               setResult(errorText(e));
             }
           }}>{testUser ? t("Test user lookup") : t("Test connection")}</Button>
-          <Button variant="primary" onClick={async () => {
+          <Button variant="primary" disabled={!!transportError} onClick={async () => {
             try {
+              if (transportError) return;
               // The bind password is a manager-held secret; typing one stores (or replaces) it.
               if (password) {
                 await post("/api/v1/secrets", { id: s.bindPasswordRef || "ldap-bind-password", kind: "ldap-bind-password", value: password, nodeScope: [] });
@@ -123,7 +127,7 @@ function LdapSettings() {
       }
     >
       <div class="form-grid">
-        <Field label={t("URL")} help={t("ldaps:// or ldap:// with StartTLS. Passwords are never sent in clear text.")}><TextInput value={s.url} onInput={(v) => set("url", v)} /></Field>
+        <Field label={t("URL")} error={transportError} help={t("ldaps:// or ldap:// with StartTLS. Passwords are never sent in clear text.")}><TextInput value={s.url} onInput={(v) => set("url", v)} /></Field>
         <Field label={t("Base DN")}><TextInput value={s.baseDn} onInput={(v) => set("baseDn", v)} /></Field>
         <Field label={t("Service bind DN")}><TextInput value={s.bindDn} onInput={(v) => set("bindDn", v)} /></Field>
         <Field label={t("Bind password")} help={t("Stored encrypted on the manager. Leave empty to keep the current password.")}>

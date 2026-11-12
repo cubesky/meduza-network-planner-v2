@@ -2,12 +2,8 @@
 
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import type { Locale } from "@meduza-np/ui-kit";
-
-export class ApiError extends Error {
-  constructor(readonly status: number, readonly code: string, message: string, readonly body?: unknown) {
-    super(message);
-  }
-}
+import { ApiError } from "./api-error.ts";
+export { ApiError, errorText } from "./api-error.ts";
 
 let csrfToken: string | null = null;
 
@@ -87,13 +83,4 @@ export async function session(): Promise<Session> {
   const s = await raw<Session>("GET", "/api/v1/auth/session");
   setCsrf(s.csrfToken ?? null);
   return s;
-}
-
-export function errorText(e: unknown): string {
-  if (e instanceof ApiError) {
-    const problems = (e.body as { problems?: Array<{ path: string; message: string }> } | undefined)?.problems;
-    return problems?.length ? `${e.message}: ${problems.slice(0, 3).map((p) => `${p.path} ${p.message}`).join("; ")}` : e.message;
-  }
-  if (e instanceof Error) return e.message;
-  return String(e);
 }

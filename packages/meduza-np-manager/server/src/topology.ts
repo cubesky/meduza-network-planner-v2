@@ -12,6 +12,7 @@
 import type { Services } from "./app.js";
 import { overview } from "./views.js";
 import { isIPv4 } from "node:net";
+import { asPathSegments, type BgpPath, type BgpPathReport } from "./bgp-paths.js";
 
 export type LinkState = "up" | "partial" | "down" | "unknown";
 
@@ -65,6 +66,8 @@ export interface TopologyLink {
   /** path links: the nodes whose routes carry this hop, and how many distinct AS paths do */
   via?: string[];
   paths?: number;
+  asSource?: number;
+  asTarget?: number;
 }
 
 export interface Topology {
@@ -72,6 +75,8 @@ export interface Topology {
   internalAsn: number | null;
   vertices: TopologyVertex[];
   links: TopologyLink[];
+  bgpPaths: BgpPath[];
+  pathReports: BgpPathReport[];
 }
 
 interface CompiledTunnels {
@@ -94,6 +99,10 @@ const peerVertex = (asn: number, key: string) => `peer:${asn}:${key}`;
 const hostLabel = (h: string) => h.replace(/-bgpd$/, "");
 const validRouterId = (value: unknown): string | undefined => typeof value === "string" && isIPv4(value) && value !== "0.0.0.0" ? value : undefined;
 const identityKey = (asn: number, id: string) => `${asn}:${id}`;
+const addressKey = (address: string): string => {
+  if (!address.includes(":")) return address;
+  try { return new URL(`http://[${address}]/`).hostname; } catch { return address; }
+};
 /** A duplicate identity is ambiguous: never let enumeration order decide which managed node it names. */
 function recordIdentity(map: Map<string, string | null>, key: string, value: string): void {
   if (!map.has(key)) map.set(key, value);
@@ -166,6 +175,35 @@ export function topology(s: Services): Topology {
   };
 
   const vertices = new Map<string, TopologyVertex>();
+  const bgpPaths: BgpPath[] = [];
+  const pathReports: BgpPathReport[] = [];
+  for (const n of nodes) {
+    const instances = (s.nodes.latestReport(n.id)?.report.instances ?? []) as Array<Record<string, unknown>>;
+    const snapshot = instances.find((i) => i.kind === "bgp-paths") as Record<string, unknown> | undefined;
+    if (!snapshot) {
+      const failure = instances.find((i) => i.kind === "probe" && i.id === "frr/probe");
+      if (reported(n.id).size || failure || frrOf.get(n.id)?.externalNeighbors?.length || frrOf.get(n.id)?.internalNeighbors?.length) {
+        pathReports.push({ node: n.id, complete: false, available: false, addressFamilies: [], errors: typeof failure?.reason === "string" ? [failure.reason] : [] });
+      }
+      continue;
+    }
+    pathReports.push({ node: n.id, complete: snapshot.complete === true, available: true,
+      addressFamilies: Array.isArray(snapshot.addressFamilies) ? snapshot.addressFamilies.map(String) : [],
+      errors: Array.isArray(snapshot.errors) ? snapshot.errors.map(String) : [] });
+    const peers = snapshot.pathsByNeighbor;
+    if (!peers || typeof peers !== "object" || Array.isArray(peers)) continue;
+    const cfg = frrOf.get(n.id);
+    for (const [address, paths] of Object.entries(peers)) {
+      if (!Array.isArray(paths)) continue;
+      const neighbor = [...(cfg?.internalNeighbors ?? []), ...(cfg?.externalNeighbors ?? [])].find((p) => addressKey(p.address) === addressKey(address))?.id ?? address;
+      for (const p of paths) {
+        if (!p || typeof p !== "object" || typeof p.prefix !== "string" || !["ipv4", "ipv6"].includes(p.family)) continue;
+        bgpPaths.push({ node: n.id, address, neighbor, prefix: p.prefix, family: p.family,
+          asPath: typeof p.asPath === "string" ? p.asPath : null, valid: typeof p.valid === "boolean" ? p.valid : null,
+          best: p.best === true, nextHops: Array.isArray(p.nextHops) ? p.nextHops.filter((h: unknown) => typeof h === "string") : [] });
+      }
+    }
+  }
   for (const n of nodes) {
     vertices.set(nodeVertex(n.id), {
       id: nodeVertex(n.id),
@@ -198,7 +236,7 @@ export function topology(s: Services): Topology {
   const links = new Map<string, TopologyLink>();
   const link = (kind: TopologyLink["kind"], a: string, b: string): TopologyLink => {
     // node pairs in a fixed order (both sides' sessions on one link); node → AS as given
-    const [source, target] = a.startsWith("node:") && b.startsWith("node:") ? [a, b].sort() : [a, b];
+    const [source, target] = kind !== "path" && a.startsWith("node:") && b.startsWith("node:") ? [a, b].sort() : [a, b];
     const id = `${kind}:${source}|${target}`;
     let l = links.get(id);
     if (!l) links.set(id, (l = { id, kind, source: source!, target: target!, state: "unknown", sessions: [], ...(kind === "path" ? { via: [], paths: 0 } : {}) }));
@@ -237,32 +275,64 @@ export function topology(s: Services): Topology {
     else link("ebgp", nodeVertex(node), ensurePeer(sess, asn, routerId)).sessions.push(sess);
   }
 
-  // ASes behind the unmanaged routers, from the AS paths of the routes they send. A hop stops at an AS drawn already
-  // (a managed one, or one with a router we peer with: its own sessions place it).
-  const placed = new Set<number>([...asnOf.values(), ...(internalAsn !== null ? [internalAsn] : [])]);
-  for (const v of vertices.values()) if (v.kind === "peer") placed.add(v.asn!);
-  const hop = (from: string, asn: number, node: string) => {
-    const l = link("path", from, ensureAs(asn));
+  // Dotted links are AS-level observations, not assertions about which physical router transits a
+  // prefix. Reuse a deterministic vertex of known ASes and keep walking beyond them.
+  const representatives = new Map<number, string>();
+  for (const v of [...vertices.values()].sort((a, b) => a.id.localeCompare(b.id))) {
+    if (v.asn !== undefined && !representatives.has(v.asn)) representatives.set(v.asn, v.id);
+  }
+  const endpoint = (asn: number) => representatives.get(asn) ?? ensureAs(asn);
+  const hop = (from: string, target: string, node: string, valid: boolean) => {
+    if (from === target) return;
+    const l = link("path", from, target);
+    l.asSource = vertices.get(from)?.asn;
+    l.asTarget = vertices.get(target)?.asn;
     if (!l.via!.includes(node)) l.via!.push(node);
     l.paths! += 1;
+    if (valid) l.state = "up";
   };
-  for (const l of [...links.values()]) {
-    if (l.kind !== "ebgp" || !l.target.startsWith("peer:")) continue;
-    const peerAsn = vertices.get(l.target)!.asn!;
-    for (const sess of l.sessions) {
-      for (const path of sess.asPaths ?? []) {
-        const far = path[0] === peerAsn ? path.slice(1) : path;
-        let from = l.target;
-        for (const asn of far) {
-          if (placed.has(asn)) break;
-          hop(from, asn, sess.node);
-          from = asVertex(asn);
-        }
+  const walk = (node: string, anchor: string, text: string, valid: boolean) => {
+    const segments = asPathSegments(text);
+    const first = segments[0]?.asns[0];
+    let from: string | undefined = vertices.get(anchor)?.asn === first ? anchor : nodeVertex(node);
+    for (const segment of segments) {
+      if (!segment.ordered) {
+        segment.asns.forEach(endpoint);
+        from = undefined;
+        continue;
+      }
+      for (const asn of segment.asns) {
+        if (from && vertices.get(from)?.asn === asn) continue; // AS prepending
+        const target = endpoint(asn);
+        if (from) hop(from, target, node, valid);
+        from = target;
       }
     }
+  };
+  const anchors = new Map<string, string>();
+  for (const l of [...links.values()]) {
+    for (const sess of l.sessions) {
+      const anchor = l.source === nodeVertex(sess.node) ? l.target : l.source;
+      anchors.set(`${sess.node}|${addressKey(sess.address)}`, anchor);
+      // Older nodes have only compatibility AS sequences. New reports are authoritative, including
+      // partial collection metadata; never double-count their paths via both representations.
+      if (pathReports.some((r) => r.node === sess.node && r.available)) continue;
+      for (const path of sess.asPaths ?? []) walk(sess.node, anchor, path.join(" "), true);
+    }
+  }
+  const seenPaths = new Map<string, { path: BgpPath; valid: boolean }>();
+  for (const path of bgpPaths) {
+    if (path.asPath === null) continue;
+    const key = `${path.node}|${path.address}|${path.asPath}`;
+    const existing = seenPaths.get(key);
+    if (existing) existing.valid ||= path.valid === true;
+    else seenPaths.set(key, { path, valid: path.valid === true });
+  }
+  for (const { path, valid } of seenPaths.values()) {
+    walk(path.node, anchors.get(`${path.node}|${addressKey(path.address)}`) ?? nodeVertex(path.node), path.asPath!, valid);
   }
   for (const [node, frr] of frrOf) if ((frr.externalNeighbors ?? []).some((n) => n.enabled !== false)) vertices.get(nodeVertex(node))!.edge = true;
-  // a path hop exists as long as routes carry it: drawn as up
-  for (const l of links.values()) l.state = l.kind === "path" ? "up" : stateOf(l.sessions);
-  return { asNames, internalAsn, vertices: [...vertices.values()], links: [...links.values()] };
+  // Valid retained paths support a hop; invalid-only observations do not claim an operational link.
+  for (const l of links.values()) if (l.kind !== "path") l.state = stateOf(l.sessions);
+  return { asNames, internalAsn, vertices: [...vertices.values()], links: [...links.values()], bgpPaths, pathReports };
 }
