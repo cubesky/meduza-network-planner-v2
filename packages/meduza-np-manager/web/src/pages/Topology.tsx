@@ -26,6 +26,7 @@ interface Vertex {
   internal?: boolean;
   /** AS vertices standing for collapsed managed nodes */
   members?: string[];
+  managed?: boolean;
 }
 
 interface Session {
@@ -106,7 +107,9 @@ function present(topo: Topology, collapse: boolean): View {
   for (const [id, asId] of into) {
     let as = vertices.find((v) => v.id === asId);
     if (!as) vertices.push((as = { id: asId, kind: "as", label: namedAs(Number(asId.slice(3)), topo.asNames), asn: Number(asId.slice(3)), members: [] }));
-    as.members = [...(as.members ?? []), topo.vertices.find((v) => v.id === id)!.label];
+    const original = topo.vertices.find((v) => v.id === id)!;
+    as.members = [...(as.members ?? []), original.label];
+    if (original.kind === "node") as.managed = true;
   }
   const at = (id: string) => into.get(id) ?? id;
   const links = new Map<string, Link>();
@@ -147,12 +150,13 @@ function toGraph(view: View, show: { ibgp: boolean; ebgp: boolean; paths: boolea
     .map<GraphVertex>((v) =>
       v.kind === "as"
         ? // collapsed ASes solid, ASes known only from AS paths hollow-looking (faint ring) and smaller
-          { id: v.id, label: asLabel(v.asn!, !!v.internal), subtitle: view.asNames?.[v.asn!], labelPriority: 1, color: v.internal ? ibgp : ebgp, shape: "diamond", radius: v.members?.length ? 14 : 9, ...(v.members?.length ? {} : { ring: css("--faint"), dashedRing: true }) }
+          { id: v.id, label: asLabel(v.asn!, !!v.internal), subtitle: view.asNames?.[v.asn!], labelPriority: 1, primary: v.managed, color: v.internal ? ibgp : ebgp, shape: "diamond", radius: v.members?.length ? 14 : 9, ...(v.members?.length ? {} : { ring: css("--faint"), dashedRing: true }) }
         : v.kind === "peer"
           ? { id: v.id, label: v.label, color: ebgp, ring: css("--faint"), shape: "triangle", radius: 10, group: `asn:${v.asn}` }
           : {
               id: v.id,
               label: v.label,
+              primary: true,
               // nodes in the internal AS take the iBGP colour, nodes in other ASes the eBGP one
               color: v.asn !== undefined && v.asn !== view.internalAsn ? ebgp : ibgp,
               ring: fresh[v.freshness ?? ""] ?? css("--bad"),
@@ -171,13 +175,14 @@ function toGraph(view: View, show: { ibgp: boolean; ebgp: boolean; paths: boolea
       { id: NO_BGP, label: t("No BGP"), color: css("--faint") },
     ],
     links: links.map<GraphLink>((l) => {
-      if (l.kind === "path") return { id: l.id, source: l.source, target: l.target, color: css("--faint"), width: 1.2, dash: [2, 5], particles: 0, length: 200 };
+      if (l.kind === "path") return { id: l.id, source: l.source, target: l.target, direct: false, color: css("--faint"), width: 1.2, dash: [2, 5], particles: 0, length: 200 };
       const base = l.kind === "ibgp" ? ibgp : ebgp;
       const color = l.state === "down" ? css("--bad") : l.state === "unknown" ? css("--faint") : base;
       return {
         id: l.id,
         source: l.source,
         target: l.target,
+        direct: true,
         color,
         width: l.kind === "ibgp" ? 1.6 : 2.2,
         dash: l.state === "up" ? undefined : l.state === "partial" ? [8, 4] : [4, 4],
@@ -219,8 +224,8 @@ const loadCollapse = () => {
 const loadSpacing = () => {
   try {
     const value = Number(localStorage.getItem(SPACING_KEY));
-    return value >= 1 && value <= 3 ? value : 1.6;
-  } catch { return 1.6; }
+    return value >= 1 && value <= 3 ? value : 2;
+  } catch { return 2; }
 };
 
 export function TopologyPage() {
@@ -315,6 +320,7 @@ function TopologyView(props: { topo: Topology }) {
           <Button small onClick={() => graph.current?.resetView()}>{t("Reset view")}</Button>
         </div>
         <p class="graph-help muted small" id="topology-controls">{t("Drag the background to rotate; Shift-drag or right-drag to pan; scroll to zoom. Double-click a cluster to focus. Touch: pinch to zoom, two fingers to pan. Keyboard: arrows to rotate, Shift+arrows to pan, +/− to zoom, 0 to reset.")}</p>
+        <p class="graph-help muted small">{t("Reset view frames configured direct connections; Fit graph includes remote AS paths. Zoom in, hover or select to show node labels.")}</p>
         <div class="graph-legend">
           <span><span class="swatch" style={{ borderColor: "var(--accent)" }} />{t("iBGP (Tinc mesh)")} · {up(counts.ibgp)}/{counts.ibgp.length}</span>
           <span><span class="swatch" style={{ borderColor: "var(--ebgp)" }} />{t("eBGP (to the remote AS)")} · {up(counts.ebgp)}/{counts.ebgp.length}</span>

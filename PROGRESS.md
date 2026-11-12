@@ -1419,3 +1419,18 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   UDP/TCP DNS also succeed. Evidence: target/meduza-gateway-retest.json, target/meduza-tproxy-regression.log,
   target/check-tproxy-deployment.log. The agent makes no production mutations, Git submission or
   workstation gateway change. Custom DNS fallback/privacy policy remains unchanged.
+
+- 2026-11-13 (per the user) Clarify Manager topology labels, outward layout and framing (D92).
+  Share centered translucent depth-sorted AS/node panel rendering; remove label leaders and reveal ordinary
+  node labels on zoom/hover/selection with threshold hysteresis. Make panels hoverable/clickable, retain
+  detail during pointer press, preserve label-drag offsets and keep clicks from reheating the simulation.
+  Separate nearby AS title/name panels. Place force-body anchors in breadth-first XYZ hop layers from
+  managed roots, continuing remote branches outward; adjust spring rest distances and default spacing.
+  Default/reset frames managed nodes and configured direct endpoints, including down/unknown peers; fit-all
+  includes remote paths. Preserve frame scope through resizing, manual navigation and metadata refresh.
+  Retain collapsed managed roots and recover a vanished focus. Add Simplified/Traditional Chinese help.
+  33 controller/topology/i18n regressions, Manager typechecks and production build pass. Actual Chrome tests
+  verify both view buttons, real label hover/click/zoom, selection stability, four-hop branches and four
+  viewport sizes without page scrollbars, collapsed managed roots and vanished-focus recovery. Evidence: target/check-topology-outward-tests.log,
+  target/check-topology-outward-browser.log and target/topology-outward-*.png.
+  Source-only; no Git submission or production deployment.

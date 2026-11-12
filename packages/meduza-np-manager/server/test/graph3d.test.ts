@@ -20,12 +20,12 @@ function setup(width = 1200, height = 650) {
   const captured = new Set<number>();
   let clicks = 0;
   const labels: Array<{ text: string; x: number; y: number }> = [];
-  const paints: Array<{ kind: string; color: string; alpha: number; text?: string }> = [];
+  const paints: Array<{ kind: string; color: string; alpha: number; text?: string; font?: string; align?: string }> = [];
   let clears = 0;
   const ctx: any = new Proxy({
     measureText: (s: string) => ({ width: s.length * 7 }),
     clearRect: () => { labels.length = 0; paints.length = 0; clears++; },
-    fillText: (text: string, x: number, y: number) => { labels.push({ text, x, y }); paints.push({ kind: "text", color: ctx.fillStyle, alpha: ctx.globalAlpha, text }); },
+    fillText: (text: string, x: number, y: number) => { labels.push({ text, x, y }); paints.push({ kind: "text", color: ctx.fillStyle, alpha: ctx.globalAlpha, text, font: ctx.font, align: ctx.textAlign }); },
     fillRect: () => paints.push({ kind: "background", color: ctx.fillStyle, alpha: ctx.globalAlpha }),
     fill: () => paints.push({ kind: "fill", color: ctx.fillStyle, alpha: ctx.globalAlpha }),
     stroke: () => paints.push({ kind: "stroke", color: ctx.strokeStyle, alpha: ctx.globalAlpha }),
@@ -78,7 +78,7 @@ test("topology: cluster spheres stay separated in 3D and fit a wide viewport", (
   }
   const v = graph.vertices.get("as1-0");
   const before = Math.hypot(v.x, v.y, v.z);
-  graph.setSpacing(2.5);
+  graph.setSpacing(3);
   for (let i = 0; i < 400; i++) graph.tick();
   assert.ok(Math.hypot(v.x, v.y, v.z) > before * 1.2);
   graph.destroy();
@@ -136,7 +136,11 @@ test("topology: node dragging follows the screen at every orbit angle, including
     const { graph, event } = setup();
     const d = populate(graph);
     graph.yaw = yaw; graph.pitch = pitch; graph.fitGraph();
-    const v = graph.vertices.get("as0-0");
+    const v = [...graph.vertices.values()].find((node: any) => {
+      const p = graph.project(node.x, node.y, node.z);
+      return p.visible && graph.hit(p.sx, p.sy)?.id === node.id;
+    }) as any;
+    assert.ok(v, "a visible foreground node is pickable at this orbit angle");
     const p = graph.project(v.x, v.y, v.z);
     event("pointerdown", { clientX: p.sx, clientY: p.sy });
     assert.equal(graph.drag?.kind, "vertex");
@@ -167,6 +171,25 @@ test("topology: manual zoom stays put and stays anchored at the pointer", () => 
   const distance = graph.distance;
   for (let i = 0; i < 500; i++) graph.tick();
   assert.equal(graph.distance, distance, "auto-fit cannot undo the zoom");
+  graph.destroy();
+});
+
+test("topology: selecting a node does not reheat the settled physical layout", () => {
+  const { graph, event, clicks } = setup();
+  populate(graph);
+  const node = [...graph.vertices.values()].find((v: any) => {
+    const p = graph.project(v.x, v.y, v.z);
+    return p.visible && graph.hit(p.sx, p.sy)?.id === v.id;
+  }) as any;
+  const p = graph.project(node.x, node.y, node.z), alpha = graph.alpha;
+  const positions = [...graph.vertices.values()].map((v: any) => [v.id, v.x, v.y, v.z]);
+  event("pointerdown", { clientX: p.sx, clientY: p.sy });
+  event("pointerup", { clientX: p.sx, clientY: p.sy });
+  assert.equal(clicks(), 1);
+  assert.equal(graph.alpha, alpha);
+  assert.equal(graph.alphaTarget, 0);
+  for (let i = 0; i < 30; i++) graph.tick();
+  assert.deepEqual([...graph.vertices.values()].map((v: any) => [v.id, v.x, v.y, v.z]), positions);
   graph.destroy();
 });
 
@@ -417,5 +440,135 @@ test("topology: a renamed AS cluster invalidates overlapping router label slots 
   const router = labels.find((l) => l.text === "203.0.113.1")!;
   const left = title.x - name.length * 7 / 2 - 8, right = title.x + name.length * 7 / 2 + 8;
   assert.ok(router.x + "203.0.113.1".length * 7 < left || router.x > right || router.y + 9 < title.y - 12 || router.y - 9 > subtitle.y + 12);
+  graph.destroy();
+});
+
+test("topology: node panels share AS rendering, reveal by zoom/hover/selection and never draw leader lines", () => {
+  const { graph, labels, paints, event } = setup(1000, 650);
+  graph.setData([
+    { id: "node", label: "Managed router", primary: true, radius: 10, shape: "circle", color: "#node" },
+    { id: "as", label: "AS65001", labelPriority: 1, radius: 10, shape: "diamond", color: "#as" },
+  ], []);
+  graph.yaw = graph.pitch = 0; graph.distance = 2000; graph.target = { x: 0, y: 0, z: 0 };
+  Object.assign(graph.vertices.get("node"), { x: -200, y: 0, z: 0 });
+  Object.assign(graph.vertices.get("as"), { x: 200, y: 0, z: 0 });
+  graph.draw();
+  assert.deepEqual(labels.map((l) => l.text), ["AS65001"], "an overview keeps AS landmarks without router-label clutter");
+  const node = graph.vertices.get("node"), point = graph.project(node.x, node.y, node.z);
+  event("pointermove", { clientX: point.sx, clientY: point.sy }); graph.draw();
+  assert.ok(labels.some((l) => l.text === "Managed router"), "hover immediately reveals an overview node");
+  const style = (text: string) => paints.find((p) => p.text === text)!;
+  assert.equal(style("Managed router").font, style("AS65001").font);
+  assert.equal(style("Managed router").align, "center");
+  assert.ok(paints.filter((p) => p.kind === "background").every((p) => p.alpha <= 0.16));
+  const panel = graph.labelHits.find((p: any) => p.item.kind === "vertex" && p.item.id === "node");
+  event("pointermove", { clientX: panel.x + panel.w / 2, clientY: panel.y + panel.h / 2 }); graph.draw();
+  assert.equal(graph.hover?.id, "node", "moving from a node onto its panel retains hover and detail visibility");
+  let clicked: any = null;
+  graph.opts.onClick = (item: any) => { clicked = item; };
+  event("pointerdown", { clientX: panel.x + panel.w / 2, clientY: panel.y + panel.h / 2 }); graph.draw();
+  assert.ok(labels.some((l) => l.text === "Managed router"), "a pointer press retains the panel until release");
+  event("pointerup", { clientX: panel.x + panel.w / 2, clientY: panel.y + panel.h / 2 });
+  assert.deepEqual(clicked, { kind: "vertex", id: "node" }, "press/release selects the label's owner even if a frame cleared hover");
+  event("pointerleave"); graph.draw();
+  assert.ok(!labels.some((l) => l.text === "Managed router"), "hover is not a persistent detail toggle");
+  graph.highlight = "node"; graph.labelSlots.set("node", 10); graph.draw();
+  assert.ok(labels.some((l) => l.text === "Managed router"), "click selection keeps the node panel visible");
+  assert.equal(paints.filter((p) => p.kind === "stroke" && p.color === "#fff").length, 1, "only the selection ring is stroked, never a panel leader line");
+  graph.highlight = null; graph.distance = 600; graph.draw();
+  assert.ok(labels.some((l) => l.text === "Managed router"), "zooming in reveals ordinary node labels");
+  graph.distance = 850; graph.draw();
+  assert.ok(labels.some((l) => l.text === "Managed router"), "detail hysteresis prevents flicker around the zoom threshold");
+  graph.distance = 1200; graph.draw();
+  assert.ok(!labels.some((l) => l.text === "Managed router"), "zooming well out returns to the AS overview");
+  graph.destroy();
+});
+
+test("topology: dragging a node by its visible label preserves the pointer offset", () => {
+  const { graph, event } = setup(800, 500);
+  graph.setData([{ id: "a", label: "Label drag target", primary: true, radius: 10, shape: "circle", color: "#5cb" }], []);
+  const v = graph.vertices.get("a");
+  graph.yaw = graph.pitch = 0; graph.distance = 600; graph.target = { x: 0, y: 0, z: 0 };
+  Object.assign(v, { x: 0, y: 0, z: 0 }); graph.draw();
+  const panel = graph.labelHits.find((p: any) => p.item.id === "a");
+  const x = panel.x + panel.w / 2, y = panel.y + panel.h / 2;
+  const before = graph.project(v.x, v.y, v.z);
+  event("pointerdown", { clientX: x, clientY: y });
+  assert.equal(graph.drag?.kind, "vertex");
+  event("pointermove", { clientX: x + 50, clientY: y + 20 }); graph.tick();
+  const after = graph.project(v.x, v.y, v.z);
+  assert.ok(Math.abs(after.sx - before.sx - 50) < 0.001 && Math.abs(after.sy - before.sy - 20) < 0.001, "the router does not jump to the label's offset");
+  event("pointerup"); graph.destroy();
+});
+
+test("topology: close AS clusters avoid each other's complete title/name panels", () => {
+  const { graph } = setup(800, 500);
+  graph.setData(["a", "b"].map((id) => ({ id, group: id, label: `router-${id}`, radius: 10, shape: "circle", color: "#5cb" })), [],
+    ["a", "b"].map((id, i) => ({ id, label: `AS${65000+i}`, subtitle: `Registered network ${id}`, color: "#5cb" })));
+  graph.yaw = graph.pitch = 0; graph.distance = 600; graph.target = { x: 0, y: 0, z: 0 };
+  Object.assign(graph.vertices.get("a"), { x: 0, y: 0, z: 0 }); Object.assign(graph.vertices.get("b"), { x: 25, y: 0, z: 0 }); graph.draw();
+  const panels = graph.labelHits.filter((p: any) => p.item.kind === "group");
+  assert.equal(panels.length, 2);
+  const [a, b] = panels;
+  assert.ok(a.x + a.w <= b.x || b.x + b.w <= a.x || a.y + a.h <= b.y || b.y + b.h <= a.y, "neither AS line overlaps the other group panel");
+  graph.hover = { kind: "group", id: "a" }; graph.draw();
+  assert.deepEqual(graph.labelHits.filter((p: any) => p.item.kind === "group"), panels, "hover does not relocate the separated headings");
+  graph.destroy();
+});
+
+test("topology: reset/default frames configured direct endpoints and isolated managed nodes; fit includes remote paths", () => {
+  const { graph, resize, event } = setup(1100, 650);
+  const vertices = ["root", "peer", "isolated", "remote1", "remote2"].map((id) => ({
+    id, label: id, primary: id === "root" || id === "isolated", radius: 10, shape: "circle", color: "#5cb",
+  }));
+  const link = (id: string, source: string, target: string, direct: boolean) => ({ id, source, target, direct, color: "#5cb", width: 1, particles: 0, length: 400 });
+  const links = [link("configured-down-peer", "root", "peer", true), link("path1", "peer", "remote1", false), link("path2", "remote1", "remote2", false)];
+  graph.setData(vertices, links);
+  assert.equal(graph.viewFrame, "direct", "first load starts in direct mode");
+  for (const [id, x] of [["root", 0], ["peer", 400], ["isolated", -200], ["remote1", 3000], ["remote2", 8000]] as const)
+    Object.assign(graph.vertices.get(id), { x, y: 0, z: 0 });
+  graph.alpha = 0; graph.resetView();
+  const directDistance = graph.distance, directTarget = { ...graph.target };
+  assert.deepEqual(graph.framedVertices().map((v: any) => v.id).sort(), ["isolated", "peer", "root"]);
+  assert.ok(graph.project(8000, 0, 0).sx > 1100, "remote paths do not shrink the default view");
+  graph.fitGraph();
+  assert.equal(graph.viewFrame, "all");
+  assert.ok(graph.distance > directDistance * 5);
+  for (const v of graph.vertices.values()) {
+    const p = graph.project(v.x, v.y, v.z);
+    assert.ok(p.visible && p.sx >= 0 && p.sx <= 1100, "fit really includes every remote AS");
+  }
+  graph.setData([...vertices].reverse(), [...links].reverse());
+  assert.equal(graph.viewFrame, "all", "heartbeat refresh preserves the chosen all-graph frame");
+  event("keydown", { key: "0" });
+  assert.equal(graph.viewFrame, "direct");
+  assert.equal(graph.distance, directDistance); assert.deepEqual(graph.target, directTarget);
+  resize(500, 400);
+  assert.equal(graph.viewFrame, "direct");
+  assert.ok(graph.project(8000, 0, 0).sx > 500, "resize preserves direct scope");
+  graph.setSpacing(2.6);
+  assert.equal(graph.viewFrame, "direct", "spacing cannot silently switch to full-graph framing");
+  graph.destroy();
+});
+
+test("topology: AS paths continue outward by hop count instead of folding into the local shell", () => {
+  const { graph } = setup();
+  const ids = ["managed", "peer:65001", "as:90", "as:40", "as:1", "branch"];
+  graph.setData(ids.map((id) => ({ id, label: id, primary: id === "managed", radius: 10, shape: "circle", color: "#5cb" })), [
+    ["managed", "peer:65001"], ["peer:65001", "as:90"], ["as:90", "as:40"], ["as:40", "as:1"], ["peer:65001", "branch"],
+  ].map(([source, target], index) => ({ id: `edge${index}`, source, target, direct: index === 0, length: 200, width: 1, particles: 0, color: "#5cb" })));
+  for (let tick = 0; tick < 600; tick++) graph.tick();
+  const root = graph.vertices.get("managed");
+  let previous = 0;
+  for (const id of ids.slice(1, 5)) {
+    const v = graph.vertices.get(id);
+    const distance = Math.hypot(v.x - root.x, v.y - root.y, v.z - root.z);
+    assert.ok(distance > previous + 300, `${id} remains further outward than its predecessor`);
+    previous = distance;
+  }
+  const positions = [...graph.vertices.values()].map((v: any) => [v.id, v.x, v.y, v.z]);
+  graph.setData([...graph.vertices.values()].reverse(), [...graph.links].reverse());
+  for (let tick = 0; tick < 30; tick++) graph.tick();
+  assert.deepEqual([...graph.vertices.values()].map((v: any) => [v.id, v.x, v.y, v.z]), positions, "unchanged reports preserve the outward layout");
   graph.destroy();
 });

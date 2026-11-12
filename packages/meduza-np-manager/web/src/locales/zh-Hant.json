@@ -669,6 +669,7 @@
   "Zoom out": "縮小",
   "Focus selection": "聚焦所選",
   "Fit graph": "適應全圖",
+  "Reset view frames configured direct connections; Fit graph includes remote AS paths. Zoom in, hover or select to show node labels.": "重設檢視聚焦已設定的直接連線；適應全圖包含遠端 AS 路徑。放大、懸停或選取時顯示節點標籤。",
   "Interactive routing topology": "可互動的路由拓撲",
   "Drag the background to rotate; Shift-drag or right-drag to pan; scroll to zoom. Double-click a cluster to focus. Touch: pinch to zoom, two fingers to pan. Keyboard: arrows to rotate, Shift+arrows to pan, +/− to zoom, 0 to reset.": "拖曳背景旋轉，按住 Shift 拖曳或右鍵拖曳平移，滾輪縮放。按兩下分組可聚焦。觸控：雙指捏合縮放、雙指拖曳平移。鍵盤：方向鍵旋轉、Shift＋方向鍵平移、＋/− 縮放、0 重設。",
   "Request packaged binary": "請求本體套件",

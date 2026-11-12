@@ -2130,3 +2130,39 @@ MosDNS and ordinary external UDP/TCP DNS also answer successfully. Evidence:
 target/meduza-gateway-retest.json, target/meduza-tproxy-regression.log, target/check-tproxy-deployment.log.
 The agent makes no production mutations or workstation gateway changes. The custom DNS fallback policy
 remains unchanged; successful resolution does not establish strict DNS privacy. No Git submission.
+
+## D92 — Outward topology, shared detail labels and separate direct/all framing (2026-11-13)
+
+The user finds the Manager topology cluttered and asks for node labels rendered like AS headings without
+leader lines, detail disclosure by zoom/hover/selection, distant hops continuing outward, and distinct
+default/reset versus fit-all views. Keep the lightweight three-dimensional force renderer and current
+selection/session details; this change requires no topology API or node-network changes.
+
+Render AS headings and node panels with one centered translucent, depth-sorted drawing routine. AS headings
+stay visible as landmarks; ordinary node details appear above the readable projected-size threshold or when
+hovered/selected (including relevant link/group endpoints). Use 8px/6px radius hysteresis to avoid zoom-boundary
+flicker. Remove all label leader strokes, preserve cached placement, and avoid complete AS title/name panels
+including neighboring AS headings. Include visible panels in hit testing. Retain detail through pointer
+press/release, select the captured owner on a click, and preserve the initial screen offset when dragging by
+a label. Reheat only after real dragging begins, so selecting a settled node cannot move the layout.
+
+Mark managed vertices (including collapsed managed ASes) as roots and configured iBGP/eBGP edges as direct;
+learned path edges are distinct. Assign AS force-body anchors by breadth-first hop distance from managed
+roots, spread each layer through XYZ and continue later branches in their parent's outward direction.
+Use the anchor separation in cross-AS springs to keep remote layers from folding back towards the centre.
+Default spacing becomes 2×; existing browser values and the optional external-AS collapse remain available.
+Unchanged heartbeat data retain settled coordinates and do not restart the simulation.
+
+Default/reset frames all visible managed vertices and configured direct-session endpoints, regardless of
+session health. Fit graph includes every visible learned remote AS; keyboard 0 resets orientation/direct
+scope. Resize preserves each scope, manual camera control still disables fitting, and a vanished focus
+falls back to direct scope. Framed views follow genuine topology changes without overriding manual views.
+Add a short localized help line explaining both buttons and label disclosure.
+
+33 graph/controller, topology API and translation regressions pass along with Manager typechecks and production
+build. Real Chrome exercises the actual Manager with configured-down peers and four-hop remote branches:
+default/reset versus fit-all, real pointer hover/click on labels, selection persistence, shared typography,
+translucency, zoom detail, unchanged report order, collapsed managed roots, vanished-focus recovery and four desktop/mobile viewport sizes without page
+scrollbars. Visual inspection verifies outward separation and avoids the observed AS-heading collisions.
+Evidence: target/check-topology-outward-tests.log, target/check-topology-outward-browser.log and the
+topology-outward-default/all/selected.png previews. Source-only; no Git submission or production deployment.

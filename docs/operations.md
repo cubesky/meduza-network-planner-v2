@@ -372,15 +372,25 @@ process retains its process restart control.
 
 ### Navigating the topology
 
-The initial view keeps AS clusters apart with adjustable spacing; auto-rotation is off by default. Background
+The initial view frames managed nodes and all configured direct connections, including down or unreported
+neighbors. Learned remote AS-path nodes remain in the graph without expanding that initial frame. AS clusters
+spread outward in three dimensions by hop count from managed nodes; more distant ASes continue along their
+upstream branches. Spacing defaults to 2× and retains any existing browser preference. Auto-rotation is off by default. Background
 drag rotates with a fixed up direction and bounded tilt; Shift-drag or right/middle drag pans in screen directions.
 The wheel zooms towards the pointer, and manual navigation is not corrected by automatic fitting. Dragging a node
 continues across periodic report refreshes. Touch supports two-finger pan and pinch zoom.
 
 Use **Fit graph** for the complete current topology, **Focus selection** (or double-click a cluster) for a local
-view, and **Reset view** to restore orientation and framing. The canvas also supports arrows to rotate,
+view, and **Reset view** to restore the initial orientation and direct-connection frame. **Fit graph** includes
+the learned remote AS paths and is intentionally a wider view. Window resizing preserves the chosen scope.
+The canvas also supports arrows to rotate,
 Shift+arrows to pan, `+`/`-` to zoom and `0` to reset. Cluster spacing is remembered in this browser. Selecting a
-node/link/cluster emphasizes its connections; labels avoid overlapping one another where space permits.
+node/link/cluster emphasizes its connections without restarting the settled layout. Node labels use the same
+centered translucent depth-sorted panels as AS labels, with no leader lines. Zoom in for node labels, or hover
+or select a node/link/cluster to reveal its relevant labels immediately. Labels themselves remain hoverable
+and clickable; dragging a node by its label preserves the pointer offset. AS numbers and names remain on
+separate lines and reserve their full bounds when avoiding other labels. Zoom thresholds use hysteresis to
+keep detail labels from flickering around the boundary.
 
 On a node's **Connections** tab, WireGuard and OpenVPN restart controls appear at the end of each peer/session
 row. Confirmation names the owning instance: restarting an instance briefly disconnects all of its peers or
