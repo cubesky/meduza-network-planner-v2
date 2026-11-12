@@ -297,7 +297,8 @@ function CollectionEditor(props: RendererProps & { collection: NonNullable<UiDes
         return (
           <span class="row" style={{ justifyContent: "flex-end", flexWrap: "nowrap" }} onClick={(e) => e.stopPropagation()}>
             {(c.actions ?? [])
-              .filter((a) => !(props.readOnly && a.mutating))
+              .filter((a) => !(props.readOnly && a.mutating)
+                && !(a.id === "restart-instance" && (r.enabled === false || getAt(props.value, ["services", props.short, "enabled"]) === false || runtimeOf(r)?.state === "disabled")))
               .map((a) => (
                 <Button small onClick={() => props.onAction?.({ action: a, instance: `${props.short}/${idOf(r)}`, item: r })}>{tx.text(a.label)}</Button>
               ))}

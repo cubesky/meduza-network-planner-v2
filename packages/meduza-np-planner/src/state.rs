@@ -22,6 +22,41 @@ pub struct AppliedState {
     pub config_digest: Option<String>,
     #[serde(default)]
     pub instances: BTreeMap<String, AppliedInstance>,
+    /// Instance-scoped failures do not roll back unrelated tunnels or the applied revision.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub instance_errors: BTreeMap<String, InstanceApplyError>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstanceApplyError {
+    pub package: String,
+    pub kind: String,
+    pub code: String,
+    pub message: String,
+    pub observed_at: String,
+    #[serde(default)]
+    pub attempt: u32,
+    #[serde(default)]
+    pub retry_at_unix: u64,
+}
+
+impl InstanceApplyError {
+    pub fn new(package: &str, kind: &str, code: &str, message: &str, config: &NodeConfig) -> Self {
+        let mut message = message.to_string();
+        for secret in config.secrets.values().filter(|s| !s.value.is_empty()) {
+            message = message.replace(&secret.value, "[redacted]");
+        }
+        Self {
+            package: package.into(),
+            kind: kind.into(),
+            code: code.into(),
+            message: message.chars().take(600).collect(),
+            observed_at: meduza_np_plugin_sdk::now_rfc3339(),
+            attempt: 0,
+            retry_at_unix: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,6 +70,33 @@ pub struct AppliedInstance {
 }
 
 impl AppliedState {
+    /// Merge into existing protocol rows, retaining probe details and avoiding duplicate instance IDs.
+    pub fn overlay_instance_errors(&self, statuses: &mut Vec<meduza_np_protocol::report::InstanceStatus>) {
+        use meduza_np_protocol::report::{InstanceStatus, ServiceState};
+        for (id, error) in &self.instance_errors {
+            let row = if let Some(index) = statuses.iter().position(|s| &s.id == id) {
+                &mut statuses[index]
+            } else {
+                statuses.push(InstanceStatus {
+                    id: id.clone(),
+                    kind: error.kind.clone(),
+                    state: ServiceState::Down,
+                    observed_at: None,
+                    reason: None,
+                    detail: BTreeMap::new(),
+                });
+                statuses.last_mut().unwrap()
+            };
+            row.kind = error.kind.clone();
+            row.state = if self.instances.contains_key(id) { ServiceState::Degraded } else { ServiceState::Down };
+            row.reason = Some(format!("{}: {}", error.code, error.message));
+            row.observed_at = Some(error.observed_at.clone());
+            row.detail.insert("applyError".into(), error.message.clone().into());
+            row.detail.insert("applyErrorCode".into(), error.code.clone().into());
+            row.detail.insert("retryAtUnix".into(), error.retry_at_unix.into());
+            row.detail.insert("attempt".into(), error.attempt.into());
+        }
+    }
     pub fn load(paths: &NodePaths) -> io::Result<Self> {
         Ok(fsutil::read_json(&paths.state.join("applied.json"), MAX_CONFIG_BYTES)?.unwrap_or_default())
     }
@@ -106,5 +168,45 @@ impl SyncPersisted {
     }
     pub fn save(&self, path: &Path) -> io::Result<()> {
         fsutil::write_json_atomic(path, self, 0o600)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use meduza_np_protocol::report::{InstanceStatus, ServiceState};
+    use serde_json::json;
+
+    #[test]
+    fn instance_errors_redact_secrets_and_overlay_existing_rows() {
+        let config: NodeConfig = serde_json::from_value(json!({"schemaVersion":1,"revision":"rev-000001","node":{"id":"node"},
+            "secrets":{"key":{"kind":"opaque","value":"private-material"}}}))
+        .unwrap();
+        let error =
+            InstanceApplyError::new("meduza-np-openvpn", "openvpn-site2site", "syntax-check-failed", "bad private-material", &config);
+        assert!(!error.message.contains("private-material"));
+        let mut applied = AppliedState::default();
+        applied.instances.insert("openvpn/good".into(), AppliedInstance::default());
+        applied.instance_errors.insert("openvpn/good".into(), error.clone());
+        applied.instance_errors.insert("openvpn/new".into(), error);
+        let mut rows = vec![InstanceStatus {
+            id: "openvpn/good".into(),
+            kind: "openvpn-site2site".into(),
+            state: ServiceState::Up,
+            observed_at: None,
+            reason: None,
+            detail: [("device".into(), json!("tun-good"))].into(),
+        }];
+        applied.overlay_instance_errors(&mut rows);
+        applied.overlay_instance_errors(&mut rows);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].state, ServiceState::Degraded);
+        assert_eq!(rows[0].detail["device"], json!("tun-good"));
+        assert_eq!(rows[1].state, ServiceState::Down);
+        let saved = serde_json::to_value(&applied).unwrap();
+        assert!(!saved.to_string().contains("private-material"));
+        assert_eq!(serde_json::from_value::<AppliedState>(saved).unwrap(), applied);
+        let legacy: AppliedState = serde_json::from_value(json!({"revision":null,"configDigest":null,"instances":{}})).unwrap();
+        assert!(legacy.instance_errors.is_empty());
     }
 }

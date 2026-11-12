@@ -25,6 +25,7 @@ pub mod supervisor;
 pub mod support;
 pub mod sync;
 pub mod transport;
+pub mod tunnels;
 pub mod updater;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

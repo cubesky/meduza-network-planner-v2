@@ -148,15 +148,18 @@ pub fn valid_endpoint(ep: &str) -> bool {
 }
 
 pub fn load(req: &PluginRequest) -> Result<WireGuardConfig, PluginError> {
-    Ok(req.service::<WireGuardConfig>("wireguard")?.unwrap_or_default())
+    Ok(req.active_service::<WireGuardConfig>("wireguard")?.unwrap_or_default())
 }
 
 pub fn validate(cfg: &WireGuardConfig, req: &PluginRequest) -> Vec<ValidationError> {
+    if !cfg.enabled {
+        return Vec::new();
+    }
     let mut v = Validator::new();
     let mut ids = BTreeSet::new();
     let mut devices = BTreeMap::new();
     let mut ports = BTreeSet::new();
-    for (i, inst) in cfg.instances.iter().enumerate() {
+    for (i, inst) in cfg.instances.iter().enumerate().filter(|(_, i)| i.enabled) {
         let base = format!("/instances/{i}");
         v.check(ids.insert(inst.id.clone()), format!("{base}/id"), "duplicate interface id");
         let dev = inst.device();
@@ -201,7 +204,7 @@ pub fn validate(cfg: &WireGuardConfig, req: &PluginRequest) -> Vec<ValidationErr
         };
         let mut peer_ids = BTreeSet::new();
         let mut keys = BTreeSet::new();
-        for (j, peer) in inst.peers.iter().enumerate() {
+        for (j, peer) in inst.peers.iter().enumerate().filter(|(_, p)| p.enabled) {
             let pb = format!("{base}/peers/{j}");
             v.check(peer_ids.insert(peer.id.clone()), format!("{pb}/id"), "duplicate peer id");
             match &peer.public_key {
@@ -659,6 +662,28 @@ mod tests {
         ] {
             assert!(text.contains(needle), "missing {needle}: {text}");
         }
+    }
+
+    #[test]
+    fn disabled_peers_and_interfaces_do_not_reserve_resources_or_require_valid_runtime_fields() {
+        let mut r = req();
+        r.config.services.get_mut("wireguard").unwrap()["instances"].as_array_mut().unwrap().push(json!({
+            "id":"uplink","enabled":false,"privateKeyRef":"missing","device":"bad/device","addresses":["bad-cidr"]
+        }));
+        r.config.services.get_mut("wireguard").unwrap()["instances"][0]["peers"].as_array_mut().unwrap().push(json!({
+            "id":"draft","enabled":false,"publicKey":PEER,"endpoint":"invalid","allowedIps":["invalid"],"presharedKeyRef":"missing"
+        }));
+        let cfg = load(&r).unwrap();
+        assert!(validate(&cfg, &r).is_empty());
+        assert_eq!(cfg.instances.len(), 1);
+        assert_eq!(cfg.instances[0].peers.len(), 1);
+        assert_eq!(plan(&cfg, &r).unwrap().len(), 1);
+        r.config.services.get_mut("wireguard").unwrap()["instances"][0]["peers"][1]["enabled"] = json!(true);
+        assert!(load(&r).is_err());
+        r.config.services.get_mut("wireguard").unwrap()["enabled"] = json!(false);
+        let cfg = load(&r).unwrap();
+        assert!(validate(&cfg, &r).is_empty());
+        assert!(plan(&cfg, &r).unwrap().is_empty());
     }
 
     #[test]

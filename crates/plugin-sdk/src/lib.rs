@@ -243,6 +243,29 @@ impl PluginRequest {
         }
     }
 
+    /// Runtime adapters can ignore dormant entries before parsing their operational fields. Keep the
+    /// original request intact for configuration editing and disabled status rows collected by planner.
+    pub fn active_service<T: serde::de::DeserializeOwned>(&self, name: &str) -> Result<Option<T>, PluginError> {
+        fn active(value: &mut Value) {
+            match value {
+                Value::Array(items) => {
+                    items.retain(|v| v.get("enabled") != Some(&Value::Bool(false)));
+                    items.iter_mut().for_each(active);
+                }
+                Value::Object(fields) => fields.values_mut().for_each(active),
+                _ => {}
+            }
+        }
+        let Some(value) = self.config.services.get(name).filter(|v| v.get("enabled") != Some(&Value::Bool(false))) else {
+            return Ok(None);
+        };
+        let mut value = value.clone();
+        active(&mut value);
+        serde_json::from_value(value)
+            .map(Some)
+            .map_err(|e| PluginError::invalid(vec![ValidationError::new(format!("/services/{name}"), e.to_string())]))
+    }
+
     pub fn secret(&self, id: &str) -> Result<&SecretValue, PluginError> {
         self.config.secrets.get(id).ok_or_else(|| PluginError::new("missing-secret", format!("secret {id:?} not delivered to this node")))
     }
@@ -408,6 +431,36 @@ pub fn test_request(operation: &str, config: Value) -> PluginRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn active_service_ignores_disabled_drafts_without_changing_the_request() {
+        #[derive(serde::Deserialize)]
+        struct Service {
+            instances: Vec<Item>,
+        }
+        #[derive(serde::Deserialize)]
+        struct Item {
+            id: String,
+            peers: Vec<Item>,
+        }
+        let mut req = test_request(
+            "validate",
+            serde_json::json!({"services":{"test":{"instances":[
+                {"id":"live","peers":[{"enabled":false,"id":42,"peers":"invalid"}]},
+                {"enabled":false,"id":null,"peers":false}
+            ]}}}),
+        );
+        let original = req.config.clone();
+        let service = req.active_service::<Service>("test").unwrap().unwrap();
+        assert_eq!(service.instances.len(), 1);
+        assert_eq!(service.instances[0].id, "live");
+        assert!(service.instances[0].peers.is_empty());
+        assert_eq!(req.config, original);
+        req.config.services.get_mut("test").unwrap()["instances"][1]["enabled"] = true.into();
+        assert!(req.active_service::<Service>("test").is_err());
+        req.config.services.get_mut("test").unwrap()["enabled"] = false.into();
+        assert!(req.active_service::<Service>("test").unwrap().is_none());
+    }
 
     #[test]
     fn capability_bits_come_from_cap_eff() {

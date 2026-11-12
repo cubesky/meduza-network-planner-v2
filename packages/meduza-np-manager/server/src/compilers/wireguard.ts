@@ -6,14 +6,17 @@
 import type { CompileContext } from "./index.js";
 
 interface WgInterface {
+  enabled?: boolean;
   privateKeyRef?: string;
   publicKey?: string;
   peers?: Array<{ bgp?: unknown }>;
 }
 
 export function compileWireGuard(_nodeId: string, service: Record<string, unknown>, ctx: CompileContext): Record<string, unknown> {
-  const out = structuredClone(service) as { instances?: WgInterface[] };
+  const out = structuredClone(service) as { enabled?: boolean; instances?: WgInterface[] };
+  if (out.enabled === false) return out;
   for (const inst of out.instances ?? []) {
+    if (inst.enabled === false) continue;
     if (inst.privateKeyRef) {
       const own = ctx.secrets.publicValue(inst.privateKeyRef);
       if (own) inst.publicKey = own;

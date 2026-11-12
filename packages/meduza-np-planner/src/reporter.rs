@@ -57,7 +57,7 @@ pub fn build(p: &Arc<Planner>) -> NodeReport {
             }
         })
         .collect();
-    instances.extend(st.probes.iter().cloned());
+    instances.extend(p.effective_probes());
     instances.extend(binary_provider_statuses(&registry));
 
     let network_mode = crate::platform::network_mode(&p.platform);

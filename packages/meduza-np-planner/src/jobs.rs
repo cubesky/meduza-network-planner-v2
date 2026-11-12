@@ -66,7 +66,14 @@ async fn execute(p: &Arc<Planner>, job: &Job) -> Result<Value, (String, String)>
         "update-check" | "update-apply" => crate::updater::request(&p.paths, job).await,
         "restart-instance" | "start-instance" | "stop-instance" => {
             let instance = job.instance.clone().ok_or_else(|| err("invalid-params", "instance required".into()))?;
+            if job.kind != "stop-instance" && p.instance_disabled(&instance) {
+                return Err(err("disabled", "instance is disabled in the applied configuration".into()));
+            }
             let applied = crate::state::AppliedState::load(&p.paths).map_err(|e| err("internal", e.to_string()))?;
+            if job.kind != "stop-instance" && applied.instance_errors.contains_key(&instance) {
+                p.retry_instance(&instance).await.map_err(|e| err("instance-retry-failed", e))?;
+                return Ok(json!({"instance":instance}));
+            }
             let inst = applied.instances.get(&instance).ok_or_else(|| err("not-found", format!("{instance} is not applied here")))?;
             // `params.process`: only that process of the instance (a restart button next to one process).
             let only = job.params.get("process").and_then(Value::as_str);

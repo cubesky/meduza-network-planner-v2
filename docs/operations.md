@@ -388,8 +388,11 @@ Shift+arrows to pan, `+`/`-` to zoom and `0` to reset. Cluster spacing is rememb
 node/link/cluster emphasizes its connections without restarting the settled layout. Node labels use the same
 centered translucent depth-sorted panels as AS labels, with no leader lines. Zoom in for node labels, or hover
 or select a node/link/cluster to reveal its relevant labels immediately. Labels themselves remain hoverable
-and clickable; dragging a node by its label preserves the pointer offset. AS numbers and names remain on
-separate lines and reserve their full bounds when avoiding other labels. Zoom thresholds use hysteresis to
+and clickable; dragging a node by its label preserves the pointer offset. Node/router labels attach directly
+to the right of their projected glyph, vertically centered with a fixed gap. They never choose another side,
+move away from a crossing link, or shift to make room for another label. AS panels avoid the already anchored
+node labels instead. At the viewport edge the canvas clips the panel instead of moving its attachment.
+AS numbers and names remain on separate lines and reserve their full bounds when avoiding other labels. Zoom thresholds use hysteresis to
 keep detail labels from flickering around the boundary.
 
 On a node's **Connections** tab, WireGuard and OpenVPN restart controls appear at the end of each peer/session
@@ -434,6 +437,41 @@ meduza-np support-bundle -o /tmp/meduza-np-support.json
 The same bundle is the result of **Collect diagnostics** on the node's Diagnostics tab in the manager (with a
 Download button under Jobs) and of **导出支持包** on the dashboard's diagnostics page. Read it before you send it:
 redaction covers secret-like keys, PEM private keys and credentials in URLs/log text, not host names or addresses.
+
+### OpenVPN reports `process not running` with no startup log
+
+First distinguish missing software, native process failure and a plan that was never generated:
+
+```sh
+meduza-np --json doctor
+meduza-np --json instances
+meduza-np logs -n 100
+```
+
+On OpenWrt the system `openvpn-openssl` package normally supplies `/usr/sbin/openvpn`; use the actual
+`provider:openvpn.binary` doctor result to verify which executable planner resolved. Compare the running
+planner's PATH with the shell if necessary. A registered adapter and a working system provider do not
+prove any OpenVPN instance was scheduled.
+
+If `applied`/`processes` contain no OpenVPN instance and the current generation has no OpenVPN directory,
+inspect only the held-back feature names in persistent state:
+
+```sh
+jsonfilter -i /etc/meduza-np-state/config/last-good.json -e '@.heldBack[*]'
+```
+
+D94 fixes an OpenWrt incident where eight enabled tunnels never start because three disabled instances
+retain secret references. Manager correctly omits the disabled instances' secrets, but the old planner
+collects those references and holds back the whole OpenVPN feature. Other services and the revision can
+still be applied, while OpenVPN probes report `process not running`. This happens before OpenVPN is
+executed, so replacing the system binary or retrying peer connections does not address that gate.
+
+Upgrade planner with D94 and reapply/restore the configuration. If an immediate workaround is needed,
+remove only the unused disabled instance entries in this node's Manager configuration and apply it;
+preserve any configuration you intend to reuse. Do not enable those instances or deliver their private
+keys just to bypass the old scanner. Genuine missing secrets in enabled instances still require repair.
+Verify actual process startup and tunnel/peer state afterward; a successful read-only `plan` alone does
+not verify the native binary's runtime compatibility or establish a tunnel.
 
 ## 8. Side-router cutover: real gateway traffic, recovery and DNS privacy
 
@@ -547,3 +585,23 @@ In the diagnosed deployment, after the user changes Compose and recreates planne
 are automatically restored and all/ingress values read zero. Two rounds of real-gateway HTTPS to all
 five targets and SOCKS controls pass, along with front-end and ordinary external UDP/TCP DNS. That
 verifies the observed IPv4 TCP outage is repaired; it does not change the DNS privacy policy above.
+
+### WireGuard and OpenVPN instance failures
+
+A configuration can be `in-sync` while an individual tunnel is down or degraded. Inspect the named
+instance in Manager or Dashboard: its reason identifies a missing dependency, invalid configuration,
+native check, resource, reload or process-start failure. The same row includes `applyErrorCode`,
+`attempt` and `retryAtUnix` in its diagnostic details. Other instances continue applying and running.
+
+Missing keys and failed native checks retain that instance's previously applied configuration where
+available. A failed runtime delivery cleans only that instance. Failed instances retry automatically
+with backoff capped at sixty seconds; healthy instances keep their processes. Use the instance's
+start/restart action to retry immediately after fixing a key, dependency or host condition. Maintenance
+and a pending/failed global revision defer these retries. Peer availability errors remain runtime
+health observations under connection supervision.
+
+An explicitly disabled WireGuard/OpenVPN service, instance or peer is excluded from runtime validation,
+secret delivery, probing and failure retries. Disabled drafts may retain unfinished settings; enabling
+them restores validation. An applied disable stops the owned instance processes/resources or removes
+the WireGuard peer from native configuration. Its status becomes `disabled` without stale errors or
+retry details. Restart actions cannot override this configuration: enable and apply the entry first.

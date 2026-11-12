@@ -137,6 +137,7 @@ async fn run() {
 
     tokio::spawn(planner.clone().sync_loop());
     tokio::spawn(planner.clone().probe_loop());
+    tokio::spawn(planner.clone().instance_retry_loop());
     tokio::spawn(meduza_np_planner::netplan::HealthPorts::run(planner.clone()));
     #[cfg(unix)]
     {

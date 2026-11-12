@@ -343,9 +343,10 @@ export function compileCluster(
         problems.push(...policy);
         continue;
       }
-      if (entry.validateConfig && !entry.validateConfig(raw)) {
+      const validation = short === "wireguard" || short === "openvpn" ? activeTunnelConfig(raw) : { value: raw, path: (p: string) => p };
+      if (entry.validateConfig && !entry.validateConfig(validation.value)) {
         for (const e of entry.validateConfig.errors ?? []) {
-          problems.push({ path: `${path}${e.instancePath}`, message: e.message ?? "invalid", node: nodeId });
+          problems.push({ path: `${path}${validation.path(e.instancePath)}`, message: e.message ?? "invalid", node: nodeId });
         }
         continue;
       }
@@ -394,6 +395,30 @@ export function compileCluster(
   }
 
   return { nodes: compiled, problems };
+}
+
+/** Dormant tunnel drafts keep their fields in snapshots, but do not block activation of other entries.
+ * Translate AJV's filtered array offsets back to the operator's original collection/peer indices. */
+function activeTunnelConfig(raw: Record<string, unknown>): { value: unknown; path: (p: string) => string } {
+  if (raw.enabled === false) return { value: { enabled: false, instances: [] }, path: (p) => p };
+  const paths = new Map<string, string>();
+  const project = (value: unknown, filtered: string, original: string): unknown => {
+    paths.set(filtered, original);
+    if (Array.isArray(value)) {
+      const out: unknown[] = [];
+      value.forEach((item, i) => {
+        if (item && typeof item === "object" && (item as Record<string, unknown>).enabled === false) return;
+        out.push(project(item, `${filtered}/${out.length}`, `${original}/${i}`));
+      });
+      return out;
+    }
+    if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, child]) => {
+      const pointer = key.replace(/~/g, "~0").replace(/\//g, "~1");
+      return [key, project(child, `${filtered}/${pointer}`, `${original}/${pointer}`)];
+    }));
+    return value;
+  };
+  return { value: project(raw, "", ""), path: (p) => paths.get(p) ?? p };
 }
 
 /** Cluster-wide DNS hosts plus the node's own; the node's entry for a hostname replaces the cluster's. */

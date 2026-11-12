@@ -28,9 +28,11 @@ const compileMosdns: ServiceCompiler = (_nodeId, service, ctx) => ({ ...structur
  * The plugin's renegotiation rule is checked here too, so such a publish fails instead of only the node's apply.
  */
 const compileOpenVpn: ServiceCompiler = (nodeId, service, ctx) => {
-  const out = structuredClone(service) as { instances?: Array<{ bgp?: unknown; kind?: string; access?: { renegSeconds?: number } }> };
+  const out = structuredClone(service) as { enabled?: boolean; instances?: Array<{ enabled?: boolean; bgp?: unknown; kind?: string; access?: { renegSeconds?: number } }> };
+  if (out.enabled === false) return out;
   (out.instances ?? []).forEach((inst, i) => {
     delete inst.bgp;
+    if (inst.enabled === false) return;
     const reneg = inst.access?.renegSeconds;
     if (inst.kind === "access" && typeof reneg === "number" && reneg > 0 && reneg < 300) {
       ctx.problems.push({

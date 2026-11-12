@@ -297,6 +297,38 @@ test("WireGuard and OpenVPN are external-only: own public key filled, managed-no
   await app.close();
 });
 
+test("disabled tunnel drafts do not block publishing or deliver dormant secrets", async (t) => {
+  const ctx = await startManager();
+  t.after(() => ctx.app.close());
+  await enrolledNode(ctx, "gw-a");
+  const services = {
+    wireguard: { enabled: false, instances: [{ id: "paused", privateKeyRef: "undelivered", peers: [{ node: "legacy", instance: "old", publicKey: 42 }] }] },
+    openvpn: { instances: [{ id: "paused", enabled: false, kind: "access", peer: "legacy", staticKeyRef: "undelivered", access: { pool: "unfinished", renegSeconds: 1 } }] },
+  };
+  const doc = { schemaVersion: 1, nodes: { "gw-a": { services } } };
+  assert.deepEqual(ctx.s.config.preview(doc).problems.filter((p) => p.severity !== "warning"), []);
+  const published = ctx.s.config.publish(doc, "test");
+  const snapshot = ctx.s.config.snapshot("gw-a", published.revision)!.config as { services: typeof services; secrets?: Record<string, unknown> };
+  assert.deepEqual(snapshot.services.wireguard, services.wireguard, "dormant editing fields are preserved");
+  assert.deepEqual(snapshot.secrets ?? {}, {}, "disabled refs are not distributed");
+  const enabled = structuredClone(doc);
+  enabled.nodes["gw-a"].services.wireguard.enabled = true;
+  assert.ok(ctx.s.config.preview(enabled).problems.some((p) => /external connections only/.test(p.message)), "enabling restores policy checks");
+});
+
+test("active tunnel schema problems retain original instance and peer indices", async (t) => {
+  const ctx = await startManager();
+  t.after(() => ctx.app.close());
+  await enrolledNode(ctx, "gw-a");
+  const doc = { schemaVersion: 1, nodes: { "gw-a": { services: { wireguard: { instances: [
+    { id: "paused", enabled: false, peers: "unfinished" },
+    { id: "active", privateKeyRef: "node-key", peers: [{ id: "paused", enabled: false, publicKey: false }, { id: "active", publicKey: 42 }] },
+  ] } } } } };
+  const problems = ctx.s.config.preview(doc).problems.filter((p) => p.severity !== "warning");
+  assert.ok(problems.some((p) => p.path === "/nodes/gw-a/services/wireguard/instances/1/peers/1/publicKey"), JSON.stringify(problems));
+  assert.ok(problems.every((p) => !p.path.includes("/instances/0")), JSON.stringify(problems));
+});
+
 test("Tinc mesh members receive each other's public material with node-held keys", async () => {
   const ctx = await startManager();
   const { app, s } = ctx;

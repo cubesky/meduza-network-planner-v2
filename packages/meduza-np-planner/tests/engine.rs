@@ -1,6 +1,6 @@
 //! Apply engine integration test with real plugin executables (the WireGuard plugin and a test plugin from
 //! `examples/`), a fake native tool, the real supervisor and a recording network backend.
-//! First run `cargo build --locked -p meduza-np-wireguard -p meduza-np-planner --bins --examples`,
+//! First run `cargo build --locked -p meduza-np-wireguard -p meduza-np-openvpn -p meduza-np-planner --bins --examples`,
 //! then `CI=true cargo test --locked --workspace` to require all executable dependencies.
 
 use std::path::{Path, PathBuf};
@@ -43,6 +43,7 @@ struct Env {
     net: RecordingBackend,
     log: PathBuf,
     have_wg: bool,
+    have_openvpn: bool,
 }
 
 fn setup(name: &str) -> Option<Env> {
@@ -96,6 +97,7 @@ fn setup(name: &str) -> Option<Env> {
             "plannerApi": {"min": 1, "max": 1}, "requires": ["meduza-np-planner"], "provides": ["test.tools"],
             "providers": [
                 {"slot": "avahi.daemon", "binary": fake_tool.to_string_lossy()},
+                {"slot": "openvpn.binary", "binary": fake_tool.to_string_lossy()},
                 {"slot": "wireguard.tools", "binary": fake_tool.to_string_lossy()}
             ]
         }),
@@ -122,10 +124,24 @@ fn setup(name: &str) -> Option<Env> {
         eprintln!("note: WireGuard plugin binary not built; WireGuard steps skipped");
     }
 
+    let ovpn_plugin = target.join(format!("meduza-np-openvpn{EXE}"));
+    let have_openvpn = ovpn_plugin.exists();
+    assert!(have_openvpn || std::env::var_os("CI").is_none(), "OpenVPN test plugin binary missing: {}", ovpn_plugin.display());
+    if have_openvpn {
+        let dir = pkgs.join("meduza-np-openvpn");
+        let mut manifest: Value =
+            serde_json::from_str(&std::fs::read_to_string(repo().join("packages/meduza-np-openvpn/manifest.json")).unwrap()).unwrap();
+        manifest["systemDependencies"] = json!([{"kind":"binary","name":"openvpn","providerSlot":"openvpn.binary"}]);
+        write_json(&dir.join("manifest.json"), &manifest);
+        std::fs::create_dir_all(dir.join("ui")).unwrap();
+        std::fs::copy(repo().join("packages/meduza-np-openvpn/ui/descriptor.json"), dir.join("ui/descriptor.json")).unwrap();
+        std::fs::create_dir_all(dir.join("bin")).unwrap();
+        std::fs::copy(ovpn_plugin, dir.join(format!("bin/openvpn{EXE}"))).unwrap();
+    }
     let log = root.join("tool.log");
     let net = RecordingBackend::default();
     let engine = engine(&paths, &net);
-    Some(Env { paths, engine, net, log, have_wg })
+    Some(Env { paths, engine, net, log, have_wg, have_openvpn })
 }
 
 /// A fresh engine over the same node directories, like a newly started planner process.
@@ -165,9 +181,505 @@ fn log_lines(env: &Env) -> Vec<String> {
     std::fs::read_to_string(&env.log).unwrap_or_default().lines().map(str::to_string).collect()
 }
 
+fn tunnel_config(env: &Env, short: &str, rev: u64, ids: &[&str]) -> (Value, String) {
+    let (mut raw, _) = config(env, rev, json!([{"id":"local"}]));
+    raw["services"].as_object_mut().unwrap().remove("wireguard");
+    raw["secrets"]["ovpn"] =
+        json!({"kind":"openvpn-static-key","value":"-----BEGIN OpenVPN Static key V1-----\nab\n-----END OpenVPN Static key V1-----"});
+    let instances: Vec<_> = ids
+        .iter()
+        .enumerate()
+        .map(|(index, id)| {
+            if short == "wireguard" {
+                json!({"id":id,"privateKeyRef":"wg-uplink","listenPort":51820+index,"addresses":[format!("10.9.{index}.2/24")],"peers":[]})
+            } else {
+                json!({"id":id,"kind":"site2site","role":"server","staticKeyRef":"ovpn","port":1194+index,
+            "ifconfig":{"local":format!("10.8.{index}.1"),"remote":format!("10.8.{index}.2")}})
+            }
+        })
+        .collect();
+    raw["services"][short] = json!({"instances":instances});
+    let digest = canonical_digest(&raw).unwrap();
+    (raw, digest)
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn tunnel_prepare_errors_are_per_instance_and_group_conflicts_remain_checked() {
+    let _native_env = NATIVE_TOOL_ENV.lock().await;
+    let Some(env) = setup("tunnel-prepare-isolation") else { return };
+    let reg = registry::scan(&env.paths.packages, &Default::default());
+    for short in ["wireguard", "openvpn"] {
+        if (short == "wireguard" && !env.have_wg) || (short == "openvpn" && !env.have_openvpn) {
+            continue;
+        }
+        for defect in ["secret", "malformed", "invalid", "port", "device"] {
+            let (mut raw, _) = tunnel_config(&env, short, 1, &["good", "broken", "later"]);
+            let broken = &mut raw["services"][short]["instances"][1];
+            match defect {
+                "secret" => broken[if short == "wireguard" { "privateKeyRef" } else { "staticKeyRef" }] = json!("missing-key"),
+                "malformed" => broken["enabled"] = json!("not-a-boolean"),
+                "invalid" => broken["device"] = json!("bad/device"),
+                "port" => {
+                    broken[if short == "wireguard" { "listenPort" } else { "port" }] =
+                        json!(if short == "wireguard" { 51820 } else { 1194 })
+                }
+                "device" => {
+                    raw["services"][short]["instances"][0]["device"] = json!("same-dev");
+                    raw["services"][short]["instances"][1]["device"] = json!("same-dev");
+                }
+                _ => unreachable!(),
+            }
+            let prepared = env.engine.prepare(&raw, &canonical_digest(&raw).unwrap(), &reg, &Default::default()).await.unwrap();
+            assert_eq!(prepared.instance_errors.len(), 1, "{short}/{defect}: {:?}", prepared.instance_errors);
+            assert!(prepared.instance_errors.contains_key(&format!("{short}/broken")), "{short}/{defect}");
+            for id in ["good", "later"] {
+                assert!(prepared.plans.iter().any(|(_, p)| p.instance == format!("{short}/{id}")), "{short}/{defect}/{id}");
+            }
+            assert!(prepared.plans.iter().any(|(_, p)| p.instance == "avahi/local"));
+        }
+    }
+    let _ = std::fs::remove_dir_all(env.paths.etc.parent().unwrap());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn tunnel_delivery_failures_retry_only_the_failed_instance() {
+    use meduza_np_planner::state::AppliedState;
+    use meduza_np_protocol::plan::CommandSpec;
+    let _native_env = NATIVE_TOOL_ENV.lock().await;
+    for short in ["wireguard", "openvpn"] {
+        for defect in ["syntax", "resource", "reload", "spawn"] {
+            let Some(env) = setup(&format!("isolated-{short}-{defect}")) else { return };
+            if (short == "wireguard" && !env.have_wg) || (short == "openvpn" && !env.have_openvpn) {
+                continue;
+            }
+            let reg = registry::scan(&env.paths.packages, &Default::default());
+            let (raw, digest) = tunnel_config(&env, short, 1, &["good"]);
+            let prepared = env.engine.prepare(&raw, &digest, &reg, &Default::default()).await.unwrap();
+            env.engine.commit(&prepared, &reg).await.unwrap();
+            let local_pid = env.engine.supervisor.status("avahi/local").unwrap().pid;
+            let good_id = format!("{short}/good");
+            let good_pid = env.engine.supervisor.status(&good_id).and_then(|s| s.pid);
+            let (raw, digest) = tunnel_config(&env, short, 2, &["good", "broken", "later"]);
+            let mut prepared = env.engine.prepare(&raw, &digest, &reg, &Default::default()).await.unwrap();
+            assert!(prepared.instance_errors.is_empty(), "{:?}", prepared.instance_errors);
+            let bad_id = format!("{short}/broken");
+            let bad = &mut prepared.plans.iter_mut().find(|(_, p)| p.instance == bad_id).unwrap().1;
+            let crash = CommandSpec {
+                provider_slot: Some("avahi.daemon".into()),
+                program: None,
+                argv: vec!["crash".into()],
+                required: true,
+                timeout_seconds: 3,
+            };
+            let expected = match defect {
+                "syntax" => {
+                    bad.checks.push(crash);
+                    "syntax-check-failed"
+                }
+                "reload" => {
+                    bad.reload.push(crash);
+                    "reload-failed"
+                }
+                "resource" => {
+                    let resource = meduza_np_protocol::plan::NetworkResource::Link {
+                        device: "broken-test".into(),
+                        link_type: "dummy".into(),
+                        mtu: None,
+                        up: true,
+                    };
+                    bad.resources.push(resource.clone());
+                    env.net.fail_on.lock().unwrap().push(resource);
+                    "network-apply-failed"
+                }
+                "spawn" => {
+                    let mut proc = prepared.plans.iter().find(|(_, p)| p.instance == "avahi/local").unwrap().1.processes[0].clone();
+                    proc.id = bad_id.clone();
+                    proc.provider_slot = None;
+                    proc.program = Some("/nonexistent/meduza-np-tunnel-test".into());
+                    prepared.plans.iter_mut().find(|(_, p)| p.instance == bad_id).unwrap().1.processes = vec![proc];
+                    "process-failed"
+                }
+                _ => unreachable!(),
+            };
+            let outcomes = env.engine.commit(&prepared, &reg).await.expect("instance failure must not abort the revision");
+            assert!(outcomes.iter().any(|o| o.instance == bad_id && !o.ok));
+            assert!(outcomes.iter().any(|o| o.instance == format!("{short}/later") && o.ok));
+            let applied = AppliedState::load(&env.paths).unwrap();
+            assert_eq!(applied.revision.as_deref(), Some("rev-000002"));
+            assert_eq!(applied.instance_errors[&bad_id].code, expected, "{short}/{defect}");
+            assert!(!applied.instances.contains_key(&bad_id));
+            assert!(applied.instance_errors[&bad_id].retry_at_unix > 0);
+            let mut rows = Vec::new();
+            applied.overlay_instance_errors(&mut rows);
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].id, bad_id);
+            assert!(rows[0].reason.as_ref().unwrap().contains(expected));
+            assert_eq!(env.engine.supervisor.status("avahi/local").unwrap().pid, local_pid);
+            assert_eq!(env.engine.supervisor.status(&good_id).and_then(|s| s.pid), good_pid);
+            assert_eq!(meduza_np_planner::state::load_last_good(&env.paths).unwrap().unwrap().digest, digest);
+            let generation = std::fs::canonicalize(env.paths.current_generation_link()).unwrap();
+            env.net.fail_on.lock().unwrap().clear();
+            let mut retry = env.engine.prepare(&raw, &digest, &reg, &Default::default()).await.unwrap();
+            retry.retry_instances = Some([bad_id.clone()].into());
+            retry.keep_last_good = true;
+            // Healthy native checks must not even execute on a scoped retry.
+            retry.plans.iter_mut().find(|(_, p)| p.instance == good_id).unwrap().1.checks.push(CommandSpec {
+                provider_slot: Some("avahi.daemon".into()),
+                program: None,
+                argv: vec!["crash".into()],
+                required: true,
+                timeout_seconds: 3,
+            });
+            env.engine.commit(&retry, &reg).await.unwrap();
+            let applied = AppliedState::load(&env.paths).unwrap();
+            assert!(applied.instance_errors.is_empty(), "{short}/{defect}: {:?}", applied.instance_errors);
+            assert!(applied.instances.contains_key(&bad_id));
+            assert_ne!(
+                std::fs::canonicalize(env.paths.current_generation_link()).unwrap(),
+                generation,
+                "same revision retries must not delete the live generation"
+            );
+            assert_eq!(env.engine.supervisor.status("avahi/local").unwrap().pid, local_pid);
+            assert_eq!(env.engine.supervisor.status(&good_id).and_then(|s| s.pid), good_pid);
+            env.engine.supervisor.stop_all().await;
+            let _ = std::fs::remove_dir_all(env.paths.etc.parent().unwrap());
+        }
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn disabled_secret_refs_do_not_hold_back_enabled_instances_or_peers() {
+    let _native_env = NATIVE_TOOL_ENV.lock().await;
+    let Some(env) = setup("disabled-secret-refs") else { return };
+    if !env.have_wg {
+        return;
+    }
+    let reg = registry::scan(&env.paths.packages, &Default::default());
+    let (mut raw, _) = config(&env, 1, json!([{"id":"active"}]));
+    raw["services"]["wireguard"]["instances"].as_array_mut().unwrap().push(json!({
+        "id":"paused", "enabled":false, "privateKeyRef":"not-delivered-paused-key"
+    }));
+    raw["services"]["wireguard"]["instances"][0]["peers"].as_array_mut().unwrap().push(json!({
+        "id":"paused-peer", "enabled":false, "publicKey":PRIV, "presharedKeyRef":"not-delivered-paused-psk", "allowedIps":[]
+    }));
+    let prepared = env.engine.prepare(&raw, &canonical_digest(&raw).unwrap(), &reg, &Default::default()).await.unwrap();
+    assert!(prepared.held_back.is_empty(), "disabled references cannot hold back the enabled service: {:?}", prepared.warnings);
+    let wg: Vec<_> = prepared.plans.iter().filter(|(p, _)| p == "meduza-np-wireguard").collect();
+    assert_eq!(wg.len(), 1, "the enabled instance is actually planned");
+    assert_eq!(wg[0].1.instance, "wireguard/uplink");
+
+    // A genuinely missing active key holds back only its own instance.
+    raw["services"]["wireguard"]["instances"][0]["peers"][0]["presharedKeyRef"] = json!("missing-active-psk");
+    let digest = canonical_digest(&raw).unwrap();
+    let prepared = env.engine.prepare(&raw, &digest, &reg, &Default::default()).await.unwrap();
+    assert!(prepared.held_back.is_empty());
+    assert_eq!(prepared.instance_errors["wireguard/uplink"].code, "waiting-dependency");
+    assert!(prepared.warnings.iter().any(|w| w.contains("missing-active-psk") && !w.contains("not-delivered-paused")));
+    assert!(prepared.plans.iter().any(|(_, p)| p.instance == "avahi/active"));
+    assert!(prepared.plans.iter().all(|(p, _)| p != "meduza-np-wireguard"));
+
+    env.engine
+        .keystore
+        .put(
+            "missing-active-psk",
+            &meduza_np_planner::keystore::StoredKey { kind: "wireguard-preshared-key".into(), value: PRIV.into(), public_value: None },
+        )
+        .unwrap();
+    let prepared = env.engine.prepare(&raw, &digest, &reg, &Default::default()).await.unwrap();
+    assert!(prepared.held_back.is_empty());
+    assert!(prepared.plans.iter().any(|(_, p)| p.instance == "wireguard/uplink"), "node-held active keys still complete the feature");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn blocked_tunnels_keep_previous_files_and_do_not_lose_their_resources() {
+    use meduza_np_planner::state::AppliedState;
+    use meduza_np_protocol::plan::CommandSpec;
+    let _native_env = NATIVE_TOOL_ENV.lock().await;
+    for short in ["wireguard", "openvpn"] {
+        for defect in ["secret", "syntax"] {
+            let Some(env) = setup(&format!("retained-{short}-{defect}")) else { return };
+            if (short == "wireguard" && !env.have_wg) || (short == "openvpn" && !env.have_openvpn) {
+                continue;
+            }
+            let reg = registry::scan(&env.paths.packages, &Default::default());
+            let (raw, digest) = tunnel_config(&env, short, 1, &["good", "broken"]);
+            let prepared = env.engine.prepare(&raw, &digest, &reg, &Default::default()).await.unwrap();
+            env.engine.commit(&prepared, &reg).await.unwrap();
+            let id = format!("{short}/broken");
+            let bad = &prepared.plans.iter().find(|(_, p)| p.instance == id).unwrap().1;
+            let file = &bad.files[0].path;
+            let content = std::fs::read(env.paths.current_generation_link().join(file)).unwrap();
+            let old_pid = env.engine.supervisor.status(&id).and_then(|s| s.pid);
+            let mut raw = raw.clone();
+            raw["revision"] = json!("rev-000002");
+            if defect == "secret" {
+                raw["services"][short]["instances"][1][if short == "wireguard" { "privateKeyRef" } else { "staticKeyRef" }] =
+                    json!("missing");
+            }
+            let digest = canonical_digest(&raw).unwrap();
+            let mut prepared = env.engine.prepare(&raw, &digest, &reg, &Default::default()).await.unwrap();
+            if defect == "syntax" {
+                let bad = &mut prepared.plans.iter_mut().find(|(_, p)| p.instance == id).unwrap().1;
+                bad.files[0].content = "deliberately invalid replacement".into();
+                bad.checks.push(CommandSpec {
+                    provider_slot: Some("avahi.daemon".into()),
+                    program: None,
+                    argv: vec!["crash".into()],
+                    required: true,
+                    timeout_seconds: 3,
+                });
+            }
+            env.engine.commit(&prepared, &reg).await.unwrap();
+            assert_eq!(std::fs::read(env.paths.current_generation_link().join(file)).unwrap(), content);
+            assert_eq!(env.engine.supervisor.status(&id).and_then(|s| s.pid), old_pid);
+            let applied = AppliedState::load(&env.paths).unwrap();
+            assert!(applied.instances.contains_key(&id));
+            let mut rows = vec![];
+            applied.overlay_instance_errors(&mut rows);
+            assert_eq!(rows[0].state, meduza_np_protocol::report::ServiceState::Degraded);
+            env.engine.supervisor.stop_all().await;
+            let _ = std::fs::remove_dir_all(env.paths.etc.parent().unwrap());
+        }
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn missing_instance_key_is_reported_and_recovers_manually_or_automatically() {
+    use meduza_np_planner::{local_api, state::AppliedState, sync::Planner};
+    use meduza_np_protocol::local::LocalRequest;
+    let _native_env = NATIVE_TOOL_ENV.lock().await;
+    let Some(env) = setup("instance-retry-report") else { return };
+    if !env.have_wg {
+        return;
+    }
+    let reg = registry::scan(&env.paths.packages, &Default::default());
+    let (mut raw, _) = tunnel_config(&env, "wireguard", 1, &["good", "manual", "automatic"]);
+    let p = Planner::new(env.paths.clone(), Default::default(), env.engine, reg);
+    raw["services"]["wireguard"]["instances"][1]["privateKeyRef"] = json!("manual-key");
+    raw["services"]["wireguard"]["instances"][2]["privateKeyRef"] = json!("automatic-key");
+    p.offer(raw.clone(), canonical_digest(&raw).unwrap(), "rev-000001".into()).await;
+    let report = meduza_np_planner::reporter::build(&p);
+    assert_eq!(report.sync.state, meduza_np_protocol::report::SyncState::InSync);
+    assert!(report.sync.last_error.is_none());
+    assert_eq!(report.instances.iter().filter(|r| r.reason.as_ref().is_some_and(|r| r.contains("waiting-dependency"))).count(), 2);
+    let response =
+        local_api::dispatch(&p, LocalRequest { protocol: 1, id: 1, method: "instances".into(), params: Value::Null }, true).await;
+    assert!(serde_json::to_string(&response).unwrap().contains("waiting-dependency"));
+    let pid = p.engine.supervisor.status("avahi/local").unwrap().pid;
+    assert!(p.retry_instance("wireguard/manual").await.is_err());
+    let waiting = AppliedState::load(&p.paths).unwrap();
+    assert_eq!(waiting.instance_errors["wireguard/manual"].attempt, 2);
+    assert_eq!(waiting.instance_errors["wireguard/automatic"].attempt, 1);
+    p.engine
+        .keystore
+        .put(
+            "manual-key",
+            &meduza_np_planner::keystore::StoredKey { kind: "wireguard-private-key".into(), value: PRIV.into(), public_value: None },
+        )
+        .unwrap();
+    p.retry_instance("wireguard/manual").await.unwrap();
+    let waiting = AppliedState::load(&p.paths).unwrap();
+    assert!(!waiting.instance_errors.contains_key("wireguard/manual"));
+    assert_eq!(waiting.instance_errors["wireguard/automatic"].attempt, 1);
+    p.engine
+        .keystore
+        .put(
+            "automatic-key",
+            &meduza_np_planner::keystore::StoredKey { kind: "wireguard-private-key".into(), value: PRIV.into(), public_value: None },
+        )
+        .unwrap();
+    let mut due = AppliedState::load(&p.paths).unwrap();
+    due.instance_errors.get_mut("wireguard/automatic").unwrap().retry_at_unix = 0;
+    due.save(&p.paths).unwrap();
+    let retry_loop = tokio::spawn(p.clone().instance_retry_loop());
+    let end = std::time::Instant::now() + Duration::from_secs(12);
+    while !AppliedState::load(&p.paths).unwrap().instance_errors.is_empty() && std::time::Instant::now() < end {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    retry_loop.abort();
+    let _ = retry_loop.await;
+    let applied = AppliedState::load(&p.paths).unwrap();
+    assert!(applied.instance_errors.is_empty());
+    assert!(applied.instances.contains_key("wireguard/automatic"));
+    assert_eq!(p.engine.supervisor.status("avahi/local").unwrap().pid, pid);
+    assert!(meduza_np_planner::reporter::build(&p).instances.iter().all(|r| !r.detail.contains_key("applyError")));
+    p.engine.supervisor.stop_all().await;
+    let _ = std::fs::remove_dir_all(p.paths.etc.parent().unwrap());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn disabling_tunnels_stops_resources_clears_failures_and_never_retries_them() {
+    use meduza_np_planner::{local_api, state::AppliedState, sync::Planner};
+    use meduza_np_protocol::{
+        local::LocalRequest,
+        plan::CommandSpec,
+        report::{InstanceStatus, ServiceState},
+    };
+    let _native_env = NATIVE_TOOL_ENV.lock().await;
+    for short in ["wireguard", "openvpn"] {
+        for mode in ["instance", "service"] {
+            let Some(env) = setup(&format!("disable-{short}-{mode}")) else { return };
+            if (short == "wireguard" && !env.have_wg) || (short == "openvpn" && !env.have_openvpn) {
+                continue;
+            }
+            let reg = registry::scan(&env.paths.packages, &Default::default());
+            let (baseline, digest) = tunnel_config(&env, short, 1, &["good", "paused", "broken"]);
+            let p = Planner::new(env.paths.clone(), Default::default(), env.engine, reg);
+            p.offer(baseline.clone(), digest, "rev-000001".into()).await;
+            let local_pid = p.engine.supervisor.status("avahi/local").unwrap().pid;
+            let good_id = format!("{short}/good");
+            let paused_id = format!("{short}/paused");
+            let broken_id = format!("{short}/broken");
+            let good_pid = p.engine.supervisor.status(&good_id).and_then(|s| s.pid);
+            let mut failed = baseline.clone();
+            failed["revision"] = json!("rev-000002");
+            let mut prepared = p.engine.prepare(&failed, &canonical_digest(&failed).unwrap(), &p.registry(), &p.platform).await.unwrap();
+            prepared.plans.iter_mut().find(|(_, plan)| plan.instance == broken_id).unwrap().1.files[0]
+                .content
+                .push_str("\n# force local reload\n");
+            prepared.plans.iter_mut().find(|(_, plan)| plan.instance == broken_id).unwrap().1.reload.push(CommandSpec {
+                provider_slot: Some("avahi.daemon".into()),
+                program: None,
+                argv: vec!["crash".into()],
+                required: true,
+                timeout_seconds: 3,
+            });
+            p.engine.commit(&prepared, &p.registry()).await.unwrap();
+            let error = AppliedState::load(&p.paths).unwrap().instance_errors[&broken_id].clone();
+            let mut disabled = failed.clone();
+            disabled["revision"] = json!("rev-000003");
+            for index in [1, 2] {
+                disabled["services"][short]["instances"][index]["enabled"] = json!(false);
+                disabled["services"][short]["instances"][index]["device"] = json!("bad/device");
+                disabled["services"][short]["instances"][index][if short == "wireguard" { "privateKeyRef" } else { "staticKeyRef" }] =
+                    json!("undelivered");
+                disabled["services"][short]["instances"][index][if short == "wireguard" { "addresses" } else { "ifconfig" }] =
+                    json!("unfinished");
+            }
+            if mode == "service" {
+                disabled["services"][short]["enabled"] = json!(false);
+            } else {
+                disabled["services"][short]["instances"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!({"id":"good","enabled":false,"port":"unfinished"}));
+            }
+            p.status.lock().unwrap().probes = vec![InstanceStatus {
+                id: paused_id.clone(),
+                kind: "probe".into(),
+                state: ServiceState::Up,
+                reason: Some("cached old failure".into()),
+                observed_at: None,
+                detail: [("applyError".into(), json!("cached failure"))].into(),
+            }];
+            p.offer(disabled.clone(), canonical_digest(&disabled).unwrap(), "rev-000003".into()).await;
+            let applied = AppliedState::load(&p.paths).unwrap();
+            assert!(applied.instance_errors.is_empty());
+            assert!(!applied.instances.contains_key(&paused_id));
+            assert!(!applied.instances.contains_key(&broken_id));
+            assert!(p.engine.supervisor.status(&paused_id).is_none());
+            assert!(meduza_np_runtime::journal::OwnershipJournal::load(&p.paths.ownership())
+                .unwrap()
+                .possibly_owned(&paused_id)
+                .is_empty());
+            assert_eq!(p.engine.supervisor.status("avahi/local").unwrap().pid, local_pid);
+            if mode == "instance" {
+                assert_eq!(p.engine.supervisor.status(&good_id).and_then(|s| s.pid), good_pid);
+            }
+            let report = meduza_np_planner::reporter::build(&p);
+            assert_eq!(report.sync.state, meduza_np_protocol::report::SyncState::InSync);
+            for id in [&paused_id, &broken_id] {
+                let row = report.instances.iter().find(|r| &r.id == id).unwrap();
+                assert_eq!(row.state, ServiceState::Disabled);
+                assert_eq!(row.reason.as_deref(), Some("disabled"));
+                assert!(!row.detail.contains_key("applyError"));
+            }
+            // Even legacy/stale persisted failures cannot revive a disabled instance.
+            let mut stale = applied;
+            stale.instance_errors.insert(broken_id.clone(), error);
+            stale.save(&p.paths).unwrap();
+            let generation = std::fs::canonicalize(p.paths.current_generation_link()).unwrap();
+            assert!(p.retry_instance(&broken_id).await.unwrap_err().contains("disabled"));
+            for action in ["start", "restart"] {
+                let response = local_api::dispatch(
+                    &p,
+                    LocalRequest { protocol: 1, id: 1, method: format!("instance.{action}"), params: json!({"instance":broken_id}) },
+                    true,
+                )
+                .await;
+                assert!(!response.ok);
+                assert_eq!(response.error.unwrap().code, "disabled");
+            }
+            if short == "openvpn" && mode == "instance" {
+                let task = tokio::spawn(p.clone().instance_retry_loop());
+                tokio::time::sleep(Duration::from_secs(7)).await;
+                task.abort();
+                let _ = task.await;
+                assert_eq!(std::fs::canonicalize(p.paths.current_generation_link()).unwrap(), generation);
+                assert_eq!(AppliedState::load(&p.paths).unwrap().instance_errors[&broken_id].attempt, 1);
+            }
+            let mut enabled = baseline.clone();
+            enabled["revision"] = json!("rev-000004");
+            enabled["services"][short]["instances"][2]["enabled"] = json!(false);
+            p.offer(enabled.clone(), canonical_digest(&enabled).unwrap(), "rev-000004".into()).await;
+            let applied = AppliedState::load(&p.paths).unwrap();
+            assert!(applied.instances.contains_key(&paused_id));
+            assert!(applied.instance_errors.is_empty());
+            assert!(p.effective_probes().iter().filter(|r| r.id == paused_id).all(|r| r.state != ServiceState::Disabled));
+            p.engine.supervisor.stop_all().await;
+            let _ = std::fs::remove_dir_all(p.paths.etc.parent().unwrap());
+        }
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn disabled_wireguard_peers_are_removed_from_native_configuration_and_reported_disabled() {
+    use meduza_np_planner::sync::Planner;
+    use meduza_np_protocol::report::{InstanceStatus, ServiceState};
+    let _native_env = NATIVE_TOOL_ENV.lock().await;
+    let Some(env) = setup("disable-wg-peer") else { return };
+    if !env.have_wg {
+        return;
+    }
+    let (mut raw, _) = tunnel_config(&env, "wireguard", 1, &["good"]);
+    raw["services"]["wireguard"]["instances"][0]["peers"] = json!([
+        {"id":"peer","publicKey":PEER,"allowedIps":["10.9.0.1/32"],"endpoint":"198.51.100.1:51820"},
+        {"id":"draft","enabled":false,"publicKey":PEER,"allowedIps":["unfinished"],"endpoint":false,"presharedKeyRef":"undelivered"}
+    ]);
+    let reg = registry::scan(&env.paths.packages, &Default::default());
+    let p = Planner::new(env.paths.clone(), Default::default(), env.engine, reg);
+    p.offer(raw.clone(), canonical_digest(&raw).unwrap(), "rev-000001".into()).await;
+    let path = p.paths.current_generation_link().join("wireguard/good/wg.conf");
+    assert_eq!(std::fs::read_to_string(&path).unwrap().matches(PEER).count(), 1);
+    p.status.lock().unwrap().probes = vec![InstanceStatus {
+        id: "wireguard/good/peer".into(),
+        kind: "wireguard-peer".into(),
+        state: ServiceState::Down,
+        observed_at: None,
+        reason: Some("old endpoint failure".into()),
+        detail: [("endpointResolution".into(), json!({"phase":"resolution-failed"}))].into(),
+    }];
+    raw["revision"] = json!("rev-000002");
+    raw["services"]["wireguard"]["instances"][0]["peers"][0]["enabled"] = json!(false);
+    p.offer(raw.clone(), canonical_digest(&raw).unwrap(), "rev-000002".into()).await;
+    assert!(!std::fs::read_to_string(&path).unwrap().contains(PEER));
+    let rows = p.effective_probes();
+    let peer = rows.iter().find(|r| r.id == "wireguard/good/peer").unwrap();
+    assert_eq!(peer.state, ServiceState::Disabled);
+    assert!(!peer.detail.contains_key("endpointResolution"));
+    assert_eq!(rows.iter().find(|r| r.id == "wireguard/good/draft").unwrap().state, ServiceState::Disabled);
+    assert!(p.running_packages().1.contains("wireguard"), "disabled peers do not degrade the active interface's package health");
+    raw["revision"] = json!("rev-000003");
+    raw["services"]["wireguard"]["instances"][0]["peers"][0]["enabled"] = json!(true);
+    p.offer(raw.clone(), canonical_digest(&raw).unwrap(), "rev-000003".into()).await;
+    assert!(std::fs::read_to_string(&path).unwrap().contains(PEER));
+    p.engine.supervisor.stop_all().await;
+    let _ = std::fs::remove_dir_all(p.paths.etc.parent().unwrap());
+}
+
 #[cfg(unix)]
 #[tokio::test(flavor = "current_thread")]
-async fn wireguard_dns_failure_does_not_abort_other_services_but_local_reload_errors_still_fail() {
+async fn wireguard_dns_and_reload_errors_do_not_abort_other_instances() {
     use std::os::unix::fs::PermissionsExt;
     let _native_env = NATIVE_TOOL_ENV.lock().await;
     let Some(env) = setup("wireguard-dns") else { return };
@@ -208,7 +720,8 @@ exit 0
     let file = std::fs::read_to_string(env.paths.current_generation_link().join("wireguard/uplink/wg.conf")).unwrap();
     assert!(file.contains(PEER) && !file.contains("external.invalid"), "local peer/key delivery is independent of DNS");
     let status = env.paths.run.join("wireguard-uplink.endpoints.json");
-    let end = std::time::Instant::now() + Duration::from_secs(9);
+    // NSS cancellation/reaping under WSL can exceed the resolver's five-second deadline.
+    let end = std::time::Instant::now() + Duration::from_secs(20);
     let mut failure_reported = false;
     while std::time::Instant::now() < end {
         let state = std::fs::read(&status).ok().and_then(|b| serde_json::from_slice::<Value>(&b).ok());
@@ -225,8 +738,11 @@ exit 0
     let result = env.engine.commit(&prepared, &reg).await;
     env.engine.supervisor.stop_all().await;
     assert!(failure_reported, "the per-peer DNS failure and retry must be observable while the revision stays applied");
-    assert_eq!(result.unwrap_err().code, "reload-failed", "local configuration failures must not be silently ignored");
-    assert_eq!(meduza_np_planner::state::AppliedState::load(&env.paths).unwrap().revision.as_deref(), Some("rev-000001"));
+    let outcomes = result.expect("a failed WireGuard instance does not abort other instances");
+    assert!(outcomes.iter().any(|o| o.instance == "wireguard/uplink" && !o.ok));
+    let applied = meduza_np_planner::state::AppliedState::load(&env.paths).unwrap();
+    assert_eq!(applied.instance_errors["wireguard/uplink"].code, "reload-failed");
+    assert_eq!(applied.revision.as_deref(), Some("rev-000002"));
     let _ = std::fs::remove_dir_all(root);
 }
 
@@ -282,7 +798,7 @@ async fn connection_delivery_errors_still_fail_apply() {
     let _native_env = NATIVE_TOOL_ENV.lock().await;
     use meduza_np_protocol::plan::CommandSpec;
 
-    for failure in ["spawn", "syntax", "resource", "wireguard-resource"] {
+    for failure in ["spawn", "syntax", "resource"] {
         let Some(env) = setup(&format!("connection-{failure}")) else { return };
         if failure == "wireguard-resource" && !env.have_wg {
             continue;

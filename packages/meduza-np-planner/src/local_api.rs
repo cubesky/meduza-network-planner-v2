@@ -119,7 +119,7 @@ pub async fn dispatch(p: &Arc<Planner>, req: LocalRequest, authorized: bool) -> 
                 .iter()
                 .map(|(id, a)| (id.clone(), json!({"package": a.package, "processes": a.processes.keys().collect::<Vec<_>>()})))
                 .collect();
-            ok(json!({"processes": p.engine.supervisor.statuses(), "probes": p.status.lock().unwrap().probes, "applied": owners}))
+            ok(json!({"processes": p.engine.supervisor.statuses(), "probes": p.effective_probes(), "applied": owners}))
         }
         "config.current" => match crate::state::load_last_good(&p.paths) {
             Ok(Some(lg)) => ok(json!({"digest": lg.digest, "config": crate::support::redact_value(lg.raw)})),
@@ -166,7 +166,7 @@ pub async fn dispatch(p: &Arc<Planner>, req: LocalRequest, authorized: bool) -> 
                         })
                         .collect();
                     ok(
-                        json!({"valid": true, "revision": prepared.revision, "warnings": prepared.warnings, "plans": if req.method == "plan.preview" { Value::Array(plans) } else { Value::Null }}),
+                        json!({"valid": prepared.instance_errors.is_empty(), "revision": prepared.revision, "warnings": prepared.warnings, "instanceErrors": prepared.instance_errors, "plans": if req.method == "plan.preview" { Value::Array(plans) } else { Value::Null }}),
                     )
                 }
                 Err(r) => ok(json!({"valid": false, "code": r.code, "message": r.message, "details": r.details})),
@@ -184,7 +184,16 @@ pub async fn dispatch(p: &Arc<Planner>, req: LocalRequest, authorized: bool) -> 
             let Some(instance) = req.params.get("instance").and_then(Value::as_str) else {
                 return LocalResponse::err(id, "invalid-params", "instance required");
             };
+            if req.method != "instance.stop" && p.instance_disabled(instance) {
+                return LocalResponse::err(id, "disabled", "instance is disabled in the applied configuration");
+            }
             let applied = crate::state::AppliedState::load(&p.paths).unwrap_or_default();
+            if req.method != "instance.stop" && applied.instance_errors.contains_key(instance) {
+                return match p.retry_instance(instance).await {
+                    Ok(()) => ok(json!({"instance":instance})),
+                    Err(message) => LocalResponse::err(id, "instance-retry-failed", message),
+                };
+            }
             let Some(inst) = applied.instances.get(instance) else {
                 return LocalResponse::err(id, "not-found", format!("{instance} is not applied"));
             };

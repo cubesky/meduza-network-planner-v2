@@ -12,7 +12,7 @@ export interface GraphVertex {
   id: string;
   label: string;
   subtitle?: string;
-  /** Place AS headings before router labels so routers can avoid their complete bounds. */
+  /** AS landmark label: always visible and avoids the fixed node/router panels. */
   labelPriority?: number;
   /** A managed node (also retained by a collapsed managed AS): root of the outward layout. */
   primary?: boolean;
@@ -566,7 +566,7 @@ export class ForceGraph3D {
     const lit = (id: string) => !this.highlight || activeNodes.has(id) || activeLinks.has(id);
     const t = performance.now() / 1000;
     const occupied: Array<{ x: number; y: number; w: number; h: number; weight?: number }> = [];
-    const asLabels: Array<{ x: number; y: number; w: number; h: number }> = [];
+    const reservedLabels: Array<{ x: number; y: number; w: number; h: number }> = [];
     // Camera-facing text belongs to its object's depth plane, just like the AS labels. Geometry at the same
     // depth wins ties; split long depth-spanning links so their foreground sections stay in front of text.
     const scene: Array<{ depth: number; layer: number; draw: () => void }> = [];
@@ -598,6 +598,26 @@ export class ForceGraph3D {
       } });
     };
 
+    // Node/router panels have one fixed attachment: just to the right of their projected glyph, vertically
+    // centered. Never score, cache, flip or displace them in response to nearby labels/links or viewport edges.
+    // Reserve their visible bounds first so AS headings yield to the node, rather than moving its label away.
+    const nodePanels = new Map<string, { x: number; y: number; w: number; h: number }>();
+    const emphasized = (id: string) => activeNodes.has(id) || hoveredNodes.has(id) || this.drag?.kind === "vertex" && this.drag.v.id === id;
+    for (const p of proj.values()) {
+      if (p.v.labelPriority || !p.visible) continue;
+      const r = p.v.radius * p.scale;
+      if (p.sx + r < 0 || p.sx - r > this.width || p.sy + r < 0 || p.sy - r > this.height) continue;
+      if (r >= 8) this.detailedLabels.add(p.v.id);
+      else if (r < 6) this.detailedLabels.delete(p.v.id);
+      if (!this.detailedLabels.has(p.v.id) && !emphasized(p.v.id)) continue;
+      const { w, h } = labelSize(p.v.label, p.v.subtitle);
+      const extent = r * (p.v.shape === "triangle" ? 1.1 : p.v.shape === "square" ? 0.9 : 1);
+      const box = { x: p.sx + extent + 6, y: p.sy - h / 2, w, h };
+      nodePanels.set(p.v.id, box);
+      occupied.push({ ...box, weight: 16 });
+      reservedLabels.push(box);
+    }
+
     // AS bubbles sit behind the scene; their labels join nodes and links at the cluster's projected depth.
     const bubbles = this.bubbles()
       .map((b) => ({ b, ...this.project(b.x, b.y, b.z) }))
@@ -625,13 +645,13 @@ export class ForceGraph3D {
         { x: sx + r + 6 + offset, y: sy - h / 2, w, h },
         { x: sx - r - w - 6 - offset, y: sy - h / 2, w, h },
       ]);
-      const clear = (box: typeof candidates[number]) => !asLabels.some((a) =>
+      const clear = (box: typeof candidates[number]) => !reservedLabels.some((a) =>
         box.x < a.x + a.w + 4 && box.x + w + 4 > a.x && box.y < a.y + a.h + 4 && box.y + h + 4 > a.y);
       let slot = this.groupLabelSlots.get(b.group.id);
       if (slot === undefined || !candidates[slot] || !clear(candidates[slot]!)) {
         let eligible = candidates.map((_, i) => i).filter((i) => clear(candidates[i]!));
         if (!eligible.length) {
-          candidates.push({ x: sx - w / 2, y: Math.min(...asLabels.map((a) => a.y)) - h - 6, w, h });
+          candidates.push({ x: sx - w / 2, y: Math.min(...reservedLabels.map((a) => a.y)) - h - 6, w, h });
           eligible = [candidates.length - 1];
         }
         const score = (index: number) => {
@@ -646,7 +666,7 @@ export class ForceGraph3D {
       const opacity = fog(depth) * (on ? 1 : 0.4);
       labelPanel(b.group.label, b.group.subtitle, b.group.color, depth, opacity, box, { kind: "group", id: b.group.id });
       occupied.push({ ...box, weight: 16 });
-      asLabels.push(box);
+      reservedLabels.push(box);
     }
 
     for (const l of this.links) {
@@ -731,18 +751,18 @@ export class ForceGraph3D {
       } });
       occupied.push({ x: p.sx - r - 3, y: p.sy - r - 3, w: (r + 3) * 2, h: (r + 3) * 2, weight: 30 });
     }
-    // Reserve a stable side of each vertex. Re-running greedy placement in depth/hover order every frame made
-    // labels flip sides or disappear near collisions. Hover only changes emphasis, never label geometry.
+    // Only AS vertices choose an avoidance slot. Node/router labels stay attached to their glyph regardless
+    // of AS title changes, depth-order crossings, hover, selection or overlapping links.
     order.sort((a, b) => (b.v.labelPriority ?? 0) - (a.v.labelPriority ?? 0) || a.v.id.localeCompare(b.v.id));
     for (const p of order) {
       const r = p.v.radius * p.scale;
       if (p.sx + r < 0 || p.sx - r > this.width || p.sy + r < 0 || p.sy - r > this.height) continue;
-      const emphasized = activeNodes.has(p.v.id) || hoveredNodes.has(p.v.id) || this.drag?.kind === "vertex" && this.drag.v.id === p.v.id;
-      // AS headings remain the overview landmarks. Router details reveal at a readable projected node size,
-      // or immediately on hover/selection even in the overview; hover never changes a panel's geometry.
-      if (r >= 8) this.detailedLabels.add(p.v.id);
-      else if (r < 6) this.detailedLabels.delete(p.v.id);
-      if (!p.v.labelPriority && !this.detailedLabels.has(p.v.id) && !emphasized) continue;
+      const opacity = fog(p.depth) * (lit(p.v.id) || emphasized(p.v.id) ? 1 : 0.3);
+      if (!p.v.labelPriority) {
+        const box = nodePanels.get(p.v.id);
+        if (box) labelPanel(p.v.label, p.v.subtitle, text, p.depth, opacity, box, { kind: "vertex", id: p.v.id });
+        continue;
+      }
       const { w, h } = labelSize(p.v.label, p.v.subtitle);
       // Keep slot indexes stable, including when a long AS name requires a more distant position.
       const candidates = Array.from({ length: 16 }, (_, i) => i * 22).flatMap((offset) => [
@@ -763,14 +783,14 @@ export class ForceGraph3D {
           edges.reduce((sum, e) => sum + segmentBoxOverlap(e.sx, e.sy, e.ex, e.ey, b) * e.width * 4, 0);
       };
       const previous = this.labelSlots.get(p.v.id);
-      const clearOfAs = (b: typeof candidates[number]) => !asLabels.some((a) =>
+      const clearOfAs = (b: typeof candidates[number]) => !reservedLabels.some((a) =>
         b.x < a.x + a.w + 4 && b.x + b.w + 4 > a.x && b.y < a.y + a.h + 4 && b.y + b.h + 4 > a.y);
       let slot = previous;
       if (slot === undefined || !candidates[slot] || !clearOfAs(candidates[slot]!)) {
         let eligible = candidates.map((_, i) => i).filter((i) => clearOfAs(candidates[i]!));
         // In very dense views extend beyond every AS block rather than accepting an overlapping label.
         if (!eligible.length) {
-          const y = Math.max(...asLabels.map((a) => a.y + a.h)) + 8;
+          const y = Math.max(...reservedLabels.map((a) => a.y + a.h)) + 8;
           candidates.push({ x: p.sx - w / 2, y, w, h });
           eligible = [candidates.length - 1];
         }
@@ -781,8 +801,7 @@ export class ForceGraph3D {
       // to the viewport as an overlay while the router continues to move through the scene.
       const box = candidates[slot]!;
       occupied.push({ ...box, weight: 16 });
-      if (p.v.labelPriority) asLabels.push(box);
-      const opacity = fog(p.depth) * (lit(p.v.id) || emphasized ? 1 : 0.3);
+      reservedLabels.push(box);
       labelPanel(p.v.label, p.v.subtitle, p.v.labelPriority ? p.v.color : text, p.depth, opacity, box, { kind: "vertex", id: p.v.id });
     }
     scene.sort((a, b) => b.depth - a.depth || a.layer - b.layer);

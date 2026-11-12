@@ -166,7 +166,7 @@ function StatusTab(props: { n: NodeDetail; instances: Inst[]; canAct: boolean; r
             return (
               <span class="row" style={{ justifyContent: "flex-end", flexWrap: "nowrap" }}>
                 <DetailsButton item={i} />
-                {props.canAct && target && (
+                {props.canAct && target && i.state !== "disabled" && (
                   <Button small onClick={async () => (await ask(t("Restart {name}?", { name: proc ?? target }), { ok: t("Restart") })) && props.restart(target, proc, proc ?? target)}>{t("Restart")}</Button>
                 )}
               </span>

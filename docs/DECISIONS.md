@@ -2166,3 +2166,118 @@ translucency, zoom detail, unchanged report order, collapsed managed roots, vani
 scrollbars. Visual inspection verifies outward separation and avoids the observed AS-heading collisions.
 Evidence: target/check-topology-outward-tests.log, target/check-topology-outward-browser.log and the
 topology-outward-default/all/selected.png previews. Source-only; no Git submission or production deployment.
+
+## D93 — Attach Node labels directly to their projected glyphs (2026-11-13)
+
+The user reports labels jumping again after D92 and explicitly requests direct marking beside each Node.
+The cached avoidance algorithm still invalidates a router's slot whenever an AS panel crosses it; that can
+change sides or displace text far from its owner even without reheating the physical layout. Remove that
+placement policy for ordinary nodes and external router/IP labels. Their panel starts six screen pixels
+after the projected glyph's right edge and stays vertically centered. Respect each glyph shape's actual
+horizontal extent. Geometry depends only on the owner/projection and panel size, never neighboring panels,
+crossing links, metadata order, selection or a viewport edge. Keep clipping rather than edge-pinning.
+
+Keep D92's zoom hysteresis, hover/selection disclosure, shared typography/translucency, depth ordering,
+label hit testing and pointer-offset dragging. Precompute the visible fixed panels before placing AS
+headings; AS clusters and AS-path/collapsed-AS vertices yield to their reserved bounds. Only AS labels
+retain avoidance slots. This intentionally supersedes moving Node labels to avoid other scene content.
+
+24 controller regressions pass, including anchored placement through AS movement, rename/depth crossing,
+link overlap, report reordering, orbit, zoom and resize; AS headings still avoid fixed router panels.
+Real Chrome additionally exercises nine AS/camera cases on the actual Manager and verifies label hover,
+click, default/all framing, responsive sizing and stable polling. Typechecks and production build pass.
+Evidence: target/check-node-label-anchor-tests.log, target/check-node-label-anchor-browser.log,
+target/check-node-label-anchor-build.log and target/node-label-anchor-selected.png. Source-only;
+no Git submission or production deployment.
+
+## D94 — Ignore disabled objects when planner collects required secrets (2026-11-13)
+
+Read-only SSH diagnosis of the user's OpenWrt node finds no OpenVPN processes, management sockets,
+generated directories or applied OpenVPN instances. The revision is in-sync, but persistent last-good
+state records heldBack=[openvpn]. Both the SSH shell and planner have /usr/sbin in PATH; the installed
+openvpn-openssl binary is /usr/sbin/openvpn (2.7.4), and doctor resolves that system provider correctly.
+
+There are eight enabled OpenVPN instances with all required secrets delivered, plus three disabled
+instances retaining references whose secrets Manager deliberately does not deliver. Manager's
+collectSecretRefs already skips explicit enabled=false objects (D58). Planner's collect_refs does not,
+so missing keys for disabled entries hold back the entire feature before the plugin is planned. Calling
+the existing installed plugin's pure plan operation with the delivered configuration produces all eight
+enabled plans without writing generated files or launching any daemon, confirming the gating mismatch.
+
+Skip explicit enabled=false objects recursively in planner's shared secret collector, aligning both
+held-back checks and local-keystore loading with Manager delivery. Keep default/explicitly enabled
+references and plural refs; genuine missing active keys must still hold back the feature and become
+plannable once a local key is supplied. Do not deliver disabled secrets or weaken active validation.
+
+Two unit tests reproduce the eight-active/three-disabled case and nested service/peer refs. A real-plugin
+engine regression fails before the fix and passes after it, verifies disabled WireGuard instances/peers
+do not block the active plan, and retains genuine-active-missing/local-key recovery and unrelated services.
+All nine OpenVPN library tests pass. Broader engine checks pass 7/8: the existing WireGuard DNS-observation
+test does not observe resolution-failed within its nine-second window and also fails in isolation in this
+local environment; it is not changed by this fix. Do not claim the full engine suite passes.
+
+Evidence: target/openwrt-openvpn-reference-audit.json and openwrt-openvpn-plan-readonly.json contain only
+reference identifiers and plan names; target/check-disabled-secret-refs-before/after.log record red/green;
+target/check-openwrt-openvpn-regression.log and check-openwrt-openvpn-final.log record broader results.
+No device configuration changes, restarts, key generation, package installation or production deployment;
+only source is fixed. Native startup and peer-handshake acceptance remain for a subsequent deployment.
+
+## D95 — isolate WireGuard and OpenVPN application failures by instance (2026-11-13)
+
+A missing active key, malformed instance, native check, resource operation, required reload or failed
+exec previously could hold back an entire tunnel service or abort the revision. Prepare each enabled
+tunnel separately, then validate the surviving group for shared device/port collisions and check the
+combined generation plans. Preserve the complete configuration context for other adapters, including
+FRR's lookup of OpenVPN Access pools. Disabled references retain D94's delivery semantics.
+
+Commit records a failed tunnel as an instance outcome and continues subsequent instances. Prepare or
+native-check failures retain previously applied files and processes; failures during runtime delivery
+stop and clean only that instance's owned resources/processes. Incomplete cleanup retains ownership
+intent. Shared storage/journal failures and errors outside these two tunnel adapters retain normal
+revision recovery. This replaces whole-service holdback for genuine missing active tunnel keys.
+
+Persist redacted instanceErrors in applied.json and overlay them on the existing instance status rows
+for both node reports and the local instances API. Previously applied instances are degraded; newly
+failed instances are down. Package health includes these errors. Probes call the adapters separately
+per instance so one malformed entry cannot erase other instances' observations. No report schema or
+UI-specific error store is introduced.
+
+Retry failed instances independently with exponential backoff (five-second base, sixty-second cap,
+jitter), respecting maintenance, pending revisions and the apply mutex. Healthy native checks,
+reloads and processes are skipped during scoped retries. Instance start/restart jobs and local API
+calls can retry failed delivery even when no process was ever started. Drain revisions queued during
+retry. Successful retry clears its error; other failures retain their retry deadlines and attempts.
+Same-revision retries stage a new generation instead of deleting the live directory; prune to bounded
+history after success.
+
+CI builds the real OpenVPN adapter alongside WireGuard for engine tests. Regressions cover both
+adapters' malformed/invalid/missing-key and shared device/port cases, syntax/resource/reload/exec
+failure isolation, healthy PID stability, retained old files, scoped recovery, persisted status,
+local/report visibility, automatic and manual key recovery, and secret redaction. The existing DNS
+integration wait is increased from nine to twenty seconds: local WSL NSS cancellation/reaping was
+observed to publish its timeout state after twelve seconds; the resolver deadline remains unchanged.
+No production configuration, package or service is changed as part of this source fix.
+
+## D96 — disabled tunnel entries take precedence over runtime recovery (2026-11-13)
+
+Disabled services, instances and WireGuard peers may keep unfinished operational fields and dormant
+secret references. They must neither block active entries nor reserve their device/port/key values.
+WireGuard/OpenVPN now use SDK active_service to filter disabled entries before typed parsing, while
+their pure validators also skip explicitly disabled typed entries. The original request is preserved.
+Planner counts only active instance identities when preparing; synthetic error identities avoid real IDs.
+
+Manager validates an active projection of tunnel configuration and restores original array indices in
+schema error paths. Connection policy and OpenVPN compiler checks skip dormant entries. Stored drafts
+and disabled snapshot fields remain available for editing; secret delivery still skips disabled refs.
+Re-enabling restores all operational checks. Other adapters keep their existing validation behavior.
+
+Planner's raw configuration supplies disabled status rows even without a plugin/provider. These rows
+override cached failures, clear obsolete error/retry/traffic details, propagate parent disablement and
+remove stale rows for deleted entries. Disabled peers do not degrade the package's other healthy
+instances. Applying a disable removes the instance's owned processes/resources; a disabled peer is
+omitted from wg syncconf. Re-enabling renders/applies the entry again.
+
+Automatic retries and local/Manager start/restart requests check applied activation state so even a
+stale persisted failure cannot revive a disabled entry. Probes skip disabled instances. Manager status
+rows and shared Manager/Dashboard collection forms hide restart actions for disabled entries, retaining
+configuration editing and enable controls. No production changes or Git commits are made here.

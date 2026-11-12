@@ -10,6 +10,58 @@ scheduled "continue" task) must:
 
 Design decisions live in `docs/DECISIONS.md`.
 
+### 2026-11-13 — D96: disabled tunnel entries across publish, runtime and status
+
+Completed disabled-state handling for WireGuard/OpenVPN services/instances and WireGuard peers.
+Manager policy, active-projection schema validation and OpenVPN compiler checks ignore dormant
+operational fields while preserving drafts/snapshots and original error indices. Secret delivery
+retains D94 semantics. SDK active_service filters disabled entries before typed parsing; the tunnel
+validators also skip disabled typed entries. Dormant duplicate identities/keys/devices do not block
+active entries. Runtime preparation, native generation and probing omit disabled entries.
+
+Added planner tunnels.rs to resolve configured activation and supply disabled rows from raw config.
+Parent disablement propagates to children, cached failures/retry/traffic details are cleared and
+removed entries disappear. Package health ignores disabled peers and stale disabled failures.
+Applied disables stop owned processes/resources; peers are removed from wg syncconf. Retry and local/
+Manager start/restart guards cannot revive disabled instances even with stale persisted errors.
+Manager status rows and shared Manager/Dashboard collection forms hide their restart actions while
+retaining editing/enable controls. No production changes and no Git staging/commit.
+
+Verification: 99 Rust tests pass across SDK/planner/WireGuard/OpenVPN (11 SDK, 49 planner unit,
+14 engine integration, 15 WireGuard, 10 OpenVPN), plus all-target Clippy with -D warnings. Added both
+tunnel types' run/fail→disable→re-enable lifecycles, stale retry prevention, cached status cleanup,
+native peer removal, dormant parsing/resource conflicts and package-health regressions. The final
+peer health assertion also passes in isolation. Manager's sync/config/import/install-progress files
+pass all 29 tests, including dormant publish/secret exclusion and original schema-path checks.
+Manager server/web and Dashboard web typechecks, both Vite production builds (Dashboard compression
+included), native rustfmt and git diff --check pass. Evidence: target/check-disabled-entries-all.log,
+check-disabled-peer-health.log, check-disabled-entries-manager-all.log and check-disabled-*-build.log.
+
+### 2026-11-13 — D95: WireGuard/OpenVPN per-instance failure isolation
+
+Completed the user's requirement that a failed tunnel must not prevent other instances from starting.
+Prepare enabled instances independently, validate surviving groups for device/port collisions, and
+retain full cross-service context (notably FRR Access pools). Missing active keys now hold back only
+their owning tunnel. Commit isolates native checks, network resources, reload and exec failures;
+preflight failures preserve prior instance files/processes, runtime cleanup touches only that owner.
+Persist sanitized instance errors and merge them into Manager reports and Dashboard/local API rows.
+Split tunnel probes by instance and include apply errors in package health.
+
+Added bounded, jittered exponential retry of failed instances, maintenance/revision guards, draining of
+queued revisions, and manual start/restart recovery. Scoped retries skip healthy checks/processes.
+Same-revision retries stage fresh directories and prune bounded history after commit. CI/release test
+builds include the actual OpenVPN adapter. Updated AGENT.md, decisions and operations documentation.
+
+Verification: `CI=true cargo test --offline --locked -p meduza-np-planner -p meduza-np-wireguard
+-p meduza-np-openvpn` passes all 82 tests (47 planner unit, 12 engine integration, 14 WireGuard,
+9 OpenVPN). The engine tests cover both adapters' prepare/group conflicts, delivery failures, retained
+old files, stable healthy PIDs, same-revision scoped retry, report/local API visibility and automatic/
+manual missing-key recovery. Clippy for the same packages/all targets with `-D warnings`, native
+rustfmt check and `git diff --check` pass. Evidence: target/check-instance-isolation-all.log.
+The previously failing DNS integration passes with a twenty-second observation window; local WSL
+NSS timeout cancellation/reaping was independently observed to publish after twelve seconds, with
+the production resolver deadline unchanged. No production device changes and no Git staging/commit.
+
 ## Local environment notes
 
 - A user-provided Linux test VPS may be available (details in the agent's local project memory, not in the repo).
@@ -1434,3 +1486,29 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   viewport sizes without page scrollbars, collapsed managed roots and vanished-focus recovery. Evidence: target/check-topology-outward-tests.log,
   target/check-topology-outward-browser.log and target/topology-outward-*.png.
   Source-only; no Git submission or production deployment.
+
+
+- 2026-11-13 (per the user's renewed Node-label jumping report) Fix Node labels beside their owners (D93).
+  Replace ordinary node/router label avoidance slots with a fixed right-edge attachment and vertical
+  centering. No side switching, collision displacement or viewport-edge pinning; retain zoom/hover/selection
+  disclosure, depth-sorted translucent panels and label interaction/drag offsets. Reserve the fixed panels
+  before AS layout so AS titles yield instead of moving Node labels. Supersede obsolete Node-avoidance tests
+  with placement stability across moving/renamed AS headings, depth crossings, links, report order, orbit,
+  zoom, resize and clipping. All 24 graph tests, typechecks and production build pass. Actual Chrome verifies
+  nine AS/camera attachment cases and existing interaction/framing/responsive regressions.
+  Evidence: target/check-node-label-anchor-tests.log, target/check-node-label-anchor-browser.log,
+  target/check-node-label-anchor-build.log and target/node-label-anchor-selected.png.
+  Source-only; no Git submission or production deployment.
+
+- 2026-11-13 (per the user's OpenWrt OpenVPN investigation) Align planner secret scans with Manager (D94).
+  Read-only SSH confirms the system OpenVPN binary/provider and planner PATH are correct. Eight active
+  OpenVPN instances have their secrets, but three disabled entries retain intentionally undelivered refs;
+  planner scans them and persists heldBack=[openvpn], with no native process/config ever scheduled.
+  Pure device-side plugin plan returns eight plans without applying them. Fix the shared collector to
+  skip explicit disabled objects, including instances/peers/services, while preserving active-key gating
+  and node-held key recovery. Two unit tests and a real-plugin engine regression reproduce/fix the issue;
+  nine OpenVPN library tests pass. The broader engine run is 7/8: an existing WireGuard DNS-observation
+  timing test also fails in isolation locally and is left unchanged. Evidence: target/check-disabled-secret-refs-*.log,
+  target/check-openwrt-openvpn-*.log and identifier/plan-only target/openwrt-openvpn-*.json.
+  No remote mutations, Git submission or deployment. Actual OpenVPN startup/handshakes still need validation
+  after deploying the corrected planner or a Manager configuration workaround.

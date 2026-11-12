@@ -319,7 +319,7 @@ impl Instance {
 }
 
 pub fn load(req: &PluginRequest) -> Result<OpenVpnConfig, PluginError> {
-    Ok(req.service::<OpenVpnConfig>("openvpn")?.unwrap_or_default())
+    Ok(req.active_service::<OpenVpnConfig>("openvpn")?.unwrap_or_default())
 }
 
 fn secret_pem_ok(req: &PluginRequest, id: &str, marker: &str) -> Option<bool> {
@@ -337,13 +337,16 @@ fn require_secret(v: &mut Validator, req: &PluginRequest, path: String, id: &Opt
 }
 
 pub fn validate(cfg: &OpenVpnConfig, req: &PluginRequest) -> Vec<ValidationError> {
+    if !cfg.enabled {
+        return Vec::new();
+    }
     let mut v = Validator::new();
     let mut ids = BTreeSet::new();
     let mut devices = BTreeSet::new();
     let mut listeners = BTreeSet::new();
     let pools: Vec<(String, Ipv4Net)> =
         cfg.instances.iter().filter(|i| i.enabled).filter_map(|i| i.access.as_ref().map(|a| (i.id.to_string(), a.pool))).collect();
-    for (n, inst) in cfg.instances.iter().enumerate() {
+    for (n, inst) in cfg.instances.iter().enumerate().filter(|(_, i)| i.enabled) {
         let b = format!("/instances/{n}");
         v.check(ids.insert(inst.id.clone()), format!("{b}/id"), "duplicate id");
         let dev = inst.device();
@@ -1020,6 +1023,24 @@ mod tests {
                 "secrets": secrets()
             }),
         )
+    }
+
+    #[test]
+    fn disabled_instances_can_keep_unfinished_runtime_settings() {
+        let mut r = req(json!([
+            {"id":"live","kind":"site2site","role":"server","staticKeyRef":"tc","port":1194,
+             "ifconfig":{"local":"10.8.0.1","remote":"10.8.0.2"}},
+            {"id":"live","enabled":false,"kind":"unfinished","port":"invalid","staticKeyRef":"missing","ifconfig":false}
+        ]));
+        let cfg = load(&r).unwrap();
+        assert!(validate(&cfg, &r).is_empty());
+        assert_eq!(plan(&cfg, &r).unwrap().len(), 1);
+        r.config.services.get_mut("openvpn").unwrap()["instances"][1]["enabled"] = json!(true);
+        assert!(load(&r).is_err());
+        r.config.services.get_mut("openvpn").unwrap()["enabled"] = json!(false);
+        let cfg = load(&r).unwrap();
+        assert!(validate(&cfg, &r).is_empty());
+        assert!(plan(&cfg, &r).unwrap().is_empty());
     }
 
     #[test]

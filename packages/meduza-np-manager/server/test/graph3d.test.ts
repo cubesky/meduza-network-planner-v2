@@ -320,10 +320,9 @@ test("topology: label panels are translucent and foreground nodes/links occlude 
   ], [{ id: "front", source: "left", target: "right", color: "#front-link", length: 100, width: 2, particles: 0 }]);
   graph.yaw = graph.pitch = 0; graph.distance = 600; graph.target = { x: 0, y: 0, z: 0 };
   Object.assign(graph.vertices.get("far"), { x: 0, y: 0, z: 0 });
-  Object.assign(graph.vertices.get("near"), { x: 0, y: 16, z: 200 });
-  Object.assign(graph.vertices.get("left"), { x: -100, y: 16, z: 200 });
-  Object.assign(graph.vertices.get("right"), { x: 100, y: 16, z: 200 });
-  graph.labelSlots.set("far", 0); // Force an overlap to exercise depth handling even when no clear slot exists.
+  Object.assign(graph.vertices.get("near"), { x: 24, y: 0, z: 200 });
+  Object.assign(graph.vertices.get("left"), { x: -100, y: 0, z: 200 });
+  Object.assign(graph.vertices.get("right"), { x: 100, y: 0, z: 200 });
   graph.draw();
   const label = paints.findIndex((p) => p.kind === "text" && p.text === "Distant IP");
   const node = paints.findIndex((p) => p.kind === "fill" && p.color === "#near");
@@ -335,18 +334,20 @@ test("topology: label panels are translucent and foreground nodes/links occlude 
   graph.destroy();
 });
 
-test("topology: label placement avoids a crossing link and keeps its choice through hover", () => {
+test("topology: node labels stay attached when a link crosses them, without switching sides on hover", () => {
   const { graph, labels } = setup(800, 500);
   graph.setData(["a", "left", "right"].map((id) => ({ id, label: id, radius: 10, shape: "circle", color: "#5cb" })), [
     { id: "crossing", source: "left", target: "right", color: "#front-link", length: 100, width: 2, particles: 0 },
   ]);
   graph.yaw = graph.pitch = 0; graph.distance = 600; graph.target = { x: 0, y: 0, z: 0 };
   Object.assign(graph.vertices.get("a"), { x: 0, y: 0, z: 0 });
-  Object.assign(graph.vertices.get("left"), { x: -200, y: 24.5, z: 0 });
-  Object.assign(graph.vertices.get("right"), { x: 200, y: 24.5, z: 0 });
+  Object.assign(graph.vertices.get("left"), { x: -200, y: 0, z: 0 });
+  Object.assign(graph.vertices.get("right"), { x: 200, y: 0, z: 0 });
   graph.draw();
   const before = { ...labels.find((l) => l.text === "a")! };
-  assert.ok(before.y < 250, "choose the clear side instead of covering the link below the router");
+  const box = graph.labelHits.find((p: any) => p.item.id === "a");
+  assert.equal(box.x, 416, "label panel starts six pixels after the projected glyph's right edge");
+  assert.equal(box.y + box.h / 2, 250, "label remains centered on its node even across a link");
   graph.hover = { kind: "vertex", id: "a" }; graph.draw();
   assert.deepEqual(labels.find((l) => l.text === "a"), before);
   graph.destroy();
@@ -365,7 +366,6 @@ test("topology: depth-spanning links draw their far and near sections on either 
   const label = paints.findIndex((p) => p.kind === "text" && p.text === "a");
   assert.ok(paints.slice(0, label).some((p) => p.kind === "stroke" && p.color === "#depth-link"));
   assert.ok(paints.slice(label + 1).some((p) => p.kind === "stroke" && p.color === "#depth-link"));
-  graph.labelSlots.set("a", 2);
   graph.vertices.get("a").x = 360;
   graph.draw();
   const before = labels.find((l) => l.text === "a")!.x;
@@ -394,31 +394,31 @@ test("topology: AS titles and names occupy separate lines in clusters and collap
   graph.destroy();
 });
 
-test("topology: cached router labels move out of AS title/name blocks when those blocks grow", () => {
-  const { graph, labels } = setup(800, 500);
+test("topology: AS vertices yield to fixed router labels instead of displacing them", () => {
+  const { graph } = setup(800, 500);
   graph.setData([
     { id: "a", label: "router.example", radius: 10, shape: "triangle", color: "#5cb" },
     { id: "b", label: "AS65100", subtitle: "Upstream network", labelPriority: 1, radius: 10, shape: "diamond", color: "#5cb" },
   ], []);
   graph.yaw = graph.pitch = 0; graph.distance = 600; graph.target = { x: 0, y: 0, z: 0 };
   Object.assign(graph.vertices.get("a"), { x: 0, y: 0, z: 0 });
-  Object.assign(graph.vertices.get("b"), { x: 0, y: -25, z: 0 });
-  graph.labelSlots.set("a", 1); // previously clear placement now occupied by a named AS
+  Object.assign(graph.vertices.get("b"), { x: 45, y: 0, z: 0 });
+  graph.labelSlots.set("b", 2); // A previous AS slot now collides with the fixed router panel.
   graph.draw();
-  const as = labels.find((l) => l.text === "AS65100")!, name = labels.find((l) => l.text === "Upstream network")!;
-  const router = labels.find((l) => l.text === "router.example")!;
-  assert.ok(as && name);
-  const bounds = { left: as.x - 5, right: as.x + "Upstream network".length * 7 + 5, top: as.y - 10, bottom: name.y + 10 };
-  assert.ok(router.x + "router.example".length * 7 < bounds.left || router.x > bounds.right || router.y + 9 < bounds.top || router.y - 9 > bounds.bottom,
-    "router ID/IP/hostname text cannot overlap either AS line");
-  const position = { ...router };
+  const box = (id: string) => graph.labelHits.find((p: any) => p.item.kind === "vertex" && p.item.id === id);
+  const router = { ...box("a") }, as = box("b");
+  assert.equal(router.x, 417);
+  assert.equal(router.y + router.h / 2, 250);
+  assert.ok(as.x + as.w <= router.x || router.x + router.w <= as.x || as.y + as.h <= router.y || router.y + router.h <= as.y);
+  assert.notEqual(graph.labelSlots.get("b"), 2, "the AS moves out of the anchored router's bounds");
+  assert.equal(graph.labelSlots.has("a"), false, "node labels never participate in avoidance slots");
   graph.hover = { kind: "vertex", id: "b" }; graph.highlight = "b"; graph.draw();
-  assert.deepEqual(labels.find((l) => l.text === "router.example"), position, "hover keeps the clear placement stable");
+  assert.deepEqual(box("a"), router, "AS hover cannot relocate the node's panel");
   graph.destroy();
 });
 
-test("topology: a renamed AS cluster invalidates overlapping router label slots without reheating layout", () => {
-  const { graph, labels } = setup(800, 500);
+test("topology: a renamed AS cluster yields to an anchored router without reheating layout", () => {
+  const { graph } = setup(800, 500);
   const vertices = [
     { id: "member", label: "member", group: "asn:1", radius: 10, shape: "circle", color: "#5cb" },
     { id: "external", label: "203.0.113.1", radius: 10, shape: "triangle", color: "#5cb" },
@@ -427,19 +427,18 @@ test("topology: a renamed AS cluster invalidates overlapping router label slots 
   graph.yaw = graph.pitch = 0; graph.distance = 600; graph.target = { x: 0, y: 0, z: 0 };
   Object.assign(graph.vertices.get("member"), { x: 0, y: 0, z: 0 });
   Object.assign(graph.vertices.get("external"), { x: 50, y: -69, z: 0 });
-  graph.labelSlots.set("external", 2);
   graph.draw();
-  assert.equal(graph.labelSlots.get("external"), 2, "short name leaves the previous slot clear");
+  const router = { ...graph.labelHits.find((p: any) => p.item.id === "external") };
+  assert.equal(router.x, 467);
+  assert.equal(router.y + router.h / 2, 181);
   graph.alpha = 0;
   const name = "Long registered upstream network name";
   graph.setData(vertices, [], [{ id: "asn:1", label: "AS65100", subtitle: name, color: "#5cb" }]);
   graph.draw();
   assert.equal(graph.alpha, 0, "renaming metadata does not restart physics");
-  assert.notEqual(graph.labelSlots.get("external"), 2, "a cached slot must avoid the longer subtitle");
-  const title = labels.find((l) => l.text === "AS65100")!, subtitle = labels.find((l) => l.text === name)!;
-  const router = labels.find((l) => l.text === "203.0.113.1")!;
-  const left = title.x - name.length * 7 / 2 - 8, right = title.x + name.length * 7 / 2 + 8;
-  assert.ok(router.x + "203.0.113.1".length * 7 < left || router.x > right || router.y + 9 < title.y - 12 || router.y - 9 > subtitle.y + 12);
+  assert.deepEqual(graph.labelHits.find((p: any) => p.item.id === "external"), router, "growing AS text cannot move the router label");
+  const as = graph.labelHits.find((p: any) => p.item.kind === "group");
+  assert.ok(as.x + as.w <= router.x || router.x + router.w <= as.x || as.y + as.h <= router.y || router.y + router.h <= as.y);
   graph.destroy();
 });
 
@@ -472,7 +471,8 @@ test("topology: node panels share AS rendering, reveal by zoom/hover/selection a
   assert.deepEqual(clicked, { kind: "vertex", id: "node" }, "press/release selects the label's owner even if a frame cleared hover");
   event("pointerleave"); graph.draw();
   assert.ok(!labels.some((l) => l.text === "Managed router"), "hover is not a persistent detail toggle");
-  graph.highlight = "node"; graph.labelSlots.set("node", 10); graph.draw();
+  graph.highlight = "node"; graph.draw();
+  assert.equal(graph.labelSlots.has("node"), false, "revealed labels are attached directly, without a placement slot");
   assert.ok(labels.some((l) => l.text === "Managed router"), "click selection keeps the node panel visible");
   assert.equal(paints.filter((p) => p.kind === "stroke" && p.color === "#fff").length, 1, "only the selection ring is stroked, never a panel leader line");
   graph.highlight = null; graph.distance = 600; graph.draw();
@@ -481,6 +481,45 @@ test("topology: node panels share AS rendering, reveal by zoom/hover/selection a
   assert.ok(labels.some((l) => l.text === "Managed router"), "detail hysteresis prevents flicker around the zoom threshold");
   graph.distance = 1200; graph.draw();
   assert.ok(!labels.some((l) => l.text === "Managed router"), "zooming well out returns to the AS overview");
+  graph.destroy();
+});
+
+test("topology: node labels never change side or offset when AS panels move, grow or cross depths", () => {
+  const { graph, resize } = setup(800, 500);
+  const vertices = [
+    { id: "node", label: "Fixed node label", primary: true, radius: 10, shape: "circle", color: "#5cb" },
+    { id: "as", label: "AS65001", subtitle: "ISP", labelPriority: 1, radius: 10, shape: "diamond", color: "#5cb" },
+  ];
+  graph.setData(vertices, []);
+  graph.yaw = graph.pitch = 0; graph.distance = 600; graph.target = { x: 0, y: 0, z: 0 };
+  const node = graph.vertices.get("node"), as = graph.vertices.get("as");
+  Object.assign(node, { x: 0, y: 0, z: 0 }); graph.draw();
+  const box = () => graph.labelHits.find((p: any) => p.item.id === "node");
+  const attachment = { ...box() };
+  for (const [x, y, z] of [[0, 25, 0], [40, 0, 200], [-40, -25, -200], [40, 0, -0.001], [40, 0, 0.001]]) {
+    Object.assign(as, { x, y, z });
+    graph.hover = { kind: "vertex", id: "as" }; graph.highlight = "as"; graph.draw();
+    assert.deepEqual(box(), attachment, "nearby AS geometry cannot move the node's panel");
+  }
+  graph.alpha = 0;
+  graph.setData([...vertices].reverse().map((v) => v.id === "as" ? { ...v, subtitle: "A much longer registered AS name" } : v), []);
+  graph.draw();
+  assert.deepEqual(box(), attachment, "report reordering and an AS rename preserve the exact attachment");
+  assert.equal(graph.alpha, 0);
+  graph.highlight = "node";
+  for (const [yaw, pitch, distance] of [[0.6, -0.3, 900], [-0.6, 0.3, 500], [0, 0, 1200]]) {
+    graph.yaw = yaw; graph.pitch = pitch; graph.distance = distance; graph.draw();
+    const p = graph.project(node.x, node.y, node.z), panel = box();
+    assert.ok(Math.abs(panel.x - (p.sx + node.radius * p.scale + 6)) < 1e-9, "orbit and zoom retain a fixed glyph-edge attachment");
+    assert.equal(panel.y + panel.h / 2, p.sy);
+  }
+  graph.viewFrame = null; resize(1000, 600); graph.draw();
+  const p = graph.project(node.x, node.y, node.z);
+  assert.ok(Math.abs(box().x - p.sx - node.radius * p.scale - 6) < 1e-9, "resize keeps the attachment instead of choosing a new slot");
+  graph.yaw = graph.pitch = 0; graph.distance = 600; graph.target = { x: 0, y: 0, z: 0 };
+  node.x = 490; graph.draw();
+  assert.ok(box().x > 1000, "a node at the viewport edge keeps its label on the same side; the canvas clips it");
+  assert.equal(graph.labelSlots.has("node"), false);
   graph.destroy();
 });
 

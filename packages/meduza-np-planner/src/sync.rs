@@ -415,23 +415,122 @@ impl Planner {
         }
     }
 
+    /// Include failed instances even when they never produced a process or a successful probe.
+    pub fn effective_probes(&self) -> Vec<InstanceStatus> {
+        let mut probes = self.status.lock().unwrap().probes.clone();
+        let config = load_last_good(&self.paths).ok().flatten().map(|lg| lg.config);
+        if let Ok(mut applied) = crate::state::AppliedState::load(&self.paths) {
+            if let Some(config) = &config {
+                applied.instance_errors.retain(|id, _| crate::tunnels::is_enabled(config, id) == Some(true));
+            }
+            applied.overlay_instance_errors(&mut probes);
+        }
+        if let Some(config) = config {
+            crate::tunnels::overlay_disabled(&config, &mut probes);
+        }
+        probes
+    }
+
+    pub fn instance_disabled(&self, id: &str) -> bool {
+        load_last_good(&self.paths).ok().flatten().is_some_and(|lg| crate::tunnels::is_enabled(&lg.config, id) == Some(false))
+    }
+
+    /// A manual start/restart of an instance that failed delivery retries its configuration too.
+    pub async fn retry_instance(self: &Arc<Self>, instance: &str) -> Result<(), String> {
+        let guard = self.apply_lock.lock().await;
+        let result = self.retry_instances(Some(instance)).await;
+        drop(guard);
+        let queued = self.queued.lock().unwrap().take();
+        if let Some((raw, digest, revision)) = queued {
+            let me = self.clone();
+            tokio::spawn(async move {
+                me.offer(raw, digest, revision).await;
+            });
+        }
+        result
+    }
+
+    async fn retry_instances(&self, requested: Option<&str>) -> Result<(), String> {
+        let applied = crate::state::AppliedState::load(&self.paths).map_err(|e| e.to_string())?;
+        let lg = load_last_good(&self.paths).map_err(|e| e.to_string())?;
+        if requested.is_some_and(|id| lg.as_ref().is_some_and(|lg| crate::tunnels::is_enabled(&lg.config, id) == Some(false))) {
+            return Err("instance is disabled in the applied configuration".into());
+        }
+        {
+            let st = self.status.lock().unwrap();
+            if st.maintenance.is_some()
+                || st.state == SyncState::ApplyFailed
+                || st.pointers.desired_revision.as_ref().is_some_and(|r| Some(r.as_str()) != applied.revision.as_deref())
+            {
+                return Err("instance retry waits for maintenance or the desired revision to finish".into());
+            }
+        }
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+        let due: BTreeSet<_> = applied
+            .instance_errors
+            .iter()
+            .filter(|(id, _)| lg.as_ref().is_some_and(|lg| crate::tunnels::is_enabled(&lg.config, id) == Some(true)))
+            .filter(|(id, e)| requested.map_or(e.retry_at_unix <= now, |wanted| id.as_str() == wanted))
+            .map(|(id, _)| id.clone())
+            .collect();
+        if due.is_empty() {
+            return Ok(());
+        }
+        let lg = lg.ok_or("no applied configuration to retry")?;
+        if applied.config_digest.as_deref() != Some(lg.digest.as_str()) {
+            return Err("instance retry waits for configuration recovery".into());
+        }
+        let registry = self.registry();
+        let mut prepared = self.engine.prepare(&lg.raw, &lg.digest, &registry, &self.platform).await.map_err(|e| e.summary())?;
+        prepared.instance_errors.retain(|id, _| due.contains(id));
+        prepared.retry_instances = Some(due.clone());
+        prepared.keep_last_good = true;
+        self.engine.commit(&prepared, &registry).await.map_err(|e| format!("{}: {}", e.code, e.message))?;
+        if let Some(id) = requested {
+            if let Some(error) = crate::state::AppliedState::load(&self.paths).map_err(|e| e.to_string())?.instance_errors.get(id) {
+                return Err(format!("{}: {}", error.code, error.message));
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn instance_retry_loop(self: Arc<Self>) {
+        loop {
+            tokio::time::sleep(self.jittered(Duration::from_secs(5))).await;
+            let Ok(guard) = self.apply_lock.try_lock() else { continue };
+            // Instance errors carry their own exponential retry deadline. Global failures remain subject
+            // to normal revision recovery; they must not become a hot apply loop.
+            if let Err(error) = self.retry_instances(None).await {
+                debug!("instance retry deferred: {error}");
+            }
+            drop(guard);
+            let queued = self.queued.lock().unwrap().take();
+            if let Some((raw, digest, revision)) = queued {
+                self.offer(raw, digest, revision).await;
+            }
+        }
+    }
+
     /// Instances currently known (for reports/features).
     pub fn running_packages(&self) -> (BTreeSet<String>, BTreeSet<String>) {
         let applied = crate::state::AppliedState::load(&self.paths).unwrap_or_default();
         let statuses = self.engine.supervisor.statuses();
+        let probes = self.effective_probes();
         let mut running = BTreeSet::new();
         let mut healthy = BTreeSet::new();
         for (inst, a) in &applied.instances {
+            if probes.iter().any(|p| &p.id == inst && p.state == meduza_np_protocol::report::ServiceState::Disabled) {
+                continue;
+            }
             let short = meduza_np_protocol::manifest::short_name(&a.package).to_string();
             let procs_ok =
                 a.processes.keys().all(|p| statuses.iter().any(|s| &s.id == p && s.state == crate::supervisor::ProcState::Running));
-            let probe_ok = self
-                .status
-                .lock()
-                .unwrap()
-                .probes
+            let probe_ok = probes
                 .iter()
-                .filter(|p| p.id.starts_with(inst.as_str()))
+                .filter(|p| {
+                    (p.id == *inst || p.id.starts_with(&format!("{inst}/")))
+                        && p.state != meduza_np_protocol::report::ServiceState::Disabled
+                })
                 .all(|p| p.state == meduza_np_protocol::report::ServiceState::Up);
             // An instance without processes (a kernel WireGuard interface, nft tables) runs once applied while
             // its probes see it up; with processes, running means every one of them runs.
@@ -441,6 +540,12 @@ impl Planner {
             if procs_ok && probe_ok {
                 healthy.insert(short);
             }
+        }
+        for (id, error) in &applied.instance_errors {
+            if !probes.iter().any(|p| &p.id == id && p.detail.contains_key("applyError")) {
+                continue;
+            }
+            healthy.remove(meduza_np_protocol::manifest::short_name(&error.package));
         }
         (running, healthy)
     }
@@ -796,36 +901,67 @@ impl Planner {
                             providers.insert(slot.clone(), p.clone());
                         }
                     }
-                    let req = meduza_np_plugin_sdk::PluginRequest {
-                        protocol_version: meduza_np_protocol::PLUGIN_PROTOCOL_VERSION,
-                        request_id: format!("probe-{short}-{}", self.next_sequence()),
-                        operation: "probe".into(),
-                        config: lg.config.clone(),
-                        instance: None,
-                        providers,
-                        context: meduza_np_plugin_sdk::PluginContext {
-                            generation_root: self.paths.current_generation_link().to_string_lossy().into_owned(),
-                            state_dir: self.paths.state.to_string_lossy().into_owned(),
-                            run_dir: self.paths.run.to_string_lossy().into_owned(),
-                            libexec_dir: self.paths.libexec.to_string_lossy().into_owned(),
-                            platform: self.platform.clone(),
-                            capabilities: registry.capabilities(),
-                        },
-                        params: Value::Null,
+                    // A malformed tunnel must not prevent other instances' probes from being collected.
+                    let configs: Vec<_> = if matches!(short.as_str(), "wireguard" | "openvpn") {
+                        svc.get("instances")
+                            .and_then(Value::as_array)
+                            .map(|items| {
+                                items
+                                    .iter()
+                                    .filter(|instance| instance.get("enabled") != Some(&Value::Bool(false)))
+                                    .map(|instance| {
+                                        let mut config = lg.config.clone();
+                                        config.services.get_mut(&short).unwrap()["instances"] = serde_json::json!([instance]);
+                                        config
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_else(|| vec![lg.config.clone()])
+                    } else {
+                        vec![lg.config.clone()]
                     };
-                    match self.engine.runner.call(&program, &req).await {
-                        Ok(v) => match serde_json::from_value::<meduza_np_plugin_sdk::ProbeResult>(v) {
-                            Ok(r) => results.extend(r.instances),
-                            Err(e) => warn!("{short} probe: bad result: {e}"),
-                        },
-                        Err(e) => results.push(InstanceStatus {
-                            id: format!("{short}/probe"),
-                            kind: "probe".into(),
-                            state: meduza_np_protocol::report::ServiceState::Unknown,
-                            observed_at: Some(meduza_np_plugin_sdk::now_rfc3339()),
-                            reason: Some(e.to_string()),
-                            detail: Default::default(),
-                        }),
+                    for config in configs {
+                        let probe_id = config
+                            .services
+                            .get(&short)
+                            .and_then(|s| s.get("instances"))
+                            .and_then(Value::as_array)
+                            .filter(|items| items.len() == 1)
+                            .and_then(|items| items[0].get("id"))
+                            .and_then(Value::as_str)
+                            .map(|id| format!("{short}/{id}"))
+                            .unwrap_or_else(|| format!("{short}/probe"));
+                        let req = meduza_np_plugin_sdk::PluginRequest {
+                            protocol_version: meduza_np_protocol::PLUGIN_PROTOCOL_VERSION,
+                            request_id: format!("probe-{short}-{}", self.next_sequence()),
+                            operation: "probe".into(),
+                            config,
+                            instance: None,
+                            providers: providers.clone(),
+                            context: meduza_np_plugin_sdk::PluginContext {
+                                generation_root: self.paths.current_generation_link().to_string_lossy().into_owned(),
+                                state_dir: self.paths.state.to_string_lossy().into_owned(),
+                                run_dir: self.paths.run.to_string_lossy().into_owned(),
+                                libexec_dir: self.paths.libexec.to_string_lossy().into_owned(),
+                                platform: self.platform.clone(),
+                                capabilities: registry.capabilities(),
+                            },
+                            params: Value::Null,
+                        };
+                        match self.engine.runner.call(&program, &req).await {
+                            Ok(v) => match serde_json::from_value::<meduza_np_plugin_sdk::ProbeResult>(v) {
+                                Ok(r) => results.extend(r.instances),
+                                Err(e) => warn!("{short} probe: bad result: {e}"),
+                            },
+                            Err(e) => results.push(InstanceStatus {
+                                id: probe_id,
+                                kind: "probe".into(),
+                                state: meduza_np_protocol::report::ServiceState::Unknown,
+                                observed_at: Some(meduza_np_plugin_sdk::now_rfc3339()),
+                                reason: Some(e.to_string()),
+                                detail: Default::default(),
+                            }),
+                        }
                     }
                 }
             }

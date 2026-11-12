@@ -132,7 +132,7 @@ jobs:
           echo "images_changed=$(jq -c .images plan/jobs.json)" >> "$GITHUB_OUTPUT"
       - name: Build integration test executables
         # Test fixtures are required independently of which production packages changed.
-        run: cargo build --locked -p meduza-np-wireguard -p meduza-np-planner --bins --examples
+        run: cargo build --locked -p meduza-np-wireguard -p meduza-np-openvpn -p meduza-np-planner --bins --examples
       - name: Rust checks and release pipeline tests
         run: |
           cargo fmt --all --check

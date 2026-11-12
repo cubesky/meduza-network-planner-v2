@@ -14,6 +14,12 @@ fn main() {
             let _ = writeln!(f, "{}", args.iter().filter(|a| !a.starts_with("--log=")).cloned().collect::<Vec<_>>().join(" "));
         }
     }
+    // OpenVPN's actual adapter invokes native checks with --config too. Checks exit; the service lives.
+    if args.iter().any(|a| a == "--config") && !args.iter().any(|a| matches!(a.as_str(), "--test-crypto" | "--show-ciphers")) {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(3600));
+        }
+    }
     match args.first().map(String::as_str) {
         Some("wait-for-peer")
             if !args.iter().any(|a| a.strip_prefix("--ready-file=").is_some_and(|p| std::path::Path::new(p).exists())) =>
