@@ -361,7 +361,8 @@ jobs:
         with: { name: plan, path: in/plan }
       - uses: actions/download-artifact@v7
         if: needs.build-rust.result == 'success'
-        with: { pattern: dist-rust-*, path: in }
+        # v5+ flattens a single match even with merge-multiple=false. Always use one explicit layout.
+        with: { pattern: dist-rust-*, path: in/dist-rust, merge-multiple: true }
       - uses: ./.github/actions/release-tool
       - uses: actions/setup-node@v5
         with: { node-version: 24, package-manager-cache: false }
@@ -383,7 +384,7 @@ jobs:
           mkdir -p updater
           for slug in linux-amd64 linux-arm64 linux-arm-v7; do
             f="meduza-np-updater_${v}_$slug.tar.gz"
-            built=$(find in -path 'in/dist-rust-*' -name "$f" | head -1)
+            built=$(find in -path 'in/dist-rust/*' -name "$f" | head -1)
             if [ -n "$built" ]; then
               sha=$(jq -r .artifact.sha256 "$built.json")
               cp "$built" updater/
@@ -422,10 +423,10 @@ jobs:
         with: { name: plan, path: in/plan }
       - uses: actions/download-artifact@v7
         if: needs.build-rust.result == 'success' || needs.build-providers.result == 'success' || needs.build-noarch.result == 'success'
-        with: { pattern: dist-*, path: in }
+        with: { pattern: dist-*, path: in/dist-packages, merge-multiple: true }
       - uses: actions/download-artifact@v7
         if: needs.build-images.result == 'success'
-        with: { pattern: oci-*, path: in }
+        with: { pattern: oci-*, path: in/oci-images, merge-multiple: true }
       - uses: ./.github/actions/release-tool
       - name: Toolchain for SBOM dependency metadata
         run: |
@@ -491,7 +492,7 @@ jobs:
           for p in $(jq -r 'to_entries[] | select(.value.changed) | .key' in/plan/matrix.json); do
             v=$(jq -r --arg p "$p" '.[$p].version' in/plan/matrix.json)
             # runtime images: OS packages of the pushed image (build-images extracted them per platform)
-            os=""; jq -e --arg p "$p" '.images | index($p)' in/plan/jobs.json >/dev/null && os="--image-os in/oci-$p/$p.image-os"
+            os=""; jq -e --arg p "$p" '.images | index($p)' in/plan/jobs.json >/dev/null && os="--image-os in/oci-images/$p.image-os"
             target/release/meduza-np-release sbom --package "$p" --version "$v" --targets "$TARGETS" $os --out "sbom/${p}_${v}.cdx.json"
           done
           ls -la sbom

@@ -2015,3 +2015,22 @@ including transitive references, confirms node24 for every JavaScript action, an
 calls' input names and Node setup options. The same actionlint 1.7.7 gate used in CI passes with its existing
 cache-mode exception. Evidence: target/check-node24-actions.log. No remote workflow
 execution, Git submission or production changes.
+
+## D88 - Stable wildcard artifact download paths after the Node 24 migration (2026-11-12)
+
+D87 missed download-artifact v5+'s single-match extraction change: a wildcard matching just one artifact
+extracts directly into path even when merge-multiple is false. A manager-only rebuild therefore put its OS
+database under in/meduza-np-manager.image-os while the SBOM command looked in in/oci-meduza-np-manager/.
+The same count-dependent behavior also affected archive collection and this run's updater lookup.
+
+Set merge-multiple: true and dedicated roots for every wildcard download: in/dist-rust for the image
+builder, in/dist-packages for published archives and in/oci-images for runtime image records/OS databases.
+Update updater discovery and SBOM arguments accordingly. Existing archive and OCI record collectors
+continue to match their fixed prefix. Preserve per-package/per-platform OS data and digest verification;
+missing inputs remain failures. Keep the Node 24 Actions versions.
+
+Six regression tests use ZIP fixtures and upstream single/multiple extraction semantics to execute the
+actual workflow's find/cp collectors, updater lookup and image OS argument assignment. Cover manager-only,
+base-only and both-image rebuilds, one/multiple archive bundles and the old missing-path reproduction.
+All 53 release pipeline tests (including the six new cases) and actionlint pass. Evidence: target/check-release-artifact-layout.log
+and target/check-release-tests.log. No Git submission or remote workflow/production changes.

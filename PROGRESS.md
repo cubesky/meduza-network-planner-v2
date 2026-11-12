@@ -1371,3 +1371,12 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   input compatibility and transitive runtimes; the existing actionlint 1.7.7 gate passes.
   Evidence: target/check-node24-actions.log.
   Source-only; no workflow execution, Git submission or production changes.
+
+- 2026-11-12 (per the user's publish failure) Stable artifact staging after the Node 24 Action update (D88).
+  Fix download-artifact's count-dependent wildcard extraction with explicit merged staging roots for
+  Rust image inputs, published archives and runtime OCI metadata. Align updater lookup and image SBOM
+  OS-data paths; retain existing integrity checks and Node 24 runtimes. Six Linux regression tests cover
+  manager-only, base-only and multi-image builds, one/multiple bundles, actual find/cp consumers and the
+  previous failure. All 53 release pipeline tests and actionlint pass.
+  Evidence: target/check-release-artifact-layout.log, target/check-release-tests.log.
+  Source-only; no Git submission or remote workflow/production changes.
