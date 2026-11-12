@@ -64,12 +64,19 @@ impl LinuxBackend {
         }
     }
 
-    /// Standard output of a read-only query; `None` when it fails or times out.
+    /// Standard output of a read-only query. A known-absent object is an empty result; unexpected failures
+    /// and timeouts remain unknown. In particular iproute2 exits nonzero when an entire FIB table is absent.
     async fn query(&self, program: &str, args: &[String]) -> Option<String> {
         let mut cmd = Command::new(program);
-        cmd.args(args).stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null()).kill_on_drop(true);
+        cmd.args(args).stdin(std::process::Stdio::null()).kill_on_drop(true);
         let out = tokio::time::timeout(self.timeout, cmd.output()).await.ok()?.ok()?;
-        out.status.success().then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+        if out.status.success() {
+            Some(String::from_utf8_lossy(&out.stdout).into_owned())
+        } else if is_absent(&String::from_utf8_lossy(&out.stderr)) {
+            Some(String::new())
+        } else {
+            None
+        }
     }
 
     /// Like [`run`](Self::run) but treats "does not exist" as success (idempotent removal).
@@ -366,5 +373,36 @@ mod tests {
             route_type: Some("local".into()),
         };
         assert_eq!(route_args(&local).unwrap().0[0], "local");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn absent_route_table_is_known_missing_not_an_unknown_query_failure() {
+        let backend = LinuxBackend::default();
+        for diagnostic in [
+            "Error: ipv4: FIB table does not exist.\nDump terminated",
+            "Error: ipv6: FIB table does not exist.\nDump terminated",
+            "RTNETLINK answers: No such file or directory",
+        ] {
+            let out = backend.query("sh", &s(&["-c", "printf '%s\\n' \"$1\" >&2; exit 2", "ip-fixture", diagnostic])).await;
+            assert_eq!(out, Some(String::new()), "missing table must trigger owned-route recreation: {diagnostic}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn route_query_retains_present_empty_and_unknown_results() {
+        let backend = LinuxBackend::default();
+        assert_eq!(
+            backend.query("sh", &s(&["-c", "printf 'local default dev lo table 4626\\n'"])).await.as_deref(),
+            Some("local default dev lo table 4626\n")
+        );
+        assert_eq!(backend.query("sh", &s(&["-c", "exit 0"])).await, Some(String::new()));
+        for diagnostic in ["RTNETLINK answers: Operation not permitted", "Error: invalid table ID"] {
+            assert_eq!(backend.query("sh", &s(&["-c", "printf '%s\\n' \"$1\" >&2; exit 2", "ip-fixture", diagnostic])).await, None);
+        }
+        assert_eq!(backend.query("/nonexistent/meduza-test-ip", &[]).await, None);
+        let impatient = LinuxBackend { timeout: Duration::from_millis(20) };
+        assert_eq!(impatient.query("sh", &s(&["-c", "exec sleep 2"])).await, None);
     }
 }

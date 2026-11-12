@@ -424,3 +424,68 @@ meduza-np support-bundle -o /tmp/meduza-np-support.json
 The same bundle is the result of **Collect diagnostics** on the node's Diagnostics tab in the manager (with a
 Download button under Jobs) and of **导出支持包** on the dashboard's diagnostics page. Read it before you send it:
 redaction covers secret-like keys, PEM private keys and credentials in URLs/log text, not host names or addresses.
+
+## 8. Side-router cutover: real gateway traffic, recovery and DNS privacy
+
+Test from a separate authorized client whose actual gateway is the planner's LAN address. A working
+SOCKS listener verifies Mihomo's outbound path but does not verify transparent interception. Compare
+real gateway HTTPS with SOCKS, and separately test front-end DNS, external UDP/TCP DNS and private
+routed destinations. Keep the administrator's workstation gateway and production host routes intact.
+
+If transparent TCP times out while SOCKS works, inspect all three parts inside the planner namespace:
+
+```sh
+podman exec meduza-np-planner nft list table inet meduza_np_mihomo
+podman exec meduza-np-planner ip -4 rule show
+podman exec meduza-np-planner ip -4 route show table 4626
+podman exec meduza-np-planner ip -4 route show table 4627
+podman exec meduza-np-planner ip -4 route get 1.1.1.1 mark 0x4d4e
+```
+
+The defaults are configurable; use the actual plan's marks and tables. TPROXY requires a local default
+route in its policy table. Side-router replies require a separate default route to the main router.
+`FIB table does not exist` is missing kernel state, even when persistent ownership and applied revision
+look correct. D90 makes the next apply/startup restore those owned routes automatically.
+
+For the diagnosed deployment, the following are the minimal recovery commands **after confirming the
+ownership journal, current mark rules, gateway and deployment authorization**:
+
+```sh
+podman exec meduza-np-planner ip -4 route replace local 0.0.0.0/0 dev lo table 4626
+podman exec meduza-np-planner ip -4 route replace default via 10.42.10.1 table 4627
+```
+
+These restore the two routes already declared by Meduza, without restarting a container. Verify that
+the proxy mark resolves locally and the reply mark uses table 4627, then repeat HTTPS tests from the
+separate client. For a different deployment, derive the values from its plan. Do not flush route tables.
+For source verification on a disposable privileged Linux client, build the planner example and run
+`unshare -n ./route_recovery_probe --isolated`; it refuses the initial network namespace and creates
+only throwaway links/routes in the new namespace.
+
+DNS privacy needs its own review:
+
+- Front-end `no-resolv` prevents silently using the container resolver. `strict-order` enforces the
+  generated backend priority. Health-based removal and plaintext fallback deliberately preserve DNS
+  availability, but a healthy listener alone does not prove upstream policy or privacy.
+- An operator-supplied MosDNS `pluginsYaml` pipeline controls its own upstreams and fallback. A remote
+  primary with a domestic secondary can disclose the queried name to that secondary when fallback
+  starts. For strict remote resolution, use remote encrypted upstreams through the intended proxy and
+  keep domestic fallback out of that branch. Check every remote upstream, not just the first entry.
+- The audited custom pipeline includes an Apple DoH entry without SOCKS and a 1000 ms domestic fallback
+  for its `try-resolve@!cn` branch. Several foreign-domain rules bypass that branch and use remote
+  resolution directly; the fallback risk does not mean every foreign query uses domestic DNS.
+- Mihomo can inherit DNS policy from its subscription. Check the final DNS configuration, including
+  nameserver policies, fallback filters and proxy-server bootstrap, rather than assuming the node's
+  empty override removes subscription behavior. DoH encryption alone does not choose a proxy route.
+- Distinguish queries for resolver/proxy hostnames from client domain queries. During this investigation
+  two public plaintext resolvers returned loopback for a remote DoH hostname, while the front-end and
+  main router returned a public address. Do not fix bootstrap by routing it back into a dependent
+  front end or by sending all client names to an unrelated plaintext resolver.
+- TPROXY's configured port 53 exclusion permits ordinary routed DNS. DHCP pointing clients at the
+  front end does not prevent a client choosing another DNS/DoH provider. DNS interception, egress
+  restrictions and browser secure-DNS policy require an explicit policy beyond DHCP configuration.
+- TCP-only interception preserves the previous selected protocol scope; UDP/QUIC remains direct.
+  Enable UDP interception only with the required UDP routing/proxy support and separate validation.
+
+Custom policy changes belong in Manager configuration, not generated files under `/run`. Recheck
+Google/Bing HTTPS, domestic HTTPS, DNS answers and latency after both routing and policy changes.

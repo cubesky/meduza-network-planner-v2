@@ -2063,3 +2063,36 @@ disappear while failures remain in details. English/Simplified/Traditional navig
 anonymous panel availability, Manager viewer restrictions and remote update requests also pass.
 Evidence: target/check-node-ui-browser.log and target/check-update-progress-regressions.log.
 No Git submission or production modifications; deploy updated Manager and Dashboard assets together.
+
+## D90 — Restore owned routes when the whole policy table is absent (2026-11-12)
+
+After replacing the previous gateway with the macvlan planner, an authorized isolated Incus test client
+using the planner as its real default gateway times out connecting to Google, Bing, Baidu, gstatic and
+Cloudflare. SOCKS through the same Mihomo succeeds. Ordinary external UDP DNS and some TCP DNS still
+work through that gateway. Production read-only inspection finds the TPROXY nft table and mark rules,
+but both owned policy tables (4626 for local delivery and 4627 for main-router replies) are missing.
+The persisted ownership journal still lists their routes. A marked route lookup falls through to main.
+
+iproute2 returns nonzero with `FIB table does not exist` for a missing table. LinuxBackend previously
+discarded stderr and returned unknown, causing apply's existing lost-resource reconciliation to skip
+the routes. Capture the diagnostic and treat known absence as an empty result; permission errors,
+invalid table arguments, spawn failures and timeouts remain unknown. Keep the existing ownership
+boundary and targeted reconciliation; never flush another owner's routes or modify host networking.
+
+Regression tests reproduce the old failure and cover IPv4/IPv6 missing-table diagnostics and unknown
+errors. An explicitly guarded Linux example runs only in a separate network namespace, exercises the
+real backend, removes/recreates both tables, checks proxy/reply marked lookups and preserves an
+unrelated route. It passes on the user-authorized test container, independently of production.
+
+The v1 comparison also checks PREROUTING-only interception, routed/private/VPN exclusions, port direction
+rules, reply policy and DNS ownership. TCP-only proxying leaves UDP/QUIC outside the proxy; DNS port
+exclusions do not force arbitrary client-selected resolvers through the front end. The live custom
+MosDNS pipeline explicitly allows domestic plaintext fallback for some remote queries and includes an
+unproxied remote DoH resolver. Do not silently rewrite that operator-supplied pipeline or confuse
+encrypted DNS with a guarantee that queries are sent only to the intended resolver. Front-end fallback
+availability and strict DNS privacy are separate policy choices. See operations section 8.
+
+Evidence: target/check-route-query-before.log (red), target/check-route-query-after.log,
+target/check-gateway-regression.log (44 planner, 17 Mihomo, 11 dnsmasq tests pass), and the isolated
+route_recovery_probe PASS. Live restoration requires the user's production-operation confirmation;
+investigation and isolated verification do not constitute production deployment.

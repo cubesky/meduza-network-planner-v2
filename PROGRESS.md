@@ -1330,6 +1330,7 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   together. Evidence: target/check-console-features-tests.log and target/check-openwrt-status-tests.log.
   Source-only; no Git submission or production modifications.
 
+
 - 2026-11-11 (per the user) Support Mihomo's native web panel (D84).
   Inherit subscription UI requests by default; add explicit enable/disable and archive URL controls in
   the shared Manager/Dashboard descriptor. Keep controller binding and per-node credentials owned.
@@ -1392,3 +1393,14 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   polling notice lifecycle, details/errors, all Dashboard languages and Manager request/viewer behavior.
   Evidence: target/check-node-ui-browser.log, target/check-update-progress-regressions.log.
   Source-only; no Git submission or production modifications.
+
+- 2026-11-12 (per the user's gateway migration investigation) Restore missing owned policy tables (D90).
+  Use only the authorized privileged Incus client for gateway tests; do not change the local workstation
+  gateway or provision test resources on the production host. Actual gateway traffic fails while the same
+  Mihomo SOCKS path succeeds; ordinary DNS forwarding works. Production nft/rules exist but tables
+  4626/4627 do not, despite journal ownership. Fix LinuxBackend's known-absent query result so the existing
+  apply reconciliation recreates those routes after namespace loss. Preserve unknown failures and unrelated
+  routes. Regression: 44 planner + 17 Mihomo + 11 dnsmasq tests pass; an isolated real-kernel probe on the
+  authorized client restores both route tables and validates marked lookups. Audit v1 exclusions, ordinary
+  forwarding and DNS policies; document explicit custom-pipeline fallback and UDP/QUIC privacy boundaries.
+  Production recovery confirmation is pending; no production network changes or Git submission.
