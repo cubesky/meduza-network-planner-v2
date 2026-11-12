@@ -2,18 +2,21 @@ import { render } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import "@meduza-np/ui-kit/styles.css";
 import "./app.css";
-import { Button, Card, ThemeSelect, ToastHost, toast } from "@meduza-np/ui-kit";
-import { errorText, get, post, setCsrf, type Session } from "./api.ts";
+import { Button, Card, ThemeSelect, ToastHost, msg, setLocale, t, toast, useAsync, useLocale } from "@meduza-np/ui-kit";
+import { UpdateNotice } from "@meduza-np/ui-kit/package-progress";
+import { errorText, get, post, setCsrf, type Report, type Session } from "./api.ts";
+import { LanguageSelect, effectiveLocale } from "./language.tsx";
+import "./messages.ts";
 import { ConfigPage, DiagnosticsPage, FeaturesPage, InstancesPage, MihomoPanelCard, OverviewPage, PackagesPage, UpdatesPage } from "./pages.tsx";
 
 const NAV: Array<[string, string]> = [
-  ["/overview", "总览"],
-  ["/features", "功能"],
-  ["/instances", "实例"],
-  ["/packages", "包与 provider"],
-  ["/config", "配置"],
-  ["/updates", "升级"],
-  ["/diagnostics", "诊断与日志"],
+  ["/overview", msg("Overview")],
+  ["/features", msg("Features")],
+  ["/instances", msg("Instances")],
+  ["/packages", msg("Packages and providers")],
+  ["/config", msg("Configuration")],
+  ["/updates", msg("Updates and downloads")],
+  ["/diagnostics", msg("Diagnostics and logs")],
 ];
 
 function useHash(): string {
@@ -29,16 +32,18 @@ function useHash(): string {
 function Login(props: { session: Session }) {
   return (
     <div class="center">
-      <Card title="Meduza NP 节点 dashboard">
+      <div class="row" style={{ justifyContent: "end", marginBottom: "12px" }}><LanguageSelect /><ThemeSelect /></div>
+      <Card title={t("Meduza NP node dashboard")}>
         {props.session.managerLogin ? (
           <p>
-            <Button variant="primary" onClick={() => location.assign("/auth/login")}>使用 manager 账号登录</Button>
+            <Button variant="primary" onClick={() => location.assign("/auth/login")}>{t("Sign in with Manager")}</Button>
           </p>
         ) : (
-          <p class="muted">未配置 MEDUZA_NP_DASHBOARD_PUBLIC_URL，无法通过 manager 登录。</p>
+          <p class="muted">{t("Manager sign-in is unavailable because MEDUZA_NP_DASHBOARD_PUBLIC_URL is not configured.")}</p>
         )}
         <p class="small muted">
-          离线或 manager 不可达时，在节点上以 root 执行 <code>meduza-np dashboard-link</code>，打开输出的一次性链接（10 分钟内有效）。
+          {t("If Manager is unreachable, run the following command as root on the node and open its one-time link (valid for 10 minutes).")}
+          <br /><code>meduza-np dashboard-link</code>
         </p>
       </Card>
       <MihomoPanelCard />
@@ -47,6 +52,8 @@ function Login(props: { session: Session }) {
 }
 
 function App() {
+  const locale = useLocale();
+  useEffect(() => { document.title = t("Meduza NP node"); }, [locale]);
   const [s, setS] = useState<Session | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const hash = useHash();
@@ -59,9 +66,15 @@ function App() {
       (e) => setErr(errorText(e)),
     );
   useEffect(() => void refresh(), []);
-  if (err) return <div class="state-box">dashboard 服务不可达：{err}</div>;
-  if (!s) return <div class="state-box">加载中…</div>;
+  if (err) return <div class="state-box">{t("Dashboard unreachable: {error}", { error: err })}</div>;
+  if (!s) return <div class="state-box">{t("Loading…")}</div>;
   if (!s.authenticated) return <Login session={s} />;
+
+  return <Authenticated session={s} hash={hash} refresh={refresh} />;
+}
+
+function Authenticated({ session: s, hash, refresh }: { session: Session; hash: string; refresh: () => void }) {
+  const report = useAsync(() => get<Report>("/api/status"), [], 5000);
 
   const page = hash.split("/")[1];
   const content =
@@ -69,20 +82,21 @@ function App() {
     page === "instances" ? <InstancesPage session={s} /> :
     page === "packages" ? <PackagesPage /> :
     page === "config" ? <ConfigPage /> :
-    page === "updates" ? <UpdatesPage session={s} /> :
+    page === "updates" ? <UpdatesPage session={s} status={report} /> :
     page === "diagnostics" ? <DiagnosticsPage /> :
-    <OverviewPage session={s} />;
+    <OverviewPage session={s} status={report} />;
 
   return (
     <div class="layout">
       <nav class="nav">
-        <div class="brand">Meduza NP 节点</div>
+        <div class="brand">{t("Meduza NP node")}</div>
         {NAV.map(([href, label]) => (
-          <a href={`#${href}`} class={hash.startsWith(href) ? "active" : ""}>{label}</a>
+          <a href={`#${href}`} class={hash.startsWith(href) ? "active" : ""}>{t(label)}</a>
         ))}
         <div style={{ padding: "14px 10px" }} class="small muted">
-          {s.user} · {s.role} {s.via === "local" ? "（本地链接）" : ""}
-          <div style={{ margin: "8px 0" }}>
+          {s.user} · {t(s.role ?? "viewer")} {s.via === "local" ? t("(local link)") : ""}
+          <div style={{ margin: "8px 0", display: "grid", gap: "8px" }}>
+            <LanguageSelect />
             <ThemeSelect />
           </div>
           <div>
@@ -93,14 +107,21 @@ function App() {
                 toast(errorText(e), "bad");
               }
               void refresh();
-            }}>退出</Button>
+            }}>{t("Sign out")}</Button>
           </div>
         </div>
       </nav>
-      <main class="main">{content}</main>
+      <main class="main">
+        {page !== "updates" && <UpdateNotice progress={report.data?.update}
+          binaries={(report.data?.instances ?? []).filter((i) => i.kind === "mihomo-provider").map((i) => ({ name: "Mihomo", progress: i.downloadProgress }))}
+          href="#/updates" />}
+        {content}
+      </main>
     </div>
   );
 }
+
+setLocale(effectiveLocale());
 
 render(
   <>

@@ -7,9 +7,9 @@ import "./messages.ts";
 
 export * from "./i18n.ts";
 export * from "./theme.tsx";
-import { applyTheme } from "./theme.tsx";
+import { initializeTheme } from "./theme.tsx";
 
-applyTheme();
+initializeTheme();
 
 export type Tone = "ok" | "warn" | "bad" | "info" | "idle";
 

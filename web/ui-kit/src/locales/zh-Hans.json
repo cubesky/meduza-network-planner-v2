@@ -148,5 +148,8 @@
   "{count} processes": "{count} 个进程",
   "No running process": "无运行进程",
   "Disk counts allocated package files including retained versions; persistent data is separate. Download archives, shared system libraries and image layers are excluded. Disk samples refresh every 60 seconds.": "磁盘统计包文件的分配空间（含保留版本），持久数据单独列出；不含下载归档、共享系统库和镜像层。磁盘采样每 60 秒刷新。",
-  "RSS includes shared pages and is charged to the service instance, not again to its binary provider. Instances share package files. WireGuard kernel memory is not process RSS. Unavailable measurements are not zero.": "RSS 含共享内存页，计入服务实例，不在本体包重复统计。各实例共享包文件。WireGuard 内核内存不属于进程 RSS。“未测得”不代表零占用。"
+  "RSS includes shared pages and is charged to the service instance, not again to its binary provider. Instances share package files. WireGuard kernel memory is not process RSS. Unavailable measurements are not zero.": "RSS 含共享内存页，计入服务实例，不在本体包重复统计。各实例共享包文件。WireGuard 内核内存不属于进程 RSS。“未测得”不代表零占用。",
+  "Update or download in progress": "正在升级或下载",
+  "Waiting for the node": "等待节点处理",
+  "View update details": "查看升级详情"
 }

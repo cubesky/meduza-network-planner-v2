@@ -8,7 +8,7 @@ import { errorText, get, post } from "../api.ts";
 import { isError, problemsFor, useConfig } from "../store.ts";
 import { revisionBadge, syncCell, type NodeSummary } from "./Overview.tsx";
 import { NodeSettings } from "./NodeSettings.tsx";
-import { BinaryProgress, type BinaryTransferProgress } from "@meduza-np/ui-kit/package-progress";
+import { BinaryProgress, UpdateNotice, type BinaryTransferProgress } from "@meduza-np/ui-kit/package-progress";
 import { NodeUpdates } from "./NodeUpdates.tsx";
 import { PackageResourceCard } from "@meduza-np/ui-kit/package-resources";
 import { InstanceTree, withWireGuardNames, type RuntimeStatus } from "@meduza-np/ui-kit/instance-tree";
@@ -81,18 +81,17 @@ export function NodePage(props: { id: string; tab?: string; role: Role }) {
                 ].filter(Boolean).join(" · ")}
                 actions={canAct && <Button onClick={() => void job("sync-now", {}, t("Sync requested"))}>{t("Sync now")}</Button>}
               />
-              <NodeUpdates key={n.id} node={n} canAct={canAct} reload={state.reload} />
-              {instances.filter((i) => i.kind === "mihomo-provider" && (i.mode === "auto-download" || i.downloadProgress)).map((i) => <BinaryProgress
-                name="Mihomo" progress={i.downloadProgress as BinaryTransferProgress | null | undefined}
-                providerState={i.providerState as string | undefined} reason={i.reason}
-                configurationError={n.sync?.state === "apply-failed" ? n.lastError ?? n.report?.sync?.lastError : undefined}
-              />)}
+              {tab !== "updates" && <UpdateNotice progress={n.update ?? n.report?.update}
+                binaries={instances.filter((i) => i.kind === "mihomo-provider").map((i) => ({ name: "Mihomo", progress: i.downloadProgress as BinaryTransferProgress | null | undefined }))}
+                requested={n.jobs.some((j) => ["update-check", "update-apply"].includes(String(j.kind)) && ["pending", "delivered"].includes(String(j.status)) && Date.parse(String(j.expires_at)) > Date.now())}
+                href={`#/nodes/${encodeURIComponent(n.id)}/updates`} />}
               <Tabs
                 tabs={[
                   { id: "status", label: t("Status") },
                   { id: "routing", label: t("Routing"), count: routing.length || undefined },
                   { id: "connections", label: t("Connections"), count: connections.length || undefined },
                   { id: "settings", label: t("Settings"), count: settingErrors || undefined, tone: settingErrors ? "bad" : undefined },
+                  { id: "updates", label: t("Updates and downloads") },
                   { id: "diagnostics", label: t("Diagnostics") },
                 ]}
                 active={tab}
@@ -102,6 +101,14 @@ export function NodePage(props: { id: string; tab?: string; role: Role }) {
               {tab === "routing" && <RoutingTab items={routing} canAct={canAct} restart={restart} />}
               {tab === "connections" && <ConnectionsTab items={connections} canAct={canAct} restart={restart} />}
               {tab === "settings" && <NodeSettings id={props.id} detail={n} role={props.role} />}
+              {tab === "updates" && <>
+                <NodeUpdates key={n.id} node={n} canAct={canAct} reload={state.reload} />
+                {instances.filter((i) => i.kind === "mihomo-provider" && (i.mode === "auto-download" || i.downloadProgress)).map((i) => <BinaryProgress
+                  name="Mihomo" progress={i.downloadProgress as BinaryTransferProgress | null | undefined}
+                  providerState={i.providerState as string | undefined} reason={i.reason}
+                  configurationError={n.sync?.state === "apply-failed" ? n.lastError ?? n.report?.sync?.lastError : undefined}
+                />)}
+              </>}
               {tab === "diagnostics" && <DiagnosticsTab n={n} role={props.role} job={job} reload={state.reload} />}
             </>
           );

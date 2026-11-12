@@ -1380,3 +1380,15 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   previous failure. All 53 release pipeline tests and actionlint pass.
   Evidence: target/check-release-artifact-layout.log, target/check-release-tests.log.
   Source-only; no Git submission or remote workflow/production changes.
+
+- 2026-11-12 (per the user) Repair post-startup theme divergence, complete Dashboard i18n and consolidate
+  upgrade/download details (D89). Confirm the published bootstrap is present; use the user's saved=dark /
+  applied=light evidence to reconcile persisted preference with document/selectors after attribute changes,
+  page restoration and cross-tab updates. Add English/Simplified/Traditional Dashboard messages, persistent
+  language selection and coverage checks. Move full package/binary progress and history to one updates tab;
+  other pages retain a compact active-only notice that vanishes on completion/failure. Keep permissions,
+  anonymous Mihomo panel access and independent binary status when updater is unavailable. Actual Chrome
+  checks cover both production builds, compressed assets/CSP, theme repair/reload/cross-tab changes,
+  polling notice lifecycle, details/errors, all Dashboard languages and Manager request/viewer behavior.
+  Evidence: target/check-node-ui-browser.log, target/check-update-progress-regressions.log.
+  Source-only; no Git submission or production modifications.

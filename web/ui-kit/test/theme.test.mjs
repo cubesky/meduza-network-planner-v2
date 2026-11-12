@@ -58,3 +58,53 @@ test("disabled storage does not prevent startup or changing the current page's t
   api.setTheme("dark");
   assert.equal(document.documentElement.dataset.theme, "dark");
 });
+
+function browserContext(context) {
+  const events = new Map(), observers = [];
+  context.window = { addEventListener: (event, handler) => events.set(event, handler) };
+  context.MutationObserver = class {
+    constructor(handler) { observers.push(handler); }
+    observe(_root, options) { assert.deepEqual(Array.from(options.attributeFilter), ["data-theme"]); }
+  };
+  return { events, observers };
+}
+
+test("saved dark preference wins over a stale light DOM after initialization and page restoration", () => {
+  const { document, context, api } = setup("dark");
+  const { events, observers } = browserContext(context);
+  document.documentElement.dataset.theme = "light";
+  api.initializeTheme();
+  assert.equal(document.documentElement.dataset.theme, "dark");
+  document.documentElement.dataset.theme = "light";
+  observers[0]();
+  assert.equal(document.documentElement.dataset.theme, "dark", "repair the user's saved=dark/applied=light state");
+  document.documentElement.dataset.theme = "light";
+  events.get("pageshow")();
+  assert.equal(document.documentElement.dataset.theme, "dark");
+  api.initializeTheme();
+  assert.equal(observers.length, 1, "one observer per document across repeated initialization");
+});
+
+test("cross-tab theme changes and system selection update the document without fighting user choices", () => {
+  const { document, context, stored, api } = setup("dark");
+  const { events, observers } = browserContext(context);
+  api.initializeTheme();
+  stored.set("mnp.theme", "light");
+  events.get("storage")({ key: "mnp.theme" });
+  assert.equal(document.documentElement.dataset.theme, "light");
+  api.setTheme("dark"); observers[0]();
+  assert.equal(document.documentElement.dataset.theme, "dark");
+  api.setTheme("system"); observers[0]();
+  assert.equal(document.documentElement.dataset.theme, undefined);
+  assert.equal(stored.has("mnp.theme"), false);
+});
+
+test("theme repair retains this page's selection when storage is blocked", () => {
+  const { document, context, api } = setup(undefined, true);
+  const { observers } = browserContext(context);
+  api.initializeTheme(); api.setTheme("dark");
+  document.documentElement.dataset.theme = "light";
+  observers[0]();
+  assert.equal(document.documentElement.dataset.theme, "dark");
+  assert.equal(api.getTheme(), "dark");
+});

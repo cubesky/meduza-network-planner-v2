@@ -32,11 +32,13 @@ test("i18n: every web message has zh-Hans and zh-Hant translations with the same
   const uiKit = join(REPO_ROOT, "web/ui-kit/src");
   const renderer = join(REPO_ROOT, "web/descriptor-renderer/src");
   const manager = join(REPO_ROOT, "packages/meduza-np-manager/web/src");
+  const dashboard = join(REPO_ROOT, "packages/meduza-np-dashboard/web/src");
   // A library's messages must be in its own dictionaries (the node dashboard loads them without the manager's).
   const trees: Array<[string, string[]]> = [
     [uiKit, [uiKit]],
     [renderer, [renderer, uiKit]],
     [manager, [manager, renderer, uiKit]],
+    [dashboard, [dashboard, renderer, uiKit]],
   ];
   const missing: string[] = [];
   for (const [src, dicts] of trees) {

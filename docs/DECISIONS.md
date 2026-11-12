@@ -2034,3 +2034,32 @@ actual workflow's find/cp collectors, updater lookup and image OS argument assig
 base-only and both-image rebuilds, one/multiple archive bundles and the old missing-path reproduction.
 All 53 release pipeline tests (including the six new cases) and actionlint pass. Evidence: target/check-release-artifact-layout.log
 and target/check-release-tests.log. No Git submission or remote workflow/production changes.
+
+## D89 - Reconcile theme state, translate Dashboard and move transfer details into one page (2026-11-12)
+
+The user reports Manager localStorage saved=dark while the document has data-theme=light and light tokens,
+even with a dark OS preference. Read-only inspection confirms v0.3.3 serves the earlier theme bootstrap;
+adding that script alone did not address post-startup divergence. Keep persisted preference authoritative,
+reconcile the document and subscribed selectors on pageshow, storage events and theme-attribute changes,
+and avoid redundant attribute writes. Retain a temporary per-document choice when storage is blocked.
+The source of the reported attribute overwrite is not established; the fix repairs that observable state.
+
+Replace Dashboard's hardcoded Chinese UI with English message keys and complete Simplified/Traditional
+dictionaries for navigation, login, maintenance, package/instance status, updates, diagnostics and errors.
+Add a browser language picker on authenticated and anonymous views, preserve it across reloads and use
+the same locale in shared controls and dates. Keep the anonymous Mihomo panel entry. Extend the translation
+coverage gate to Dashboard and prohibit hardcoded Chinese text in its TypeScript UI sources.
+
+Manager node details gain an Updates and downloads tab; Dashboard's existing update page takes both
+package and binary transfer details. Move full progress/history/error cards and update controls there.
+Elsewhere show only a compact ongoing-work notice with a details link, removing it after work terminates.
+Keep queued Manager requests distinct from completion and retain role checks. Dashboard reuses its node
+report across overview/activity/update pages; binary details remain visible if updater status is unavailable.
+
+Unit/API, translation and production-build checks pass. Actual Chrome tests use both built apps, strict
+CSP and compressed delivery, recreate saved-dark/stale-light state, exercise pageshow, real cross-tab
+storage events, explicit/system themes and full reloads. Poll-driven update/binary notices appear and
+disappear while failures remain in details. English/Simplified/Traditional navigation, persistence,
+anonymous panel availability, Manager viewer restrictions and remote update requests also pass.
+Evidence: target/check-node-ui-browser.log and target/check-update-progress-regressions.log.
+No Git submission or production modifications; deploy updated Manager and Dashboard assets together.

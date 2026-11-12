@@ -1,8 +1,8 @@
 import { useState } from "preact/hooks";
 import { InstanceTree } from "@meduza-np/ui-kit/instance-tree";
-import { BinaryProgress, PackageProgress, progressFromStatus } from "@meduza-np/ui-kit/package-progress";
+import { BinaryProgress, PackageProgress, installPhaseLabel, progressFromStatus } from "@meduza-np/ui-kit/package-progress";
 import { PackageResourceCard, type PackageResources } from "@meduza-np/ui-kit/package-resources";
-import { Badge, Button, Card, Field, Loadable, StateBadge, Table, TextInput, NumberInput, Checkbox, bytes, relativeTime, toast, useAsync } from "@meduza-np/ui-kit";
+import { Badge, Button, Card, Field, Loadable, StateBadge, Table, TextInput, NumberInput, Checkbox, bytes, getLocale, relativeTime, t, toast, useAsync, type AsyncState } from "@meduza-np/ui-kit";
 import { errorText, get, post, roleAtLeast, type Feature, type PackageStatus, type Report, type Session } from "./api.ts";
 import { mihomoPanelUrl, type MihomoPanel } from "./mihomo-panel.ts";
 
@@ -20,53 +20,47 @@ async function act(path: string, body: unknown, done: string, after?: () => void
 
 // ---- overview -------------------------------------------------------------------------------------------------
 
-export function OverviewPage(props: { session: Session }) {
-  const st = useAsync(() => get<Report>("/api/status"), [], 5000);
+export function OverviewPage(props: { session: Session; status: AsyncState<Report> }) {
   return (
-    <Loadable state={st}>
+    <Loadable state={props.status}>
       {(r) => (
         <div>
           <Card
-            title={<>同步 <StateBadge state={r.sync.state} /></>}
-            actions={roleAtLeast(props.session.role, "operator") && <Button small onClick={() => act("/api/sync", {}, "已请求同步")}>立即同步</Button>}
+            title={<>{t("Sync")} <StateBadge state={r.sync.state} /></>}
+            actions={roleAtLeast(props.session.role, "operator") && <Button small onClick={() => act("/api/sync", {}, t("Sync requested"))}>{t("Sync now")}</Button>}
           >
             <dl class="kv">
-              <dt>节点</dt><dd>{r.nodeId || "未注册"}</dd>
-              <dt>通道</dt><dd>{r.sync.transport} · {r.sync.mode} · {r.sync.behavior}</dd>
-              <dt>期望 / 已接收 / 已应用</dt>
+              <dt>{t("Node")}</dt><dd>{r.nodeId || t("Not enrolled")}</dd>
+              <dt>{t("Channel")}</dt><dd>{r.sync.transport} · {r.sync.mode} · {r.sync.behavior}</dd>
+              <dt>{t("Desired / received / applied")}</dt>
               <dd>{r.sync.desiredRevision ?? "—"} / {r.sync.receivedRevision ?? "—"} / {r.sync.appliedRevision ?? "—"}</dd>
-              <dt>最后成功</dt><dd>{r.sync.lastSuccessfulRevision ?? "—"}</dd>
-              {r.sync.applyStage && (<><dt>应用阶段</dt><dd>{r.sync.applyStage}</dd></>)}
-              {r.sync.degradedReason && (<><dt>降级原因</dt><dd><Badge tone="warn">{r.sync.degradedReason}</Badge></dd></>)}
-              {r.sync.lastError && (<><dt>最近错误</dt><dd class="bad">{r.sync.lastError}</dd></>)}
-              {r.sync.recoveryError && (<><dt>恢复历史配置</dt><dd class="bad">{r.sync.recoveryError}</dd></>)}
+              <dt>{t("Last successful revision")}</dt><dd>{r.sync.lastSuccessfulRevision ?? "—"}</dd>
+              {r.sync.applyStage && (<><dt>{t("Apply stage")}</dt><dd>{r.sync.applyStage}</dd></>)}
+              {r.sync.degradedReason && (<><dt>{t("Degraded reason")}</dt><dd><Badge tone="warn">{r.sync.degradedReason}</Badge></dd></>)}
+              {r.sync.lastError && (<><dt>{t("Last error")}</dt><dd class="bad">{r.sync.lastError}</dd></>)}
+              {r.sync.recoveryError && (<><dt>{t("Last-good recovery")}</dt><dd class="bad">{r.sync.recoveryError}</dd></>)}
             </dl>
             {r.sync.backoff.failureLevel > 0 && (
               <p class="small">
-                <Badge tone="warn">退避 L{r.sync.backoff.failureLevel}</Badge> 窗口 {r.sync.backoff.windowSeconds}s，
-                {r.sync.backoff.nextAttemptInMs != null && <> 下次尝试 {Math.ceil(r.sync.backoff.nextAttemptInMs / 1000)}s 后，</>}
-                {r.sync.backoff.serverCooldownMs ? <> 服务端冷却 {Math.ceil(r.sync.backoff.serverCooldownMs / 1000)}s，</> : null}
-                {r.sync.backoff.probing ? " 恢复探测中，" : ""} 原因：{r.sync.backoff.lastFailure ?? "—"}
-                <br />退避期间继续运行最后成功的配置。
+                <Badge tone="warn">{t("Backoff L{level}", { level: r.sync.backoff.failureLevel })}</Badge> {t("Window {seconds}s", { seconds: r.sync.backoff.windowSeconds })} ·
+                {r.sync.backoff.nextAttemptInMs != null && <> {t("Next attempt in {seconds}s", { seconds: Math.ceil(r.sync.backoff.nextAttemptInMs / 1000) })} ·</>}
+                {r.sync.backoff.serverCooldownMs ? <> {t("Server cooldown {seconds}s", { seconds: Math.ceil(r.sync.backoff.serverCooldownMs / 1000) })} ·</> : null}
+                {r.sync.backoff.probing ? t("Probing recovery") : ""} {t("Reason")}: {r.sync.backoff.lastFailure ?? "—"}
+                <br />{t("The last successful configuration continues running during backoff.")}
               </p>
             )}
           </Card>
           <MaintenanceCard report={r} session={props.session} />
           <MihomoPanelCard />
-          <PackageProgress progress={r.update} reportedAt={r.observedAt} />
-          {r.instances.filter((i) => i.kind === "mihomo-provider" && (i.mode === "auto-download" || i.downloadProgress)).map((i) => <BinaryProgress
-            name="Mihomo" progress={i.downloadProgress} providerState={i.providerState} reason={i.reason}
-            configurationError={r.sync.state === "apply-failed" ? r.sync.lastError : undefined}
-          />)}
-          <Card title="资源">
+          <Card title={t("Resources")}>
             <dl class="kv">
-              <dt>planner RSS</dt><dd>{kib(r.resources?.plannerRssKib)}</dd>
-              <dt>可用内存</dt><dd>{kib(r.resources?.memAvailableKib)} / {kib(r.resources?.memTotalKib)}</dd>
-              <dt>状态盘剩余</dt><dd>{kib(r.resources?.stateDiskFreeKib)}</dd>
-              <dt>负载</dt><dd>{r.resources?.load1Milli != null ? (r.resources.load1Milli / 1000).toFixed(2) : "—"}</dd>
-              <dt>受监管进程</dt><dd>{r.resources?.supervisedProcesses ?? "—"}</dd>
-              <dt>系统</dt><dd>{String(r.system?.os ?? "")} {String(r.system?.osRelease ?? "")} · {String(r.system?.arch ?? "")}{r.system?.container ? ` · 容器${r.system?.networkMode === "bridge" ? "（bridge 网络）" : r.system?.networkMode === "host" ? "（host 网络）" : ""}` : ""}{r.system?.openwrt ? " · OpenWrt" : ""}</dd>
-              <dt>上报时间</dt><dd>{relativeTime(r.observedAt)}</dd>
+              <dt>{t("Planner RSS")}</dt><dd>{kib(r.resources?.plannerRssKib)}</dd>
+              <dt>{t("Available memory")}</dt><dd>{kib(r.resources?.memAvailableKib)} / {kib(r.resources?.memTotalKib)}</dd>
+              <dt>{t("Free state disk")}</dt><dd>{kib(r.resources?.stateDiskFreeKib)}</dd>
+              <dt>{t("Load")}</dt><dd>{r.resources?.load1Milli != null ? (r.resources.load1Milli / 1000).toFixed(2) : "—"}</dd>
+              <dt>{t("Supervised processes")}</dt><dd>{r.resources?.supervisedProcesses ?? "—"}</dd>
+              <dt>{t("System")}</dt><dd>{String(r.system?.os ?? "")} {String(r.system?.osRelease ?? "")} · {String(r.system?.arch ?? "")}{r.system?.container ? ` · ${r.system?.networkMode === "bridge" ? t("container, bridge network") : r.system?.networkMode === "host" ? t("container, host network") : t("container")}` : ""}{r.system?.openwrt ? " · OpenWrt" : ""}</dd>
+              <dt>{t("Reported at")}</dt><dd>{relativeTime(r.observedAt)}</dd>
             </dl>
           </Card>
           <PackageResourceCard packages={r.resources?.packages} reportedAt={r.observedAt} />
@@ -82,7 +76,7 @@ export function MihomoPanelCard() {
   if (!status.data?.enabled) return null;
   const open = async () => {
     const tab = window.open("about:blank", "_blank");
-    if (!tab) { toast("请允许弹出窗口以打开 Mihomo 面板。", "bad"); return; }
+    if (!tab) { toast(t("Please allow pop-ups to open the Mihomo panel."), "bad"); return; }
     tab.opener = null;
     setBusy(true);
     try {
@@ -93,8 +87,8 @@ export function MihomoPanelCard() {
       toast(errorText(e), "bad");
     } finally { setBusy(false); }
   };
-  return <Card title="Mihomo" actions={<Button small disabled={busy} onClick={() => void open()}>打开 Mihomo 面板</Button>}>
-    <p class="small muted">自动使用当前节点的地址和 API 密钥连接。</p>
+  return <Card title="Mihomo" actions={<Button small disabled={busy} onClick={() => void open()}>{t("Open Mihomo panel")}</Button>}>
+    <p class="small muted">{t("Connect automatically using this node's address and API secret.")}</p>
   </Card>;
 }
 
@@ -105,26 +99,26 @@ function MaintenanceCard(props: { report: Report; session: Session }) {
   const [pause, setPause] = useState(true);
   const canAct = roleAtLeast(props.session.role, "operator");
   return (
-    <Card title={<>维护模式 {m?.active ? <Badge tone="warn">进行中</Badge> : <Badge tone="idle">未启用</Badge>}</>}>
+    <Card title={<>{t("Maintenance mode")} {m?.active ? <Badge tone="warn">{t("In progress")}</Badge> : <Badge tone="idle">{t("Disabled")}</Badge>}</>}>
       {m?.active ? (
         <div>
-          <p>{m.reason} · 发起者 {m.by} · 到期 {new Date(m.until).toLocaleString()} {m.applyPaused && <Badge tone="warn">暂停应用配置</Badge>}</p>
-          {canAct && <Button onClick={() => act("/api/maintenance/stop", {}, "维护已结束")}>结束维护</Button>}
+          <p>{m.reason} · {t("Started by {name}", { name: m.by })} · {t("Until {time}", { time: new Date(m.until).toLocaleString(getLocale()) })} {m.applyPaused && <Badge tone="warn">{t("Configuration application paused")}</Badge>}</p>
+          {canAct && <Button onClick={() => act("/api/maintenance/stop", {}, t("Maintenance ended"))}>{t("End maintenance")}</Button>}
         </div>
       ) : canAct ? (
         <div class="form-row">
-          <Field label="原因"><TextInput value={reason} onInput={setReason} placeholder="例如：更换上联" /></Field>
-          <Field label="时长（分钟）"><NumberInput value={minutes} onInput={setMinutes} min={1} max={1440} /></Field>
-          <Checkbox checked={pause} onChange={setPause} label="期间暂停自动应用配置" />
+          <Field label={t("Reason")}><TextInput value={reason} onInput={setReason} placeholder={t("For example: replace the uplink")} /></Field>
+          <Field label={t("Duration (minutes)")}><NumberInput value={minutes} onInput={setMinutes} min={1} max={1440} /></Field>
+          <Checkbox checked={pause} onChange={setPause} label={t("Pause automatic configuration application")} />
           <Button
             disabled={!reason.trim() || !minutes}
-            onClick={() => act("/api/maintenance/start", { reason, durationSeconds: (minutes ?? 30) * 60, pauseApply: pause, stopInstances: [] }, "维护已开始")}
+            onClick={() => act("/api/maintenance/start", { reason, durationSeconds: (minutes ?? 30) * 60, pauseApply: pause, stopInstances: [] }, t("Maintenance started"))}
           >
-            开始维护
+            {t("Start maintenance")}
           </Button>
         </div>
       ) : (
-        <p class="muted">需要 operator 权限。</p>
+        <p class="muted">{t("Operator permission is required.")}</p>
       )}
     </Card>
   );
@@ -135,22 +129,22 @@ function MaintenanceCard(props: { report: Report; session: Session }) {
 export function FeaturesPage() {
   const st = useAsync(() => get<Feature[]>("/api/features"), [], 10000);
   return (
-    <Card title="功能能力（仅显示本节点已安装的包）">
+    <Card title={t("Features of installed packages")}>
       <Loadable state={st} empty={(f) => f.length === 0}>
         {(f) => (
           <Table
             rowKey={(x) => String(x.id)}
             rows={f as never}
             columns={[
-              { key: "id", label: "功能" },
-              { key: "package", label: "包" },
-              { key: "state", label: "状态", render: (x: Feature) => <StateBadge state={x.available ? (x.healthy === false ? "degraded" : "ok") : x.registered ? "idle" : "failed"} label={featureLabel(x)} /> },
-              { key: "provider", label: "provider", render: (x: Feature) => x.provider ?? "—" },
+              { key: "id", label: t("Features") },
+              { key: "package", label: t("Package") },
+              { key: "state", label: t("Status"), render: (x: Feature) => <StateBadge state={x.available ? (x.healthy === false ? "degraded" : "ok") : x.registered ? "idle" : "failed"} label={featureLabel(x)} /> },
+              { key: "provider", label: t("Provider"), render: (x: Feature) => x.provider ?? "—" },
               {
                 key: "reason",
-                label: "说明",
+                label: t("Description"),
                 render: (x: Feature) =>
-                  x.reason ?? (x.limitationCode === "bridge-network" ? "仅在容器的 bridge 网络命名空间内生效：宿主/LAN 流量需路由进容器才会受影响" : x.limitation ?? ""),
+                  x.reason ?? (x.limitationCode === "bridge-network" ? t("Acts only inside the container's bridge network: host/LAN traffic is affected only when routed into the container") : x.limitation ?? ""),
               },
             ] as never}
           />
@@ -161,12 +155,12 @@ export function FeaturesPage() {
 }
 
 function featureLabel(f: Feature): string {
-  if (!f.registered) return "注册失败";
-  if (!f.available) return "缺依赖";
-  if (!f.enabled) return "未启用";
-  if (f.running === false) return "未运行";
-  if (f.healthy === false) return "异常";
-  return f.limitationCode ? "正常（受限）" : "正常";
+  if (!f.registered) return t("Registration failed");
+  if (!f.available) return t("Missing dependencies");
+  if (!f.enabled) return t("Disabled");
+  if (f.running === false) return t("Not running");
+  if (f.healthy === false) return t("Unhealthy");
+  return f.limitationCode ? t("Healthy (limited)") : t("Healthy");
 }
 
 export function PackagesPage() {
@@ -175,20 +169,20 @@ export function PackagesPage() {
     <Loadable state={st}>
       {(p) => (
         <div>
-          <Card title="已安装的包">
+          <Card title={t("Installed packages")}>
             <Table
               rowKey={(x) => String(x.name)}
               rows={p.packages as never}
               columns={[
-                { key: "name", label: "包" },
-                { key: "version", label: "版本" },
-                { key: "role", label: "角色" },
-                { key: "registration", label: "注册", render: (x: PackageStatus) => <StateBadge state={x.registration === "registered" ? "ok" : "failed"} label={x.registration} /> },
-                { key: "reason", label: "说明", render: (x: PackageStatus) => x.reason ?? "" },
+                { key: "name", label: t("Package") },
+                { key: "version", label: t("Version") },
+                { key: "role", label: t("Role") },
+                { key: "registration", label: t("Registration"), render: (x: PackageStatus) => <StateBadge state={x.registration === "registered" ? "ok" : "failed"} label={t(x.registration)} /> },
+                { key: "reason", label: t("Description"), render: (x: PackageStatus) => x.reason ?? "" },
               ] as never}
             />
           </Card>
-          <Card title="软件本体 provider">
+          <Card title={t("Binary providers")}>
             <dl class="kv">
               {Object.entries(p.providers ?? {}).map(([slot, v]) => (
                 <><dt>{slot}</dt><dd>{v.source} · <code>{v.path}</code> {v.version ?? ""}</dd></>
@@ -216,25 +210,25 @@ export function InstancesPage(props: { session: Session }) {
   const maintenance = !!report.data?.maintenance?.active;
   return (
     <div>
-      <Card title="实例">
+      <Card title={t("Instances")}>
         <Loadable state={procs} empty={(p) => Object.keys(p.applied ?? {}).length === 0}>
           {(p) => (
             <Table
               rowKey={(x) => String(x.id)}
               rows={Object.entries(p.applied ?? {}).map(([id, a]) => ({ id, package: a.package, processes: a.processes.join(", ") })) as never}
               columns={[
-                { key: "id", label: "实例" },
-                { key: "package", label: "包" },
-                { key: "processes", label: "进程" },
+                { key: "id", label: t("Instances") },
+                { key: "package", label: t("Package") },
+                { key: "processes", label: t("Processes") },
                 {
                   key: "actions",
                   label: "",
                   render: (x: { id: string }) =>
                     canAct && (
                       <span style={{ display: "flex", gap: "4px" }}>
-                        <Button small onClick={() => act("/api/instances/restart", { instance: x.id }, `${x.id} 已重启`, procs.reload)}>重启</Button>
-                        <Button small disabled={!maintenance} title={maintenance ? "" : "先开始维护，否则自动 reconcile 会恢复"} onClick={() => act("/api/instances/stop", { instance: x.id }, `${x.id} 已停止`, procs.reload)}>停止</Button>
-                        <Button small onClick={() => act("/api/instances/start", { instance: x.id }, `${x.id} 已启动`, procs.reload)}>启动</Button>
+                        <Button small onClick={() => act("/api/instances/restart", { instance: x.id }, t("{name} restarted", { name: x.id }), procs.reload)}>{t("Restart")}</Button>
+                        <Button small disabled={!maintenance} title={maintenance ? "" : t("Start maintenance first; otherwise automatic reconciliation will restart the instance")} onClick={() => act("/api/instances/stop", { instance: x.id }, t("{name} stopped", { name: x.id }), procs.reload)}>{t("Stop")}</Button>
+                        <Button small onClick={() => act("/api/instances/start", { instance: x.id }, t("{name} started", { name: x.id }), procs.reload)}>{t("Start")}</Button>
                       </span>
                     ),
                 },
@@ -243,24 +237,24 @@ export function InstancesPage(props: { session: Session }) {
           )}
         </Loadable>
       </Card>
-      <Card title="进程">
+      <Card title={t("Processes")}>
         <Loadable state={procs}>
           {(p) => (
             <Table
               rowKey={(x) => String(x.id)}
               rows={p.processes as never}
               columns={[
-                { key: "id", label: "进程" },
-                { key: "state", label: "状态", render: (x: Proc) => <StateBadge state={x.state} /> },
+                { key: "id", label: t("Processes") },
+                { key: "state", label: t("Status"), render: (x: Proc) => <StateBadge state={x.state} /> },
                 { key: "pid", label: "PID" },
-                { key: "restarts", label: "重启次数" },
-                { key: "lastExit", label: "最近退出" },
+                { key: "restarts", label: t("Restart count") },
+                { key: "lastExit", label: t("Last exit") },
               ] as never}
             />
           )}
         </Loadable>
       </Card>
-      <Card title="状态 / 邻居">
+      <Card title={t("Status and neighbors")}>
         <Loadable state={report} empty={(r) => r.instances.length === 0}>
           {(r) => (
             <InstanceTree items={r.instances} />
@@ -276,8 +270,8 @@ export function InstancesPage(props: { session: Session }) {
 export function ConfigPage() {
   const st = useAsync(() => get<{ digest: string; config: unknown } | null>("/api/config"), []);
   return (
-    <Card title="最后成功的配置（只读，秘密已隐藏）">
-      <p class="small muted">配置变更请在 manager 中编辑草稿并发布；本地不建立另一套主配置。</p>
+    <Card title={t("Last successful configuration (read-only, secrets redacted)")}>
+      <p class="small muted">{t("Edit and publish configuration drafts in Manager; this dashboard does not keep a separate master configuration.")}</p>
       <Loadable state={st} empty={(c) => !c}>
         {(c) => (
           <div>
@@ -290,62 +284,73 @@ export function ConfigPage() {
   );
 }
 
-export function UpdatesPage(props: { session: Session }) {
+export function UpdatesPage(props: { session: Session; status: AsyncState<Report> }) {
   const st = useAsync(() => get<Record<string, any>>("/api/update/status"), [], 3000);
+  const report = props.status;
   const op = roleAtLeast(props.session.role, "operator");
   const admin = roleAtLeast(props.session.role, "admin");
   return (
-    <Loadable state={st}>
-      {(u) =>
-        u.available === false ? (
-          <Card title="升级"><p>本节点未安装 meduza-np-updater，不提供自动升级。</p></Card>
-        ) : (
-          <div>
-            <PackageProgress progress={progressFromStatus(u)} />
-            <Card
-              title={<>升级 {u.busy ? <Badge tone="info">{u.busy}</Badge> : null} {u.control?.paused ? <Badge tone="warn">已暂停</Badge> : null}</>}
-              actions={
-                <span style={{ display: "flex", gap: "6px" }}>
-                  {op && <Button small disabled={!!u.busy} onClick={() => act("/api/update/check", {}, "已开始检查", st.reload)}>检查</Button>}
-                  {admin && <Button small variant="primary" disabled={!!u.busy} onClick={() => act("/api/update/apply", {}, "已开始升级", st.reload)}>{u.progress?.phase === "failed" || u.state?.lastResult?.outcome === "failed" ? "重试安装" : "立即升级"}</Button>}
-                  {op && (u.control?.paused
-                    ? <Button small onClick={() => act("/api/update/resume", {}, "已恢复", st.reload)}>恢复</Button>
-                    : <Button small onClick={() => act("/api/update/pause", {}, "已暂停", st.reload)}>暂停</Button>)}
-                  {op && <Button small onClick={() => act("/api/update/defer", { seconds: 86400 }, "已延迟 24 小时", st.reload)}>延迟一天</Button>}
-                </span>
-              }
-            >
-              <dl class="kv">
-                <dt>通道</dt><dd>{u.config?.channel}{u.config?.pinnedGroupVersion ? ` · 固定 ${u.config.pinnedGroupVersion}` : ""}</dd>
-                <dt>已安装包组</dt><dd>{u.installed?.groupVersion ?? "—"} (第 {u.installed?.generation ?? 0} 代)</dd>
-                <dt>可用包组</dt><dd>{u.state?.available?.groupVersion ?? "—"}</dd>
-                <dt>上次检查</dt><dd>{relativeTime(u.state?.lastCheck)} {u.state?.lastCheckError && <span class="bad">{u.state.lastCheckError}</span>}</dd>
-                <dt>上次结果</dt><dd>{u.state?.lastResult ? `${u.state.lastResult.groupVersion} ${u.state.lastResult.outcome} ${u.state.lastResult.detail ?? ""}` : "—"}</dd>
-                {u.journal && (<><dt>进行中</dt><dd><Badge tone="info">{u.journal.groupVersion} · {u.journal.phase}</Badge></dd></>)}
-              </dl>
-            </Card>
-            <Card title="已安装的包版本">
-              <Table
-                rowKey={(x) => String(x.name)}
-                rows={Object.entries(u.installed?.packages ?? {}).map(([name, p]: [string, any]) => ({ name, version: p.version, source: p.source })) as never}
-                columns={[{ key: "name", label: "包" }, { key: "version", label: "版本" }, { key: "source", label: "来源" }] as never}
-              />
-            </Card>
-            {u.lastPlan && (
-              <Card title={`计划：${u.lastPlan.groupVersion}`}>
-                {u.lastPlan.blocked?.length > 0 && <p class="bad">阻塞：{u.lastPlan.blocked.join("；")}</p>}
+    <div>
+      {st.data?.available !== false && <PackageProgress progress={st.data ? progressFromStatus(st.data) : report.data?.update} reportedAt={report.data?.observedAt} />}
+      <BinaryDownloads report={report.data} />
+      <Loadable state={st}>
+        {(u) =>
+          u.available === false ? (
+            <Card title={t("Updates")}><p>{t("Updater is not installed on this node; automatic updates are unavailable.")}</p></Card>
+          ) : (
+            <div>
+              <Card
+                title={<>{t("Updates")} {u.busy ? <Badge tone="info">{installPhaseLabel(u.busy === "checking" ? "checking" : "installing")}</Badge> : null} {u.control?.paused ? <Badge tone="warn">{t("Paused")}</Badge> : null}</>}
+                actions={
+                  <span style={{ display: "flex", gap: "6px" }}>
+                    {op && <Button small disabled={!!u.busy} onClick={() => act("/api/update/check", {}, t("Update check started"), st.reload)}>{t("Check")}</Button>}
+                    {admin && <Button small variant="primary" disabled={!!u.busy} onClick={() => act("/api/update/apply", {}, t("Update started"), st.reload)}>{u.progress?.phase === "failed" || u.state?.lastResult?.outcome === "failed" ? t("Retry installation") : t("Upgrade now")}</Button>}
+                    {op && (u.control?.paused
+                      ? <Button small onClick={() => act("/api/update/resume", {}, t("Resumed"), st.reload)}>{t("Resume")}</Button>
+                      : <Button small onClick={() => act("/api/update/pause", {}, t("Paused"), st.reload)}>{t("Pause")}</Button>)}
+                    {op && <Button small onClick={() => act("/api/update/defer", { seconds: 86400 }, t("Deferred for 24 hours"), st.reload)}>{t("Defer for one day")}</Button>}
+                  </span>
+                }
+              >
+                <dl class="kv">
+                  <dt>{t("Channel")}</dt><dd>{u.config?.channel}{u.config?.pinnedGroupVersion ? ` · ${t("Pinned {version}", { version: u.config.pinnedGroupVersion })}` : ""}</dd>
+                  <dt>{t("Installed group")}</dt><dd>{u.installed?.groupVersion ?? "—"} ({t("generation {generation}", { generation: u.installed?.generation ?? 0 })})</dd>
+                  <dt>{t("Available group")}</dt><dd>{u.state?.available?.groupVersion ?? "—"}</dd>
+                  <dt>{t("Last check")}</dt><dd>{relativeTime(u.state?.lastCheck)} {u.state?.lastCheckError && <span class="bad">{u.state.lastCheckError}</span>}</dd>
+                  <dt>{t("Last result")}</dt><dd>{u.state?.lastResult ? `${u.state.lastResult.groupVersion} ${t(u.state.lastResult.outcome)} ${u.state.lastResult.detail ?? ""}` : "—"}</dd>
+                  {u.journal && (<><dt>{t("In progress")}</dt><dd><Badge tone="info">{u.journal.groupVersion} · {installPhaseLabel(u.journal.phase)}</Badge></dd></>)}
+                </dl>
+              </Card>
+              <Card title={t("Installed package versions")}>
                 <Table
-                  rowKey={(x) => String(x.package)}
-                  rows={u.lastPlan.actions as never}
-                  columns={[{ key: "package", label: "包" }, { key: "kind", label: "动作" }, { key: "from", label: "当前" }, { key: "to", label: "目标" }] as never}
+                  rowKey={(x) => String(x.name)}
+                  rows={Object.entries(u.installed?.packages ?? {}).map(([name, p]: [string, any]) => ({ name, version: p.version, source: p.source })) as never}
+                  columns={[{ key: "name", label: t("Package") }, { key: "version", label: t("Version") }, { key: "source", label: t("Source") }] as never}
                 />
               </Card>
-            )}
-          </div>
-        )
-      }
-    </Loadable>
+              {u.lastPlan && (
+                <Card title={t("Plan: {version}", { version: u.lastPlan.groupVersion })}>
+                  {u.lastPlan.blocked?.length > 0 && <p class="bad">{t("Blocked")}: {u.lastPlan.blocked.join("; ")}</p>}
+                  <Table
+                    rowKey={(x) => String(x.package)}
+                    rows={u.lastPlan.actions as never}
+                    columns={[{ key: "package", label: t("Package") }, { key: "kind", label: t("Action") }, { key: "from", label: t("Current") }, { key: "to", label: t("Target") }] as never}
+                  />
+                </Card>
+              )}
+            </div>
+          )
+        }
+      </Loadable>
+    </div>
   );
+}
+
+function BinaryDownloads({ report }: { report?: Report | null }) {
+  return <>{(report?.instances ?? []).filter((i) => i.kind === "mihomo-provider" && (i.mode === "auto-download" || i.downloadProgress)).map((i) => <BinaryProgress
+    name="Mihomo" progress={i.downloadProgress} providerState={i.providerState} reason={i.reason}
+    configurationError={report?.sync.state === "apply-failed" ? report.sync.lastError : undefined}
+  />)}</>;
 }
 
 /** Downloads the planner's redacted support bundle (status, checks, configuration, logs; credentials removed). */
@@ -358,10 +363,10 @@ async function exportBundle() {
     a.download = `meduza-np-support-${new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 14)}.json`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
-    const cut = Array.isArray(b.truncated) ? `（已缩减：${(b.truncated as string[]).join("、")}）` : "";
-    toast(`支持包已导出，凭据已脱敏${cut}`, "ok");
+    const cut = Array.isArray(b.truncated) ? t(" (truncated: {items})", { items: (b.truncated as string[]).join(", ") }) : "";
+    toast(t("Support bundle exported with credentials redacted{detail}", { detail: cut }), "ok");
   } catch (e) {
-    toast(`导出失败：${errorText(e)}`, "bad");
+    toast(t("Export failed: {error}", { error: errorText(e) }), "bad");
   }
 }
 
@@ -371,11 +376,11 @@ export function DiagnosticsPage() {
   return (
     <div>
       <Card
-        title="诊断"
+        title={t("Diagnostics")}
         actions={
           <div class="row">
-            <Button small onClick={() => void exportBundle()}>导出支持包</Button>
-            <Button small onClick={doctor.reload}>重新检查</Button>
+            <Button small onClick={() => void exportBundle()}>{t("Export support bundle")}</Button>
+            <Button small onClick={doctor.reload}>{t("Check again")}</Button>
           </div>
         }
       >
@@ -389,7 +394,7 @@ export function DiagnosticsPage() {
           )}
         </Loadable>
       </Card>
-      <Card title="planner 日志">
+      <Card title={t("Planner logs")}>
         <Loadable state={logs}>{(l) => <pre class="code">{(Array.isArray(l) ? l : []).join("\n")}</pre>}</Loadable>
       </Card>
     </div>

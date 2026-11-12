@@ -1,4 +1,5 @@
 // Same-origin API client for the Rust dashboard server: cookie session, CSRF header on writes.
+import { t } from "@meduza-np/ui-kit";
 
 export class ApiError extends Error {
   constructor(readonly status: number, readonly code: string, message: string) {
@@ -30,8 +31,8 @@ export const get = <T = unknown>(path: string) => call<T>("GET", path);
 export const post = <T = unknown>(path: string, body?: unknown) => call<T>("POST", path, body);
 
 export function errorText(e: unknown): string {
-  if (e instanceof ApiError) return e.status === 503 ? `服务不可用：${e.message}` : `${e.message} (${e.code})`;
-  return e instanceof Error ? e.message : String(e);
+  if (e instanceof ApiError) return e.status === 503 ? t("Service unavailable: {error}", { error: e.message }) : `${e.message} (${e.code})`;
+  return e instanceof Error ? t(e.message) : String(e);
 }
 
 export interface Session {

@@ -85,6 +85,26 @@ const tone = (p: InstallProgress): Tone => p.phase === "failed" || p.phase === "
 const progressLabel = (p: InstallProgress) => p.phase === "done" && ((p.totalPackages ?? 0) > 0 || p.lastResult?.outcome === "done") ? t("Update completed") : installPhaseLabel(p.phase);
 const resultLabel = (outcome?: string) => outcome === "done" ? t("Update completed") : outcome === "failed" ? installPhaseLabel("failed") : outcome === "rolledback" || outcome === "rolled-back" ? installPhaseLabel("rolled-back") : t(outcome ?? "unknown");
 
+/** Keep completed/failed history in the details page; the global notice describes current work only. */
+export function UpdateNotice(props: {
+  progress?: InstallProgress | null;
+  binaries?: Array<{ name: string; progress?: BinaryTransferProgress | null }>;
+  href: string;
+  requested?: boolean;
+}) {
+  const p = props.progress;
+  const installing = !!p?.active && !["done", "idle", "paused", "failed", "rolled-back"].includes(p.phase);
+  const binaries = (props.binaries ?? []).filter((b) => b.progress?.active && !["done", "failed", "interrupted"].includes(b.progress.phase));
+  if (!installing && !binaries.length && !props.requested) return null;
+  return <div class="callout info row" data-update-notice role="status" style={{ padding: "8px 12px", gap: "8px" }}>
+    <strong>{t("Update or download in progress")}</strong>
+    {installing && <span class="small">{installPhaseLabel(p!.phase)}{p!.groupVersion ? ` · ${p!.groupVersion}` : ""}</span>}
+    {binaries.map((b) => <span class="small">{t("{name} binary download", { name: b.name })}</span>)}
+    {!installing && !binaries.length && props.requested && <span class="small">{t("Waiting for the node")}</span>}
+    <span class="spacer" /><a href={props.href}>{t("View update details")}</a>
+  </div>;
+}
+
 /** Older updater APIs still provide journal/error phases; never invent byte progress when they do not report it. */
 export function progressFromStatus(status: Record<string, any>): InstallProgress | null {
   if (status.progress) return status.progress as InstallProgress;

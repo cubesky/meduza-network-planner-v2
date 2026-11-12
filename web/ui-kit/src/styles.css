@@ -108,6 +108,7 @@ h3 { font-size: 13.5px; font-weight: 650; margin: 18px 0 12px; color: var(--text
 .nav a:hover { background: var(--surface-2); color: var(--text); text-decoration: none; }
 .nav a.active { background: var(--accent-soft); color: var(--accent); }
 .nav .account { margin-top: auto; padding: 12px 10px 4px; border-top: 1px solid var(--border); display: grid; gap: 8px; }
+.nav select { min-width: 0; max-width: 100%; }
 .main { padding: 24px 28px 96px; min-width: 0; max-width: 1360px; }
 .topbar, .page-head { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 18px; flex-wrap: wrap; }
 .topstrip { display: flex; justify-content: flex-end; gap: 8px; min-height: 0; margin: -12px 0 6px; }
