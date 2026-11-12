@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 pub const SLOT: &str = "openvpn.binary";
+pub mod monitor;
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -608,8 +609,6 @@ pub fn render(inst: &Instance, req: &PluginRequest) -> Result<Rendered, PluginEr
             if let Some(dom) = &a.push_domain {
                 add(format!("push {}", quote(&format!("dhcp-option DOMAIN {dom}"))));
             }
-            add(format!("status {} 10", quote(&format!("{run}/openvpn-{}.status", inst.id))));
-            add("status-version 3".into());
         }
         (_, Topology::P2p, role) => {
             if inst.static_key_ref.is_none() {
@@ -634,8 +633,6 @@ pub fn render(inst: &Instance, req: &PluginRequest) -> Result<Rendered, PluginEr
             add("tls-server".into());
             add("topology subnet".into());
             add(format!("server {} {}", n.network(), mask(n.prefix_len())));
-            add(format!("status {} 10", quote(&format!("{run}/openvpn-{}.status", inst.id))));
-            add("status-version 3".into());
         }
         (_, Topology::Subnet, Role::Client) => {
             if inst.pull {
@@ -683,8 +680,13 @@ pub fn render(inst: &Instance, req: &PluginRequest) -> Result<Rendered, PluginEr
     if let Some(cph) = &inst.cipher {
         add(format!("{} {cph}", if inst.static_key_ref.is_some() { "cipher" } else { "data-ciphers-fallback" }));
     }
-    // Management on a private Unix socket for status queries only.
+    // Some system providers compile management out (including size-optimized OpenWrt builds). It is
+    // optional monitoring, never an excuse to relax crypto/config validation or fail the tunnel itself.
+    add("ignore-unknown-option management".into());
     add(format!("management {} unix", quote(&format!("{run}/openvpn-{}.mgmt", inst.id))));
+    add(format!("writepid {}", quote(&format!("{run}/openvpn-{}.pid", inst.id))));
+    add(format!("status {} 10", quote(&format!("{run}/openvpn-{}.status", inst.id))));
+    add("status-version 3".into());
 
     if let Some(id) = &inst.static_key_ref {
         // The user explicitly selected legacy static-key mode. OpenVPN 2.7 needs the opt-in; older supported
@@ -926,12 +928,17 @@ pub fn statuses(cfg: &OpenVpnConfig, observed: &BTreeMap<String, Observed>, now:
         let mut detail = BTreeMap::new();
         detail.insert("processRunning".into(), Value::Bool(o.process_running));
         detail.insert("devicePresent".into(), Value::Bool(o.device_present));
+        detail.insert("sessionStateAvailable".into(), Value::Bool(o.state.is_some()));
+        if let Some((rx, tx)) = o.status_file.as_deref().filter(|_| o.process_running).and_then(monitor::parse_p2p_counters) {
+            detail.insert("rxBytes".into(), rx.into());
+            detail.insert("txBytes".into(), tx.into());
+        }
         // (no `kind` detail: details are flattened into the status and would replace `openvpn-site2site`)
         // Servers with a client list (`mode server`: Access, Site2Site subnet); a p2p server has one peer and a session
         // state like a client.
         let multi_client = inst.kind == Kind::Access || (inst.role == Role::Server && inst.topology == Topology::Subnet);
         let (state, reason) = if multi_client {
-            let (clients, updated) = o.status_file.as_deref().map(parse_status_v3).unwrap_or_default();
+            let (clients, updated) = o.status_file.as_deref().filter(|_| o.process_running).map(parse_status_v3).unwrap_or_default();
             detail.insert("clients".into(), Value::from(clients.len()));
             if let Some(u) = updated {
                 detail.insert("statusUpdated".into(), Value::String(meduza_np_plugin_sdk::unix_to_rfc3339(u)));
@@ -984,7 +991,12 @@ pub fn statuses(cfg: &OpenVpnConfig, observed: &BTreeMap<String, Observed>, now:
                 (false, _) => (ServiceState::Down, Some("process not running".to_string())),
                 (true, Some("CONNECTED")) => (ServiceState::Up, None),
                 (true, Some(s)) => (ServiceState::Starting, Some(format!("session {s}"))),
-                (true, None) => (ServiceState::Unknown, Some("management interface not reachable".to_string())),
+                (true, None) if !o.device_present => {
+                    (ServiceState::Degraded, Some("tunnel device missing; session state unavailable".to_string()))
+                }
+                (true, None) => {
+                    (ServiceState::Unknown, Some("process running; management unavailable, session state cannot be observed".to_string()))
+                }
             }
         };
         out.push(InstanceStatus {
@@ -1223,6 +1235,50 @@ mod tests {
         assert!(!st[0].detail.contains_key("clients"), "one peer, no client list");
         obs.get_mut("ext").unwrap().state = parse_state("1700000000,WAIT,,,,,,\n");
         assert_eq!(statuses(&cfg, &obs, 1700000200)[0].state, ServiceState::Starting, "waiting for the peer");
+    }
+
+    #[test]
+    fn optional_management_keeps_strict_native_checks_and_independent_status_paths() {
+        let r = req(json!([
+            {"id":"p2p","kind":"site2site","role":"server","staticKeyRef":"tc",
+             "ifconfig":{"local":"10.9.0.1","remote":"10.9.0.2"}},
+            {"id":"access","kind":"access","port":1195,"tls":{"caRef":"ca","certRef":"crt","keyRef":"key"},"access":{"pool":"10.88.0.0/24"}}
+        ]));
+        let cfg = load(&r).unwrap();
+        let plans = plan(&cfg, &r).unwrap();
+        for inst in &cfg.instances {
+            let text = render(inst, &r).unwrap().config;
+            assert!(text.find("ignore-unknown-option management\n").unwrap() < text.find("\nmanagement ").unwrap());
+            assert_eq!(text.lines().filter(|line| line.starts_with("status ")).count(), 1);
+            assert_eq!(text.lines().filter(|line| line.starts_with("status-version ")).count(), 1);
+            assert!(text.contains(&format!("openvpn-{}.pid", inst.id)));
+            assert!(!text.contains("FORWARD_COMPATIBLE"));
+            let ignored: Vec<_> =
+                text.lines().filter_map(|line| line.strip_prefix("ignore-unknown-option ")).flat_map(str::split_whitespace).collect();
+            assert!(ignored.iter().all(|option| matches!(*option, "management" | "allow-deprecated-insecure-static-crypto")));
+        }
+        assert!(plans.iter().all(|plan| !plan.checks.is_empty() && plan.checks.iter().all(|check| check.required)));
+        let mut observed = BTreeMap::from([(
+            "p2p".into(),
+            Observed {
+                process_running: true,
+                device_present: true,
+                state: None,
+                status_file: Some("OpenVPN STATISTICS\nTCP/UDP read bytes,123\nTCP/UDP write bytes,456\nEND\n".into()),
+            },
+        )]);
+        let row = &statuses(&cfg, &observed, 1700000200)[0];
+        assert_eq!(row.state, ServiceState::Unknown, "a running process and traffic do not prove a current session");
+        assert_eq!(row.detail["processRunning"], json!(true));
+        assert_eq!(row.detail["sessionStateAvailable"], json!(false));
+        assert_eq!(row.detail["rxBytes"], json!(123));
+        assert!(row.reason.as_ref().unwrap().contains("session state cannot be observed"));
+        observed.get_mut("p2p").unwrap().device_present = false;
+        assert_eq!(statuses(&cfg, &observed, 1700000200)[0].state, ServiceState::Degraded);
+        observed.get_mut("p2p").unwrap().process_running = false;
+        let row = &statuses(&cfg, &observed, 1700000200)[0];
+        assert_eq!(row.state, ServiceState::Down);
+        assert!(!row.detail.contains_key("rxBytes"), "a stopped process cannot expose stale transfer counters");
     }
 
     #[test]

@@ -203,6 +203,88 @@ fn tunnel_config(env: &Env, short: &str, rev: u64, ids: &[&str]) -> (Value, Stri
     (raw, digest)
 }
 
+#[cfg(target_os = "linux")]
+#[tokio::test(flavor = "current_thread")]
+async fn openvpn_without_management_passes_checks_and_is_observed_via_its_owned_pid() {
+    use meduza_np_planner::state::AppliedState;
+    use meduza_np_plugin_sdk::{test_request, ProbeResult};
+    use meduza_np_protocol::plan::CommandSpec;
+    use std::os::unix::fs::PermissionsExt;
+    let _native_env = NATIVE_TOOL_ENV.lock().await;
+    let Some(env) = setup("openvpn-small") else { return };
+    if !env.have_openvpn {
+        return;
+    }
+    let checker = env.paths.etc.parent().unwrap().join("openvpn-small-check");
+    std::fs::write(
+        &checker,
+        r#"#!/bin/sh
+if ! grep -q '^ignore-unknown-option management$' "$2"; then
+    echo 'Options error: Unrecognized option or missing or extra parameter(s): management (2.7.4)' >&2
+    exit 1
+fi
+case "$2" in */broken/*) echo 'unsupported local cipher' >&2; exit 1 ;; esac
+exit 0
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&checker, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let reg = registry::scan(&env.paths.packages, &Default::default());
+    let (raw, digest) = tunnel_config(&env, "openvpn", 1, &["good", "broken", "later"]);
+    let native_check = CommandSpec {
+        provider_slot: None,
+        program: Some(checker.to_string_lossy().into_owned()),
+        argv: vec!["--config".into(), "${GENERATION_ROOT}/PLACEHOLDER/config.ovpn".into()],
+        required: true,
+        timeout_seconds: 3,
+    };
+    let mut prepared = env.engine.prepare(&raw, &digest, &reg, &Default::default()).await.unwrap();
+    for (_, plan) in prepared.plans.iter_mut().filter(|(p, _)| p == "meduza-np-openvpn") {
+        let mut check = native_check.clone();
+        check.argv[1] = format!("${{GENERATION_ROOT}}/{}/config.ovpn", plan.instance);
+        plan.checks = vec![check];
+        for file in &mut plan.files {
+            file.content = file.content.replace("ignore-unknown-option management\n", "");
+        }
+    }
+    env.engine.commit(&prepared, &reg).await.unwrap();
+    let before = AppliedState::load(&env.paths).unwrap();
+    assert_eq!(before.instance_errors.len(), 3, "reproduce the unsupported management error for every tunnel");
+    assert!(before.instance_errors.values().all(|e| e.message.contains("management (2.7.4)")));
+    let mut prepared = env.engine.prepare(&raw, &digest, &reg, &Default::default()).await.unwrap();
+    for (_, plan) in prepared.plans.iter_mut().filter(|(p, _)| p == "meduza-np-openvpn") {
+        let mut check = native_check.clone();
+        check.argv[1] = format!("${{GENERATION_ROOT}}/{}/config.ovpn", plan.instance);
+        plan.checks = vec![check];
+    }
+    env.engine.commit(&prepared, &reg).await.unwrap();
+    let after = AppliedState::load(&env.paths).unwrap();
+    assert!(after.instances.contains_key("openvpn/good") && after.instances.contains_key("openvpn/later"));
+    assert_eq!(after.instance_errors.len(), 1);
+    assert_eq!(after.instance_errors["openvpn/broken"].code, "syntax-check-failed");
+    assert!(after.instance_errors["openvpn/broken"].message.contains("unsupported local cipher"));
+    let mut request = test_request("probe", raw);
+    request.providers = reg.providers.clone();
+    request.context.generation_root = env.paths.current_generation_link().to_string_lossy().into_owned();
+    request.context.run_dir = env.paths.run.to_string_lossy().into_owned();
+    let program = reg.plugin_path(reg.by_short("openvpn").unwrap()).unwrap();
+    let observed: ProbeResult = serde_json::from_value(env.engine.runner.call(&program, &request).await.unwrap()).unwrap();
+    for id in ["openvpn/good", "openvpn/later"] {
+        let row = observed.instances.iter().find(|r| r.id == id).unwrap();
+        assert_eq!(row.detail["processRunning"], json!(true), "a missing management socket does not mean no process");
+        assert_eq!(row.detail["sessionStateAvailable"], json!(false));
+        assert_eq!(row.detail["rxBytes"], json!(123));
+        assert_ne!(row.reason.as_deref(), Some("process not running"));
+    }
+    env.engine.supervisor.stop_all().await;
+    let observed: ProbeResult = serde_json::from_value(env.engine.runner.call(&program, &request).await.unwrap()).unwrap();
+    assert!(
+        observed.instances.iter().all(|r| r.detail["processRunning"] == json!(false)),
+        "stale PID/status files cannot keep stopped instances alive"
+    );
+    let _ = std::fs::remove_dir_all(env.paths.etc.parent().unwrap());
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn tunnel_prepare_errors_are_per_instance_and_group_conflicts_remain_checked() {
     let _native_env = NATIVE_TOOL_ENV.lock().await;

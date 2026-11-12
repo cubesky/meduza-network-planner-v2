@@ -16,6 +16,20 @@ fn main() {
     }
     // OpenVPN's actual adapter invokes native checks with --config too. Checks exit; the service lives.
     if args.iter().any(|a| a == "--config") && !args.iter().any(|a| matches!(a.as_str(), "--test-crypto" | "--show-ciphers")) {
+        if let Some(file) = args.windows(2).find(|a| a[0] == "--config").map(|a| &a[1]) {
+            let config = std::fs::read_to_string(file).unwrap_or_default();
+            for line in config.lines() {
+                if let Some(path) = line.strip_prefix("writepid ") {
+                    let _ = std::fs::write(path.trim_matches('"'), std::process::id().to_string());
+                }
+                if let Some(path) = line.strip_prefix("status ").and_then(|s| s.strip_suffix(" 10")) {
+                    let _ = std::fs::write(
+                        path.trim_matches('"'),
+                        "OpenVPN STATISTICS\nTCP/UDP read bytes,123\nTCP/UDP write bytes,456\nEND\n",
+                    );
+                }
+            }
+        }
         loop {
             std::thread::sleep(std::time::Duration::from_secs(3600));
         }

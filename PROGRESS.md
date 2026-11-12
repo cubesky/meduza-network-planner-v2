@@ -10,6 +10,28 @@ scheduled "continue" task) must:
 
 Design decisions live in `docs/DECISIONS.md`.
 
+### 2026-11-13 — D97: optional OpenVPN management and independent liveness
+
+Diagnosed 10.42.11.2 read-only: /usr/sbin/openvpn 2.7.4 rejects management and --help is unavailable.
+Confirmed --ignore-unknown-option management makes its read-only --show-ciphers parser check exit 0;
+without it the check exits 1. The persist-key warning is unrelated. Upstream source confirms the
+prechecks exit before native PID writing, management socket binding and tunnel startup.
+
+Made only management optional in generated configs, retaining native crypto/key checks. Generate
+owned PID/status files for all instance modes, verify executable/config command lines before claiming
+liveness, and accept only fresh status data from the running process lifetime. Added p2p transfer
+counters and explicit unavailable session state, preserving process/device/session distinctions and
+actionable errors for unsupported selective client disconnect. New source: openvpn/src/monitor.rs.
+
+Verification: 92 tests pass across planner/OpenVPN/WireGuard (49 planner unit, 15 engine integration,
+13 OpenVPN, 15 WireGuard), plus all-target Clippy -D warnings. The new real-adapter regression reproduces
+management parse failures, recovers healthy instances, preserves another instance's native crypto
+failure and verifies live PID observations without sockets plus stale-PID rejection after stop.
+PID reuse/wrong executable/config, stale status, generator whitelist and conservative session status
+tests pass. Evidence: target/check-openvpn-small.log, check-openvpn-small-engine.log and
+check-openvpn-small-all.log. Native rustfmt and git diff --check pass. No device files/services changed,
+no package installation/deployment, and no Git staging/commit.
+
 ### 2026-11-13 — D96: disabled tunnel entries across publish, runtime and status
 
 Completed disabled-state handling for WireGuard/OpenVPN services/instances and WireGuard peers.

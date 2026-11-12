@@ -605,3 +605,17 @@ secret delivery, probing and failure retries. Disabled drafts may retain unfinis
 them restores validation. An applied disable stops the owned instance processes/resources or removes
 the WireGuard peer from native configuration. Its status becomes `disabled` without stale errors or
 retry details. Restart actions cannot override this configuration: enable and apply the entry first.
+
+### System OpenVPN without management
+
+Some system binaries omit management, and small builds may omit the full --help output too. A native
+error naming `management` is independent of a `persist-key` deprecation warning. The adapter now makes
+only management optional; crypto/key/config errors remain required, per-instance failures. After
+updating meduza-np-openvpn, reapply the configuration (the normal package rescan/retry can also do so).
+Do not edit a generated config as a persistent fix.
+
+Without management, PID ownership, device presence and fresh native status counters remain observable.
+Precise p2p session state is explicitly unavailable rather than guessed from a running process. For
+full session observations and selective client disconnection, use a management-enabled provider;
+meduza-np-openvpn-pkg already includes management support. No provider is automatically replaced just
+because a system binary has reduced monitoring capabilities.

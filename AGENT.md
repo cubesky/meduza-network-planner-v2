@@ -619,6 +619,8 @@ WireGuard / OpenVPN 以实例为应用和故障隔离边界：单个实例缺失
 
 状态优先使用 OpenVPN management/status 接口，并将进程存活、隧道设备、会话建立分开。普通实例与 Access 都由同一插件管理，但类型与模板分开。
 
+系统 OpenVPN 可以裁剪 management；不得仅因缺少这一监控功能拒绝隧道配置。生成配置仅对 management 使用 `ignore-unknown-option`，保留加密、密钥和其余原生检查。所有实例生成独立 writepid 与 status 路径；进程存活须核对 PID 对应的实际二进制和本实例 `--config` 参数，不能仅依据残留 socket/PID 文件。状态文件只接受运行进程本次生命周期内且最近 30 秒更新的数据。缺少 management 时可上报进程、设备和流量，精确会话状态显示不可观测，不能把存活或历史流量当作连接成功。定点断开客户端需要支持 management 的本体，不支持时返回明确错误；项目 openvpn-pkg 保留此功能（D97）。
+
 ### 9.3 OpenVPN Access 与鉴权脚本
 
 Access 是 OpenVPN server 实例类型，不再固定只能有一个名为 access 的服务。支持端口、协议、设备、客户端 IPv4 池、服务器证书、可选客户端证书策略、CRL、允许人数、keepalive、DNS、路由推送、认证/授权策略。

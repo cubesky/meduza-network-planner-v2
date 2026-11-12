@@ -31,7 +31,8 @@ fn management_state(path: &str) -> Option<String> {
         }
     }
     let _ = s.write_all(b"quit\n");
-    Some(String::from_utf8_lossy(&buf).into_owned())
+    let reply = String::from_utf8_lossy(&buf).into_owned();
+    reply.lines().any(|line| line.trim() == "END").then_some(reply)
 }
 
 #[cfg(not(unix))]
@@ -80,11 +81,6 @@ fn management_session(_path: &str) -> Result<fn(&str) -> Reply, String> {
     Err("the management interface needs a unix socket".into())
 }
 
-fn process_running(run_dir: &str, id: &str) -> bool {
-    // The management socket only exists while OpenVPN runs; planner's supervisor state is reported separately.
-    std::path::Path::new(&format!("{run_dir}/openvpn-{id}.mgmt")).exists()
-}
-
 impl Plugin for OpenVpn {
     fn validate(&self, req: &PluginRequest) -> Result<ValidateResult, PluginError> {
         let cfg = ovpn::load(req)?;
@@ -103,16 +99,29 @@ impl Plugin for OpenVpn {
     fn probe(&self, req: &PluginRequest) -> Result<ProbeResult, PluginError> {
         let cfg = ovpn::load(req)?;
         let run = req.context.run_dir.trim_end_matches('/');
+        let provider = req.provider(ovpn::SLOT)?;
         let mut observed = BTreeMap::new();
         for inst in cfg.instances.iter().filter(|i| i.enabled) {
             let id = inst.id.as_str();
+            let pid = std::path::PathBuf::from(format!("{run}/openvpn-{id}.pid"));
+            let reply = management_state(&format!("{run}/openvpn-{id}.mgmt"));
+            let running = ovpn::monitor::owned_process_running(
+                &pid,
+                &provider.path,
+                &format!("{}/openvpn/{id}/config.ovpn", req.context.generation_root.trim_end_matches('/')),
+            ) || reply.is_some();
             observed.insert(
                 id.to_string(),
                 ovpn::Observed {
-                    process_running: process_running(run, id),
+                    process_running: running,
                     device_present: std::path::Path::new(&format!("/sys/class/net/{}", inst.device())).exists(),
-                    state: management_state(&format!("{run}/openvpn-{id}.mgmt")).and_then(|t| ovpn::parse_state(&t)),
-                    status_file: std::fs::read_to_string(format!("{run}/openvpn-{id}.status")).ok(),
+                    state: reply.and_then(|t| ovpn::parse_state(&t)),
+                    status_file: ovpn::monitor::current_status(
+                        std::path::Path::new(&format!("{run}/openvpn-{id}.status")),
+                        &pid,
+                        running,
+                        std::time::SystemTime::now(),
+                    ),
                 },
             );
         }
@@ -156,8 +165,12 @@ impl Plugin for OpenVpn {
                     return Err(PluginError::new("invalid-params", "username or clientId required"));
                 }
                 let run = req.context.run_dir.trim_end_matches('/');
-                let mgmt =
-                    management_session(&format!("{run}/openvpn-{id}.mgmt")).map_err(|e| PluginError::new("management-unavailable", e))?;
+                let mgmt = management_session(&format!("{run}/openvpn-{id}.mgmt")).map_err(|e| {
+                    PluginError::new(
+                        "management-unavailable",
+                        format!("{e}; selective disconnect requires a management-enabled OpenVPN provider (meduza-np-openvpn-pkg)"),
+                    )
+                })?;
                 ovpn::disconnect_clients(mgmt, username, client_id)
             }
             other => Err(PluginError::new("unsupported", format!("unknown action {other:?}"))),

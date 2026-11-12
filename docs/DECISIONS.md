@@ -2281,3 +2281,40 @@ Automatic retries and local/Manager start/restart requests check applied activat
 stale persisted failure cannot revive a disabled entry. Probes skip disabled instances. Manager status
 rows and shared Manager/Dashboard collection forms hide restart actions for disabled entries, retaining
 configuration editing and enable controls. No production changes or Git commits are made here.
+
+## D97 — tolerate system OpenVPN builds without management (2026-11-13)
+
+Read-only checks on 10.42.11.2 confirm that its /usr/sbin/openvpn 2.7.4 rejects --management, while
+--help only prints "Usage message not available". OpenWrt exposes management as a build option; the
+specific node binary lacks it despite supporting LZO/LZ4. The persist-key deprecation warning is not
+the fatal error. Do not infer capabilities solely from version or missing help text.
+
+Keep the private Unix management directive for full providers, preceded by exactly
+ignore-unknown-option management so trimmed builds can run. This does not whitelist any crypto,
+key, routing or authentication option, or relax required native checks. The existing static-crypto
+compatibility whitelist is unchanged. The node's read-only --show-ciphers parser check exits 1 with
+management alone and 0 with this narrowly scoped compatibility directive. Upstream initialization
+also confirms --show-ciphers/--test-crypto exit before PID writing, management binding or tunnel startup.
+
+Emit per-instance writepid and status/status-version for every mode, including client/p2p. Probe PID
+files against /proc command lines, verifying both executable and the owned --config path. A successful
+terminated management response also supports already-running older configurations without writepid;
+socket-file existence alone never proves liveness. Status reads are bounded and require a live process,
+a file not predating its PID file and freshness within thirty seconds. Parse p2p network byte counters
+separately from the server v3 client list; do not expose stale clients/counters from stopped processes.
+
+Without management, process/device/counter observations remain available. A p2p session lacking exact
+state is unknown (or degraded if its device is missing), with sessionStateAvailable=false and an
+explicit reason. A device or old counters do not prove a live session, especially with persist-tun.
+Selective client disconnection still requires management and returns an actionable error when absent;
+the project's existing openvpn-pkg recipe explicitly enables and smoke-tests management support.
+
+Evidence: the native parser checks above changed no device files or services. Tests reproduce the
+original management failure, verify healthy instances apply while a separate crypto error remains
+isolated, query the real adapter over live fake-provider PIDs without sockets, then reject their stale
+PID/status files after stop. Generator, PID-reuse/ownership, status freshness and conservative session
+tests pass. No production deployment, package installation or Git commit is performed.
+
+Sources: [OpenWrt build option](https://github.com/openwrt/packages/blob/master/net/openvpn/Config-openssl.in),
+[OpenVPN option parsing](https://github.com/OpenVPN/openvpn/blob/v2.7.4/src/openvpn/options.c),
+[OpenVPN initialization order](https://github.com/OpenVPN/openvpn/blob/v2.7.4/src/openvpn/openvpn.c).
