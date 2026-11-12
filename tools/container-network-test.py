@@ -2,6 +2,8 @@
 
 --real-network additionally checks real routes and a bind-mounted resolv.conf in an isolated network/mount
 namespace. Run this variant as root; it never touches the host's interfaces, routes or resolver.
+--real-tproxy checks real transparent TCP handshakes and mark/source-validation conflicts in throwaway
+network namespaces. Requires root, nftables and kernel TPROXY support; no Internet access is needed.
 """
 
 import ipaddress
@@ -10,6 +12,7 @@ import os
 from pathlib import Path
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -298,6 +301,27 @@ if sys.argv[1:3] == ["network", "inspect"]:
                 self.assertEqual(updater[updater.index("--network") + 1], "meduza-np")
                 self.assertNotIn("NET_ADMIN", updater[updater.index("--cap-add") + 1].split(","))
 
+    def test_planner_source_validation_does_not_use_tproxy_mark(self):
+        for mode in ("bridge", "macvlan", "host"):
+            with self.subTest(mode=mode):
+                extra = ("--macvlan-network", "lan", "--ip", "192.168.50.2", "--updater-ip", "192.168.50.3") if mode == "macvlan" else ()
+                result = self.run_deploy("--network", mode, *extra)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                planner = [a for a in self.calls() if a[0] == "run"][-1]
+                sysctls = [planner[i + 1] for i, arg in enumerate(planner) if arg == "--sysctl"]
+                if mode == "host":
+                    self.assertEqual(sysctls, [], "host policy remains administrator-controlled")
+                else:
+                    self.assertIn("net.ipv4.conf.all.src_valid_mark=0", sysctls)
+                    self.assertIn("net.ipv4.conf.default.src_valid_mark=0", sysctls)
+                self.assertNotIn("net.ipv4.conf.all.src_valid_mark=1", sysctls)
+        units = RUN.parent
+        for relative in ("meduza-np-planner.container", "macvlan/meduza-np-planner.container"):
+            lines = (units / relative).read_text(encoding="utf-8").splitlines()
+            self.assertIn("Sysctl=net.ipv4.conf.all.src_valid_mark=0", lines)
+            self.assertIn("Sysctl=net.ipv4.conf.default.src_valid_mark=0", lines)
+            self.assertNotIn("Sysctl=net.ipv4.conf.all.src_valid_mark=1", lines)
+
 
 def real_network():
     # Called ONLY after unshare; all route/interface/mount changes are private to this process tree.
@@ -332,8 +356,110 @@ def real_network():
     print("PASS: real macvlan route/DNS recover after simulated DHCP renewal; leased IP change is preserved")
 
 
+def real_tproxy_network():
+    """Actual TCP interception, including reverse lookup of the one-way TPROXY mark (D91)."""
+    import time
+
+    if os.stat("/proc/self/ns/net").st_ino == os.stat("/proc/1/ns/net").st_ino:
+        raise RuntimeError("refusing the initial network namespace; use --real-tproxy")
+
+    def run(*args, **kwargs):
+        result = subprocess.run(args, text=True, capture_output=True, timeout=8, **kwargs)
+        if result.returncode:
+            raise RuntimeError(f"{args}: {result.stderr}")
+        return result.stdout
+
+    def sysctl(interface, key, value):
+        Path(f"/proc/sys/net/ipv4/conf/{interface}/{key}").write_text(str(value))
+
+    child = subprocess.Popen(["unshare", "--net", "sleep", "60"])
+    listener = None
+    try:
+        for _ in range(100):
+            if child.poll() is not None:
+                raise RuntimeError("client namespace failed to start")
+            if os.stat(f"/proc/{child.pid}/ns/net").st_ino != os.stat("/proc/self/ns/net").st_ino:
+                break
+            time.sleep(0.01)
+        else:
+            raise RuntimeError("client namespace did not become ready")
+        run("ip", "link", "set", "lo", "up")
+        run("ip", "link", "add", "router-lan", "type", "veth", "peer", "name", "client-lan")
+        run("ip", "link", "set", "client-lan", "netns", str(child.pid))
+        run("ip", "address", "add", "192.0.2.1/24", "dev", "router-lan")
+        run("ip", "link", "set", "router-lan", "up")
+        client = ("nsenter", "-t", str(child.pid), "--net")
+        run(*client, "ip", "link", "set", "lo", "up")
+        run(*client, "ip", "address", "add", "192.0.2.2/24", "dev", "client-lan")
+        run(*client, "ip", "link", "set", "client-lan", "up")
+        run(*client, "ip", "route", "add", "default", "via", "192.0.2.1")
+        run("ip", "rule", "add", "priority", "9626", "fwmark", "0x4d4e", "table", "4626")
+        run("ip", "route", "add", "local", "0.0.0.0/0", "dev", "lo", "table", "4626")
+        Path("/proc/sys/net/ipv4/ip_forward").write_text("1")
+        for interface in ("all", "default", "router-lan", "lo"):
+            sysctl(interface, "rp_filter", 0 if interface == "all" else 2)
+            sysctl(interface, "src_valid_mark", 1 if interface == "all" else 0)
+            sysctl(interface, "accept_local", 0)
+            sysctl(interface, "route_localnet", 0)
+        run("nft", "-f", "-", input="""table inet meduza_np_probe {
+ chain prerouting {
+  type filter hook prerouting priority mangle; policy accept;
+  ip saddr 192.0.2.2 tcp dport 443 tproxy ip to 127.0.0.1:7894 meta mark set 0x4d4e accept
+ }
+}
+""")
+        listener = socket.socket()
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.setsockopt(socket.SOL_IP, 19, 1)  # Linux IP_TRANSPARENT
+        listener.bind(("0.0.0.0", 7894))
+        listener.listen()
+        listener.settimeout(1.2)
+        connect = ("import socket; s=socket.socket(); s.settimeout(0.9); "
+                   "s.connect(('198.51.100.10',443)); "
+                   "assert s.recv(64)==b'meduza-tproxy-ok'; s.close()")
+
+        def attempt(label, expected):
+            with subprocess.Popen((*client, sys.executable, "-c", connect), text=True,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE) as connection:
+                accepted = False
+                try:
+                    stream, _ = listener.accept()
+                    with stream:
+                        stream.sendall(b"meduza-tproxy-ok")
+                    accepted = True
+                except socket.timeout:
+                    pass
+                _, error = connection.communicate(timeout=3)
+                success = accepted and connection.returncode == 0
+                assert success == expected, f"{label}: accepted={accepted}, {error}"
+                print(f"PASS: {label}: {'connected' if success else 'blocked as expected'}", flush=True)
+
+        attempt("old deployment src_valid_mark=1, ingress rp_filter=2", False)
+        sysctl("all", "src_valid_mark", 0)
+        attempt("fixed src_valid_mark=0, ingress rp_filter=2", True)
+        sysctl("all", "src_valid_mark", 1)
+        for interface in ("all", "default", "router-lan", "lo"):
+            sysctl(interface, "rp_filter", 0)
+        attempt("disabling rp_filter alone does not fix marked source lookup", False)
+        sysctl("all", "src_valid_mark", 0)
+        sysctl("router-lan", "rp_filter", 2)
+        sysctl("router-lan", "src_valid_mark", 1)
+        attempt("per-interface src_valid_mark=1 still overrides all=0", False)
+        sysctl("router-lan", "src_valid_mark", 0)
+        attempt("both all and ingress src_valid_mark=0, rp_filter retained", True)
+    finally:
+        if listener is not None:
+            listener.close()
+        child.terminate()
+        child.wait(timeout=3)
+
+
 if __name__ == "__main__":
-    if "--real-network" in sys.argv:
+    if "--real-tproxy" in sys.argv:
+        subprocess.run(["unshare", "--net", sys.executable, str(Path(__file__).resolve()), "--inside-tproxy"], check=True)
+    elif "--inside-tproxy" in sys.argv:
+        real_tproxy_network()
+    elif "--real-network" in sys.argv:
         subprocess.run(["unshare", "--net", "--mount", sys.executable, str(Path(__file__).resolve()), "--inside-netns"], check=True)
     elif "--inside-netns" in sys.argv:
         real_network()

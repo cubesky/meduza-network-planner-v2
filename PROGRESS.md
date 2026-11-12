@@ -1403,4 +1403,19 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   routes. Regression: 44 planner + 17 Mihomo + 11 dnsmasq tests pass; an isolated real-kernel probe on the
   authorized client restores both route tables and validates marked lookups. Audit v1 exclusions, ordinary
   forwarding and DNS policies; document explicit custom-pipeline fallback and UDP/QUIC privacy boundaries.
-  Production recovery confirmation is pending; no production network changes or Git submission.
+  The initial investigation left production unchanged; the user's later upgrade and recreation are
+  validated in D91 below. No Git submission.
+
+- 2026-11-12 (per the user's post-upgrade retest) Fix the second transparent-proxy deployment blocker (D91).
+  Confirm owned tables 4626/4627 recovered, but real gateway HTTPS still times out for five sites in two
+  rounds while SOCKS succeeds. Identify the retained Compose all.src_valid_mark=1 setting. Isolated real
+  TCP interception proves effective mark-based source validation is the blocker; disabling rp_filter
+  alone fails, all/ingress src_valid_mark=0 succeeds. Correct run.sh/Quadlet defaults, preserve host policy,
+  add actual-handshake and deployment regressions, and document planner-only Compose recreation.
+  20 bootstrap/deployment tests pass; the five real-kernel cases pass on the authorized Incus client.
+  During the retest, the user changes Compose to all.src_valid_mark=0 and recreates planner; observe
+  all/eth0=0 and automatic restoration of both tables/rules. Final real gateway HTTPS passes 10/10,
+  and SOCKS controls pass 10/10. Google 1.88–2.46s, Bing 1.52–2.01s; domestic HTTPS and front-end/ordinary
+  UDP/TCP DNS also succeed. Evidence: target/meduza-gateway-retest.json, target/meduza-tproxy-regression.log,
+  target/check-tproxy-deployment.log. The agent makes no production mutations, Git submission or
+  workstation gateway change. Custom DNS fallback/privacy policy remains unchanged.

@@ -21,7 +21,9 @@ AddCapability=CHOWN DAC_OVERRIDE FOWNER KILL SETUID SETGID NET_ADMIN NET_RAW NET
 #AddCapability=SYS_CHROOT
 AddDevice=/dev/net/tun
 Sysctl=net.ipv4.ip_forward=1
-Sysctl=net.ipv4.conf.all.src_valid_mark=1
+# TPROXY marks select local delivery in one direction; source validation must use the unmarked reverse route.
+Sysctl=net.ipv4.conf.all.src_valid_mark=0
+Sysctl=net.ipv4.conf.default.src_valid_mark=0
 # No PublishPort: services are reached directly on the planner's LAN IP.
 HealthCmd=/usr/lib/meduza-np/container/entrypoint.sh health-planner
 HealthInterval=60s

@@ -2096,3 +2096,37 @@ Evidence: target/check-route-query-before.log (red), target/check-route-query-af
 target/check-gateway-regression.log (44 planner, 17 Mihomo, 11 dnsmasq tests pass), and the isolated
 route_recovery_probe PASS. Live restoration requires the user's production-operation confirmation;
 investigation and isolated verification do not constitute production deployment.
+
+## D91 — Do not use TPROXY's local-delivery mark for source validation (2026-11-12)
+
+The user's post-upgrade retest confirms D90 restored both policy tables and marked lookups. Nevertheless,
+two rounds of actual default-gateway HTTPS from the authorized Incus client still time out on Google,
+Bing, Baidu, gstatic and Cloudflare; SOCKS through the same node succeeds for every target. Production
+read-only inspection finds `all.src_valid_mark=1`, ingress `rp_filter=2`, ingress `src_valid_mark=0`
+and `accept_local=0`. The old Compose creation setting still requests all.src_valid_mark=1; /proc/sys
+is read-only, so package upgrades cannot repair it.
+
+A real-kernel test with a transparent socket, nft TPROXY and separate client/router namespaces reproduces
+the failure. Changing effective src_valid_mark to zero restores the TCP handshake and delivery from the
+original destination; disabling rp_filter alone does not. Linux takes max(all, interface), so an explicit
+ingress override of one still blocks after all=0. The mark is a one-way local-delivery mark; reverse
+source validation must not use its local-default table. The kernel sysctl reference describes this
+transparent-proxy use case: https://docs.kernel.org/networking/ip-sysctl.html.
+
+Set all/default.src_valid_mark=0 in run.sh's bridge/macvlan planner creation and both Quadlets. Leave host
+policy administrator-controlled, and do not weaken reverse-path checks globally as a workaround. Add a
+deployment regression for both modes, host isolation and templates, plus an optional real-network
+handshake regression in tools/container-network-test.py --real-tproxy. Ordinary gateway and resolver
+configuration remain independent. Existing deployments need a reviewed Compose/Quadlet change and
+planner recreation; document the exact procedure, brief service interruption and ingress-value checks.
+
+20 bootstrap/deployment tests pass. The real-kernel test passes all five expected blocked/connected
+cases on the authorized Incus client. During verification the user changes Compose to all.src_valid_mark=0
+and recreates planner. Read-only observation confirms all/eth0=0 and logs automatic restoration of both
+owned tables/rules. The client retains the planner as its actual gateway and DNS; two rounds of gateway
+HTTPS to all five targets succeed (10/10), as do 10/10 SOCKS controls. Google takes 1.88–2.46 seconds,
+Bing 1.52–2.01, Baidu 0.076–0.084, gstatic 1.21–1.34 and Cloudflare 1.10–1.81. Front-end UDP/TCP DNS,
+MosDNS and ordinary external UDP/TCP DNS also answer successfully. Evidence:
+target/meduza-gateway-retest.json, target/meduza-tproxy-regression.log, target/check-tproxy-deployment.log.
+The agent makes no production mutations or workstation gateway changes. The custom DNS fallback policy
+remains unchanged; successful resolution does not establish strict DNS privacy. No Git submission.

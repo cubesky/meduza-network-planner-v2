@@ -710,6 +710,8 @@ FRR 目录属主必须与实际 provider 的编译用户/组一致，通过有�
 
 沿用 v1 的 DNS 启动行为：节点未填写 Mihomo DNS 上游时，使用订阅中的解析策略；订阅也未提供时保留核心内置默认值，不能在订阅下载前要求重复填写 nameservers。填写节点上游后使用节点自定义 DNS 策略。DNS 启用、监听和 IPv6 范围仍由项目控制，订阅不能设置监听路由标记。下载后、替换缓存前校验实际解析配置的自引用/回环、bootstrap 和 respect-rules 依赖，错误刷新保留最后可用订阅。不能输出空 default-nameserver 数组清掉核心默认值。订阅状态需显示下载中及具体拒绝原因，配置被拒绝时不能长期显示无原因的待处理。
 
+TPROXY 标记仅用于单向本地接收，不能让反向来源校验使用该标记。独立 bridge/macvlan 部署的 `net.ipv4.conf.all.src_valid_mark` 和 `default.src_valid_mark` 应为 `0`，并检查实际入接口的有效值；Linux 取 all 与接口值的最大值。仅关闭 rp_filter 不能代替此要求。容器创建参数由部署文件控制，升级组件不能修正已创建容器的只读 `/proc/sys`；host 模式需由管理员明确设置，不能擅自修改宿主网络（D91）。
+
 TPROXY 默认只处理 PREROUTING 转发流量，不处理本机 OUTPUT。至少支持：
 
 - 按来源 CIDR 选择代理范围，默认从已选择的 LAN/private LAN 引用，不误当目的网段。

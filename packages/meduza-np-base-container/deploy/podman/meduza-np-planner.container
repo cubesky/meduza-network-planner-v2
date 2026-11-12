@@ -25,7 +25,9 @@ AddCapability=CHOWN DAC_OVERRIDE FOWNER KILL SETUID SETGID NET_ADMIN NET_RAW NET
 #AddCapability=SYS_ADMIN
 AddDevice=/dev/net/tun
 Sysctl=net.ipv4.ip_forward=1
-Sysctl=net.ipv4.conf.all.src_valid_mark=1
+# TPROXY marks select local delivery in one direction; source validation must use the unmarked reverse route.
+Sysctl=net.ipv4.conf.all.src_valid_mark=0
+Sysctl=net.ipv4.conf.default.src_valid_mark=0
 # Feature ports (uncomment what you enable):
 #PublishPort=51820:51820/udp
 #PublishPort=1194:1194/udp

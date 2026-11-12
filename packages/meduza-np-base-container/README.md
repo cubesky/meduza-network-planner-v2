@@ -331,6 +331,14 @@ container runs its own system D-Bus (`dbus-daemon --system`, D45); do not also r
 host. Routers (`frr`, mappings, port forwards) need
 `net.ipv4.ip_forward=1`: the bridge-mode unit sets it for the container namespace; in host mode set it on the host
 (`/etc/sysctl.d/`), since the container's `/proc/sys` is read-only and planner only verifies it.
+For TPROXY, keep `net.ipv4.conf.all.src_valid_mark=0` and
+`net.ipv4.conf.default.src_valid_mark=0`; check that the actual LAN ingress interface also has
+`src_valid_mark=0`. A one-way local-delivery mark must not select the source-validation route. The old
+deployment templates used `all.src_valid_mark=1`, which can silently discard intercepted TCP even with
+correct nft rules, policy routes and a working SOCKS listener. Change existing Compose/Quadlet creation
+settings and recreate planner; upgrading the package alone cannot change a read-only `/proc/sys`.
+Keep reverse-path protection as appropriate for the routing design; disabling `rp_filter` alone did not
+fix this conflict in the real-kernel regression. Host-network sysctl policy remains administrator-owned.
 Capabilities are fixed when the container is created: if the configuration later enables FRR on a node deployed
 without the `frr` component, the updater installs the package but the node refuses the configuration until the
 planner container is re-created with `frr` in `MEDUZA_NP_COMPONENTS` (or `AddCapability=SYS_ADMIN`). The planner

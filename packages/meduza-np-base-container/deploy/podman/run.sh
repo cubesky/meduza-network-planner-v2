@@ -156,9 +156,9 @@ podman run -d --name meduza-np-updater --restart always \
 	"$IMAGE" updater
 
 if [ "$NETMODE" = bridge ]; then
-	net="--network meduza-np --sysctl net.ipv4.ip_forward=1 --sysctl net.ipv4.conf.all.src_valid_mark=1 $PUBLISH"
+	net="--network meduza-np --sysctl net.ipv4.ip_forward=1 --sysctl net.ipv4.conf.all.src_valid_mark=0 --sysctl net.ipv4.conf.default.src_valid_mark=0 $PUBLISH"
 elif [ "$NETMODE" = macvlan ]; then
-	net="--network $MACVLAN_NETWORK:ip=$PLANNER_IP --sysctl net.ipv4.ip_forward=1 --sysctl net.ipv4.conf.all.src_valid_mark=1"
+	net="--network $MACVLAN_NETWORK:ip=$PLANNER_IP --sysctl net.ipv4.ip_forward=1 --sysctl net.ipv4.conf.all.src_valid_mark=0 --sysctl net.ipv4.conf.default.src_valid_mark=0"
 else
 	net="--network host"
 fi

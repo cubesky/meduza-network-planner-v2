@@ -489,3 +489,51 @@ DNS privacy needs its own review:
 
 Custom policy changes belong in Manager configuration, not generated files under `/run`. Recheck
 Google/Bing HTTPS, domestic HTTPS, DNS answers and latency after both routing and policy changes.
+
+### Correct tables but transparent TCP still times out: marked source validation (D91)
+
+The post-upgrade retest recovered tables 4626/4627 and their marked lookups, but the same separate
+client still timed out on all five gateway HTTPS targets while SOCKS succeeded. The actual Compose
+file retained `net.ipv4.conf.all.src_valid_mark: '1'`. A real transparent TCP listener in isolated
+client/router namespaces reproduces this failure: all=1 blocks, all=0 with ingress=0 connects, and an
+ingress override of 1 blocks again. Disabling `rp_filter` alone also remains blocked.
+
+The mark is for local delivery in one direction. Linux's source validation must look up the reverse
+route without that mark. Its effective `src_valid_mark` is the maximum of all and the ingress interface;
+see the [kernel sysctl reference](https://docs.kernel.org/networking/ip-sysctl.html).
+
+For the diagnosed `/var/standalone/meduza/compose.yml`, edit the existing `planner.sysctls` mapping,
+preserving its other settings:
+
+```yaml
+services:
+  planner:
+    sysctls:
+      net.ipv4.ip_forward: '1'
+      net.ipv4.conf.all.src_valid_mark: '0'
+      net.ipv4.conf.default.src_valid_mark: '0'
+```
+
+After reviewing the actual file, recreate only planner from that directory:
+
+```sh
+podman compose up -d --no-deps --force-recreate planner
+podman exec meduza-np-planner sh -c 'for i in all default eth0; do echo "$i"; cat /proc/sys/net/ipv4/conf/$i/src_valid_mark; done'
+```
+
+The expected values for this deployment are all zero. Use the actual ingress name in other deployments;
+an existing explicit per-interface override of 1 must also be corrected. Package upgrades, an ordinary
+restart and editing generated Mihomo files do not replace container creation parameters. Recreating
+planner briefly interrupts its network services; updater and host routes need no change. Check the
+owned policy tables again after the namespace is recreated, then retest from the isolated client.
+
+Updated `run.sh` and both independent-network Quadlets use zero for all/default. Host-network units
+still leave host sysctls under administrator control. Run
+`sudo python3 tools/container-network-test.py --real-tproxy` on an authorized disposable Linux test
+device with nftables and TPROXY support to exercise real handshakes and both effective-value cases.
+This command creates throwaway namespaces; it does not change the test device's primary network.
+
+In the diagnosed deployment, after the user changes Compose and recreates planner, both owned tables
+are automatically restored and all/ingress values read zero. Two rounds of real-gateway HTTPS to all
+five targets and SOCKS controls pass, along with front-end and ordinary external UDP/TCP DNS. That
+verifies the observed IPv4 TCP outage is repaired; it does not change the DNS privacy policy above.
