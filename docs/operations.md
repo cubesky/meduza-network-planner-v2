@@ -138,7 +138,7 @@ new adapter arrives; FRR still needs `SYS_ADMIN` in the planner container (fixed
   failures, oversized responses and permanent HTTP errors are not blindly retried within a pass.
 * A normal update never adds packages. A new version that needs a package which is not installed is reported as
   blocked (`meduza-np update plan`).
-* Apply: downloads are verified into staging without holding any lock. Then: planner maintenance lock → drain
+* Store-backend apply: downloads are verified into staging without holding the planner maintenance lock. Then: planner maintenance lock → drain
   affected instances → switch → restart through the real owner (planner restart, or a rescan plus restart of affected
   instances only) → verify that every changed package is registered at its new version → unlock. Failure ⇒ previous
   generation and the same restarts; the group is remembered and not retried automatically (`meduza-np update apply`
@@ -174,11 +174,26 @@ new adapter arrives; FRR still needs `SYS_ADMIN` in the planner container (fixed
   immediate retry of the applied preparer. Manual mode continues to avoid network acquisition.
 * dnsmasq `listenAddresses` may be omitted or empty to serve all local interfaces. Supply addresses to restrict
   the listener. The default still detects port conflicts and local resolution loops; no DHCP is enabled.
-* OpenWrt: packages are installed one at a time with the native package manager. That is **not** an atomic switch.
-  Packages without a cached previous file cannot be rolled back automatically; the plan says so.
+* OpenWrt: download **one** complete ipk/apk to a private `/tmp/meduza-np-updater-<store-hash>/` directory,
+  verify its signed size/SHA-256, install with the native package manager and immediately delete the archive
+  before downloading the next. APK uses `add --allow-untrusted --no-cache`; project signature/digest checks
+  remain mandatory. This is **not** an atomic group switch. Network downloads do not hold the planner
+  maintenance lock; local installation, owner restart and verification use a per-package pause.
+  Persistent state holds the target plan, attempted/completed entries and bounded verified artifact metadata,
+  so power-loss recovery can re-fetch missing tmpfs archives and resume incomplete packages safely.
+  `/tmp` normally consumes RAM: checks budget the largest changed archive plus 8 MiB on tmpfs and Linux
+  MemAvailable, plus unpacking headroom on the system install filesystem (estimated at three times that
+  archive plus 1 MiB and rechecked per package). These are estimates, not a measured 128 MiB device guarantee;
+  installed binaries still require overlay space and the native package manager can reject an installation.
+  Rollback downloads old packages again using previously accepted URL/size/digest records. It requires the
+  source to remain available; missing legacy metadata or an unreachable source is reported as recovery failure,
+  not successful rollback. A download failure that successfully restores the original set remains eligible
+  for automatic retry/backoff. Update `meduza-np-updater` to enable the flow and planner to report tmpfs byte
+  progress correctly; the previous updater's pending bulk handoff is migrated on takeover.
 * Old downloads are cleaned before update checks, after completed/failed upgrades and during startup recovery,
-  including when no new version is installed. Store objects/views and native package archives keep the current
-  set and one valid rollback baseline; running/adoptable executables and pending self-update files remain
+  including when no new version is installed. Store objects/views keep the current set and one valid rollback
+  baseline; OpenWrt keeps artifact metadata for those versions, clearing old archive caches and staging except
+  files protected by an unresolved legacy repair. Running/adoptable executables and pending self-update files remain
   protected. Failed attempts do not erase the last successful rollback baseline. Mihomo auto-download cleans
   recognized obsolete archives and failed candidates, keeping its current and one previous binary. Manual
   binaries and unknown user files are preserved. Cleanup shares the download/transaction lock and does not
@@ -191,7 +206,8 @@ new adapter arrives; FRR still needs `SYS_ADMIN` in the planner container (fixed
 * Mutual updates: if updater changes, planner first invokes a short-lived helper that activates **only updater**.
   Its independent launcher (container entrypoint or `updater-run` under systemd/procd) starts the new updater,
   which immediately resumes the staged transaction and upgrades planner and the remaining packages. No second
-  channel check or download is needed. Until then the installed group remains the previous group and progress
+  channel check is needed. Store-backend packages are already staged; OpenWrt downloads the other packages
+  individually after takeover. Until then the installed group remains the previous group and progress
   says `self-restart`. If takeover fails, planner stays on its original version; if the subsequent planner/package
   update fails, rollback preserves the successfully started new updater. An unavailable or previous-version
   planner uses the independent bootstrap/compatibility helper. Unchanged package versions may be reused across

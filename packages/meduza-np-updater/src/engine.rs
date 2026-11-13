@@ -83,6 +83,9 @@ pub struct Journal {
     /// Intermediate generation: only updater changes. Absent in journals written by older releases.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handoff: Option<crate::handoff::Handoff>,
+    /// Native streaming transaction; archive bytes are disposable and may disappear on reboot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native: Option<openwrt::Transaction>,
     /// Packages whose bits change (install/upgrade/downgrade/reinstall/remove).
     #[serde(default)]
     pub changed: Vec<String>,
@@ -215,6 +218,7 @@ impl<'a> Engine<'a> {
     }
 
     fn finish_journal(&self, j: &mut Journal, phase: Phase, detail: Option<String>) {
+        let native_download_failure = detail.as_deref().is_some_and(|s| s.starts_with("native download failed:"));
         let _ = self.save_journal(j, phase);
         let mut st = self.load_state();
         st.last_result = Some(RunResult {
@@ -223,7 +227,7 @@ impl<'a> Engine<'a> {
             at: now_text((self.now)()),
             detail,
         });
-        if phase == Phase::RolledBack && !st.failed_groups.contains(&j.group_version) {
+        if phase == Phase::RolledBack && !native_download_failure && !st.failed_groups.contains(&j.group_version) {
             st.failed_groups.push(j.group_version.clone());
             if st.failed_groups.len() > 16 {
                 st.failed_groups.remove(0);
@@ -279,12 +283,39 @@ impl<'a> Engine<'a> {
                 pinned: self.cfg.group_version.as_deref(),
                 last_sequence: st.last_sequence.get(&self.cfg.channel).copied(),
                 now_unix: now,
-                tmp_dir: &store.staging(),
+                tmp_dir: &if self.cfg.backend == Backend::Store {
+                    store.staging()
+                } else {
+                    openwrt::workspace(&store).map_err(|e| meta::MetaError { code: "fetch-failed", message: e })?
+                },
             })
         })();
         match &result {
             Ok(g) => {
                 let installed = self.installed().ok();
+                if self.cfg.backend != Backend::Store {
+                    if let Some(installed) = &installed {
+                        for package in &g.manifest.packages {
+                            if let Some(current) = installed.packages.get(&package.name).filter(|p| p.version == package.version) {
+                                if let Some(artifact) =
+                                    resolve::pick_artifact(&package.artifacts, &self.cfg.platform, self.cfg.backend.formats())
+                                {
+                                    if current.sha256.is_empty() || current.sha256 == artifact.sha256 {
+                                        let saved = openwrt::SavedArtifact {
+                                            package: package.name.clone(),
+                                            version: package.version.clone(),
+                                            base_url: self.cfg.base_url.clone(),
+                                            artifact: artifact.clone(),
+                                        };
+                                        if let Err(e) = openwrt::remember(&store, saved) {
+                                            eprintln!("native rollback metadata: {e}");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 let keep = g
                     .manifest
                     .packages
@@ -395,20 +426,36 @@ impl<'a> Engine<'a> {
             let store = self.store();
             store.init()?;
             let free = meduza_np_runtime::fsutil::free_space(&store.root).unwrap_or(u64::MAX);
-            // archive + extracted copy + headroom; never fill the volume (§13.3)
-            let need = plan.download_bytes.saturating_mul(4) + 16 * 1024 * 1024;
+            // Store stages the group; native only needs one archive in tmpfs plus unpacking headroom on overlay.
+            let largest =
+                plan.actions.iter().filter(|a| a.downloads()).filter_map(|a| a.artifact.as_ref()).map(|a| a.size).max().unwrap_or(0);
+            let need = if self.cfg.backend == Backend::Store {
+                plan.download_bytes.saturating_mul(4) + 16 * 1024 * 1024
+            } else {
+                0 // native checks use the temporary and installation filesystems separately.
+            };
             if free < need {
                 plan.blocked.push(format!("insufficient space in {}: {free} bytes free, {need} needed", store.root.display()));
             }
             if self.cfg.backend != Backend::Store {
+                if largest > 0 {
+                    if let Err(e) = openwrt::check_tmp_space(&store, largest) {
+                        plan.blocked.push(e);
+                    }
+                    if let Err(e) = openwrt::check_install_space(&store, largest) {
+                        plan.blocked.push(e);
+                    }
+                }
                 let cache = openwrt::Cache::new(&store.root, self.cfg.backend);
+                let saved = openwrt::artifacts(&store)?;
                 for a in plan.actions.iter().filter(|a| a.changes()) {
                     if let Some(from) = &a.from {
-                        if cache.find(&a.package, from).is_none() {
-                            plan.warnings.push(format!("{} {from}: no cached package, rollback unavailable", a.package));
+                        if cache.find(&a.package, from).is_none() && !saved.iter().any(|s| s.package == a.package && s.version == *from) {
+                            plan.warnings.push(format!("{} {from}: no verified artifact metadata, rollback unavailable", a.package));
                         }
                     }
                 }
+                plan.warnings.push("OpenWrt rollback re-downloads previous verified packages and requires the update source".into());
             }
         }
         Ok(plan)
@@ -518,6 +565,12 @@ impl<'a> Engine<'a> {
             previous_installed: Some(previous.clone()),
             new_installed: None,
             handoff: None,
+            native: (self.cfg.backend != Backend::Store).then(|| openwrt::Transaction {
+                plan: plan.clone(),
+                base_url: self.cfg.base_url.clone(),
+                attempted: vec![],
+                completed: vec![],
+            }),
             changed: changed.clone(),
             planner_restart: needs_planner_restart(
                 &changed,
@@ -535,7 +588,23 @@ impl<'a> Engine<'a> {
         self.save_journal(&mut j, Phase::Downloading)?;
 
         // 1. download + verify, no lock held
-        let files = match self.download(plan, &j.started_at) {
+        let mut _native_updater = None;
+        let downloaded = if self.cfg.backend == Backend::Store {
+            self.download(plan, &j.started_at)
+        } else {
+            openwrt::clean_downloads(&store).and_then(|()| {
+                if self_update {
+                    _native_updater = Some(self.download_native(
+                        plan,
+                        plan.action("meduza-np-updater").ok_or("missing updater action")?,
+                        &j.started_at,
+                        &[],
+                    )?);
+                }
+                Ok(BTreeMap::new())
+            })
+        };
+        let files = match downloaded {
             Ok(f) => f,
             Err(e) => {
                 j.error = Some(e.clone());
@@ -704,7 +773,7 @@ impl<'a> Engine<'a> {
         j.planner_boot_id = planner::boot_id(self.planner);
         j.planner_was_up = j.planner_boot_id.is_some();
         let affected = self.affected_instances(&j.changed);
-        if j.planner_was_up {
+        if j.planner_was_up && j.native.is_none() {
             match self.planner.call("maintenance.lock", planner::lock_params(&format!("update to {}", plan.group_version))) {
                 Ok(_) => j.locked = true,
                 Err(e) => eprintln!("warning: maintenance lock failed: {e}"),
@@ -718,6 +787,7 @@ impl<'a> Engine<'a> {
         // 4. switch / install
         let switched = match self.cfg.backend {
             Backend::Store => store.switch(j.new_view.as_deref().unwrap_or_default()).map(|_| ()).and_then(|_| store.save_installed(&next)),
+            _ if j.native.is_some() => self.native_apply(j, plan, &previous, &mut next),
             _ => self.opkg_apply(plan, files, &previous, &mut next),
         };
         if let Err(e) = switched {
@@ -728,7 +798,14 @@ impl<'a> Engine<'a> {
 
         // 5. restart via owners + verify
         self.save_journal(j, Phase::Verifying)?;
-        if let Err(e) = self.restart_and_verify(j, &next, &affected) {
+        let verified = if j.native.is_some() {
+            let mut verify = j.clone();
+            verify.planner_restart = false; // native packages were restarted/verified individually, after each local install.
+            self.restart_and_verify(&verify, &next, &[])
+        } else {
+            self.restart_and_verify(j, &next, &affected)
+        };
+        if let Err(e) = verified {
             j.error = Some(e.clone());
             return self.rollback(j, &affected, e);
         }
@@ -745,7 +822,146 @@ impl<'a> Engine<'a> {
         out
     }
 
-    /// Installs changed packages with opkg/apk in plan order (updater was already taken over).
+    fn download_native(
+        &self,
+        plan: &Plan,
+        action: &resolve::Action,
+        started: &str,
+        completed: &[String],
+    ) -> Result<openwrt::Download, String> {
+        let store = self.store();
+        let artifact = action.artifact.clone().ok_or("missing native artifact")?;
+        if !self.cfg.backend.formats().contains(&artifact.format.as_str()) {
+            return Err("native artifact format does not match backend".into());
+        }
+        let saved = openwrt::SavedArtifact {
+            package: action.package.clone(),
+            version: action.to.clone().ok_or("missing target version")?,
+            base_url: self
+                .load_journal()
+                .and_then(|j| j.native.map(|tx| tx.base_url))
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| self.cfg.base_url.clone()),
+            artifact,
+        };
+        let path = openwrt::archive(&store, &saved.package, &saved.version, &saved.artifact.format)?;
+        let downloads: Vec<_> = plan.actions.iter().filter(|a| a.downloads()).collect();
+        let bytes: u64 =
+            downloads.iter().filter(|a| completed.contains(&a.package)).filter_map(|a| a.artifact.as_ref()).map(|a| a.size).sum();
+        let packages: Vec<_> = downloads.iter().map(|a| &a.package).collect();
+        let progress = |installing: bool, attempt: Option<crate::retry::Attempt>| {
+            let mut value = json!({"startedAt":started,"native":true,"step":if installing {"installing"} else {"downloading"},
+                "packages":packages,"currentPackage":saved.package,"file":if installing {None} else {path.file_name().and_then(|v| v.to_str())},
+                "packageBytesTotal":if installing {0} else {saved.artifact.size}, "bytesTotal":plan.download_bytes,
+                "completedBytes":bytes.saturating_add(if installing {saved.artifact.size} else {0}),
+                "completedPackages":completed.len(),"totalPackages":downloads.len()});
+            if let Some(a) = attempt {
+                value["attempt"] = json!(a.number);
+                value["maxAttempts"] = json!(a.maximum);
+                value["retryError"] = json!(a.error);
+                value["retryAtUnix"] =
+                    a.retry_after.map(|d| json!((self.now)() + d.as_secs() + u64::from(d.subsec_nanos() > 0))).unwrap_or(Value::Null);
+            }
+            let _ = meduza_np_runtime::fsutil::write_json_atomic(&store.root.join("download-progress.json"), &value, 0o644);
+        };
+        progress(false, None);
+        let file = openwrt::fetch(&store, &saved, |a| progress(false, Some(a)))?;
+        openwrt::remember(&store, saved.clone())?;
+        progress(true, None);
+        Ok(file)
+    }
+
+    /// One tmpfs archive at a time. Persist intent BEFORE each package-manager mutation for power-loss recovery.
+    fn native_apply(&self, j: &mut Journal, plan: &Plan, previous: &InstalledSet, next: &mut InstalledSet) -> Result<(), String> {
+        let store = self.store();
+        let mut partial = previous.clone();
+        let _marker = openwrt::InstallMarker::hold(&self.cfg.paths.run);
+        for action in plan.actions.iter().filter(|a| a.changes() && a.package != "meduza-np-updater") {
+            let completed = j.native.as_ref().ok_or("missing native transaction")?.completed.clone();
+            // A completed package can still have been changed externally; do not claim its old completion then.
+            let real = openwrt::installed(self.runner, self.cfg.backend)?;
+            let already_done = completed.contains(&action.package)
+                && if action.kind == ActionKind::Remove {
+                    !real.contains_key(&action.package)
+                } else {
+                    real.get(&action.package) == action.to.as_ref()
+                };
+            if !already_done {
+                // A recovered lock must never survive into a network transfer. Only the local mutation/restart is paused.
+                self.unlock(j);
+                let file = if action.kind == ActionKind::Remove {
+                    None
+                } else {
+                    Some(
+                        self.download_native(plan, action, &j.started_at, &completed)
+                            .map_err(|e| format!("native download failed: {e}"))?,
+                    )
+                };
+                // Recheck persistent unpack/install headroom after earlier packages consumed real overlay space.
+                if let Some(art) = &action.artifact {
+                    openwrt::check_install_space(&store, art.size)?;
+                }
+                let affected = self.affected_instances(std::slice::from_ref(&action.package));
+                if planner::boot_id(self.planner).is_some() {
+                    self.planner.call("maintenance.lock", planner::lock_params(&format!("install {}", action.package)))?;
+                    j.locked = true;
+                    if action.package != "meduza-np-planner" && !affected.is_empty() {
+                        self.planner.call("drain", json!({"instances":affected}))?;
+                    }
+                }
+                let tx = j.native.as_mut().ok_or("missing native transaction")?;
+                if !tx.attempted.contains(&action.package) {
+                    tx.attempted.push(action.package.clone());
+                }
+                self.save_journal(j, Phase::Locked)?;
+                let (program, args) = if let Some(file) = &file {
+                    openwrt::install_args(self.cfg.backend, &file.0)
+                } else {
+                    openwrt::remove_args(self.cfg.backend, &action.package)
+                };
+                self.runner.run(program, &args).map_err(|e| format!("{}: {e}", action.package))?;
+                // Explicitly release before recording/starting the next package, including failed invocations.
+                drop(file);
+                if let Some(package) = next.packages.get(&action.package) {
+                    partial.packages.insert(action.package.clone(), package.clone());
+                } else {
+                    partial.packages.remove(&action.package);
+                }
+                store.save_installed(&partial)?;
+                let mut package_journal = j.clone();
+                package_journal.changed = vec![action.package.clone()];
+                package_journal.planner_restart = action.package == "meduza-np-planner";
+                package_journal.planner_boot_id = planner::boot_id(self.planner);
+                self.restart_and_verify(&package_journal, &partial, &affected)?;
+                let tx = j.native.as_mut().ok_or("missing native transaction")?;
+                if !tx.completed.contains(&action.package) {
+                    tx.completed.push(action.package.clone());
+                }
+            }
+            if let Some(package) = next.packages.get(&action.package) {
+                partial.packages.insert(action.package.clone(), package.clone());
+            } else {
+                partial.packages.remove(&action.package);
+            }
+            store.save_installed(&partial)?;
+            self.save_journal(j, Phase::Locked)?;
+            self.unlock(j);
+            let progress_path = store.root.join("download-progress.json");
+            if let Ok(Some(mut progress)) = meduza_np_runtime::fsutil::read_json::<Value>(&progress_path, 256 * 1024) {
+                let tx = j.native.as_ref().ok_or("missing native transaction")?;
+                let done: Vec<_> = plan.actions.iter().filter(|a| a.downloads() && tx.completed.contains(&a.package)).collect();
+                progress["completedPackages"] = json!(done.len());
+                progress["completedBytes"] = json!(done.iter().filter_map(|a| a.artifact.as_ref()).map(|a| a.size).sum::<u64>());
+                let _ = meduza_np_runtime::fsutil::write_json_atomic(&progress_path, &progress, 0o644);
+            }
+        }
+        if let Some(updater) = previous.packages.get("meduza-np-updater") {
+            next.packages.insert("meduza-np-updater".into(), updater.clone());
+        }
+        store.save_installed(next)
+    }
+
+    /// Compatibility for a pending bulk-download transaction written by a previous release.
     fn opkg_apply(
         &self,
         plan: &Plan,
@@ -873,7 +1089,11 @@ impl<'a> Engine<'a> {
         match result {
             Ok(()) => {
                 self.finish_journal(j, Phase::RolledBack, Some(cause.clone()));
-                Ok(Outcome::RolledBack(cause))
+                if cause.starts_with("native download failed:") {
+                    Err(cause)
+                } else {
+                    Ok(Outcome::RolledBack(cause))
+                }
             }
             Err(e) => {
                 let msg = format!("{cause}; rollback failed: {e}");
@@ -884,36 +1104,79 @@ impl<'a> Engine<'a> {
         }
     }
 
-    fn opkg_rollback(&self, j: &Journal, prev: &InstalledSet) -> Result<(), String> {
-        let cache = openwrt::Cache::new(&self.store().root, self.cfg.backend);
+    fn opkg_rollback(&self, j: &mut Journal, prev: &InstalledSet) -> Result<(), String> {
+        let store = self.store();
+        let cache = openwrt::Cache::new(&store.root, self.cfg.backend);
+        let artifacts = openwrt::artifacts(&store)?;
         let _marker = openwrt::InstallMarker::hold(&self.cfg.paths.run);
         let mut problems = vec![];
-        for name in j.changed.iter().rev().filter(|p| {
-            // Before takeover no other package was touched; reinstalling planner here would violate that boundary.
-            if j.handoff.is_some() {
-                *p == "meduza-np-updater"
-            } else {
-                *p != "meduza-np-updater"
+        let names: Vec<_> = j
+            .changed
+            .iter()
+            .rev()
+            .filter(|p| {
+                // Before takeover no other package was touched; reinstalling planner here would violate that boundary.
+                if j.handoff.is_some() {
+                    *p == "meduza-np-updater"
+                } else {
+                    *p != "meduza-np-updater" && j.native.as_ref().is_none_or(|tx| tx.attempted.contains(p))
+                }
+            })
+            .cloned()
+            .collect();
+        for name in &names {
+            if j.native.is_some() {
+                self.unlock(j);
             }
-        }) {
             match prev.packages.get(name) {
-                Some(p) => match cache.find(name, &p.version) {
-                    Some(f) => {
-                        let (prog, args) = openwrt::install_args(self.cfg.backend, &f);
-                        if let Err(e) = self.runner.run(prog, &args) {
-                            problems.push(e);
+                Some(p) => {
+                    let result = (|| {
+                        let _downloaded;
+                        let file = if let Some(saved) = artifacts.iter().find(|s| s.package == *name && s.version == p.version) {
+                            if !self.cfg.backend.formats().contains(&saved.artifact.format.as_str())
+                                || (!p.sha256.is_empty() && p.sha256 != saved.artifact.sha256)
+                            {
+                                return Err("rollback artifact does not match installed record".into());
+                            }
+                            _downloaded = Some(openwrt::fetch(&store, saved, |_| {})?);
+                            _downloaded.as_ref().unwrap().0.clone()
+                        } else if let Some(file) = cache.find(name, &p.version) {
+                            // Legacy cache is only used if no persistent verified metadata exists yet.
+                            if !p.sha256.is_empty() {
+                                let (_, hash) = crate::store::sha256_file(&file)?;
+                                if hash != p.sha256 {
+                                    return Err("legacy rollback archive digest mismatch".into());
+                                }
+                            }
+                            _downloaded = None;
+                            file
+                        } else {
+                            return Err(format!("{name} {}: no verified artifact metadata or cached package to reinstall", p.version));
+                        };
+                        if j.native.is_some() && planner::boot_id(self.planner).is_some() {
+                            self.planner.call("maintenance.lock", planner::lock_params(&format!("restore {name}")))?;
+                            j.locked = true;
                         }
+                        let (program, args) = openwrt::install_args(self.cfg.backend, &file);
+                        self.runner.run(program, &args).map(|_| ())
+                    })();
+                    if let Err(e) = result {
+                        problems.push(e);
                     }
-                    None => problems.push(format!("{name} {}: no cached package to reinstall", p.version)),
-                },
+                }
                 None => {
                     let (prog, args) = openwrt::remove_args(self.cfg.backend, name);
-                    let _ = self.runner.run(prog, &args);
+                    if let Err(e) = self.runner.run(prog, &args) {
+                        problems.push(e);
+                    }
                 }
             }
+            if j.native.is_some() {
+                self.unlock(j);
+            }
         }
-        self.store().save_installed(prev)?;
         if problems.is_empty() {
+            self.store().save_installed(prev)?;
             Ok(())
         } else {
             Err(problems.join("; "))
@@ -979,7 +1242,16 @@ impl<'a> Engine<'a> {
                     keep.entry(name.clone()).or_default().push(package.version.clone());
                 }
             }
-            openwrt::Cache::new(&store.root, self.cfg.backend).prune(&keep);
+            let mut artifacts = openwrt::artifacts(&store)?;
+            artifacts.retain(|a| keep.get(&a.package).is_some_and(|versions| versions.contains(&a.version)));
+            openwrt::save_artifacts(&store, &artifacts)?;
+            // Old bulk-update repair archives remain protected until the operator completes that legacy repair.
+            if repair_pending {
+                openwrt::Cache::new(&store.root, self.cfg.backend).prune(&keep);
+            } else {
+                openwrt::Cache::new(&store.root, self.cfg.backend).prune(&BTreeMap::new());
+            }
+            openwrt::clean_downloads(&store)?;
             if !repair_pending {
                 store.clear_staging();
             }
@@ -1016,6 +1288,20 @@ impl<'a> Engine<'a> {
         };
         let affected = self.affected_instances(&j.changed);
         let msg = match j.phase {
+            Phase::Locked if j.native.is_some() => {
+                // Intent was persisted before each mutation. Resume idempotently even if /tmp vanished on reboot.
+                let result = (|| {
+                    openwrt::clean_downloads(&self.store())?;
+                    let plan = j.native.as_ref().ok_or("missing native plan")?.plan.clone();
+                    let next = j.new_installed.clone().ok_or("missing native target")?;
+                    self.activate_packages(&mut j, &plan, &BTreeMap::new(), next)
+                })();
+                match result {
+                    Ok(Outcome::Applied) => format!("native update to {} resumed and completed", j.group_version),
+                    Ok(other) => format!("native update recovery: {other:?}"),
+                    Err(e) => format!("native update recovery failed: {e}"),
+                }
+            }
             Phase::Downloading | Phase::Staged | Phase::Locked => {
                 // Nothing was switched yet.
                 self.unlock(&mut j);
@@ -1089,10 +1375,39 @@ impl<'a> Engine<'a> {
         j.previous_view = h.view;
         j.changed.retain(|p| p != "meduza-np-updater");
         let result = (|| {
+            if self.cfg.backend != Backend::Store {
+                openwrt::clean_downloads(&self.store())?;
+                self.store().clear_staging(); // migrate an older updater's bulk staging to disposable native downloads.
+                let tx = j.native.get_or_insert_with(|| openwrt::Transaction {
+                    plan: h.plan.clone(),
+                    base_url: self.cfg.base_url.clone(),
+                    attempted: vec![],
+                    completed: vec![],
+                });
+                if !tx.completed.iter().any(|p| p == "meduza-np-updater") {
+                    tx.completed.push("meduza-np-updater".into());
+                }
+                if let Some(action) = h.plan.action("meduza-np-updater") {
+                    if let (Some(version), Some(artifact)) = (&action.to, &action.artifact) {
+                        openwrt::remember(
+                            &self.store(),
+                            openwrt::SavedArtifact {
+                                package: action.package.clone(),
+                                version: version.clone(),
+                                base_url: tx.base_url.clone(),
+                                artifact: artifact.clone(),
+                            },
+                        )?;
+                    }
+                }
+            }
             self.save_journal(j, Phase::Staged)?;
             let next = j.new_installed.clone().ok_or("handoff has no staged target")?;
-            let files =
-                if self.cfg.backend == Backend::Store { BTreeMap::new() } else { crate::handoff::staged_files(&self.store(), &h.plan)? };
+            let files = if self.cfg.backend == Backend::Store || j.native.is_some() {
+                BTreeMap::new()
+            } else {
+                crate::handoff::staged_files(&self.store(), &h.plan)?
+            };
             self.activate_packages(j, &h.plan, &files, next)
         })();
         match result {

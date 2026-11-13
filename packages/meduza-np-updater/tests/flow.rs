@@ -684,6 +684,18 @@ fn native_opkg_and_apk_install_updater_before_planner() {
             }
             assert!(matches!(args[0].as_str(), "add" | "install"));
             let file = PathBuf::from(args.last().unwrap());
+            if self.backend == Backend::Apk {
+                assert!(args.iter().any(|a| a == "--allow-untrusted"));
+                assert!(args.iter().any(|a| a == "--no-cache"));
+            }
+            let archives: Vec<_> = std::fs::read_dir(file.parent().unwrap())
+                .unwrap()
+                .flatten()
+                .filter(|e| matches!(e.path().extension().and_then(|e| e.to_str()), Some("ipk" | "apk")))
+                .collect();
+            assert_eq!(archives.len(), 1, "only the package being installed may be present in /tmp");
+            #[cfg(target_os = "linux")]
+            assert!(file.starts_with("/tmp"));
             let name = file.file_name().unwrap().to_str().unwrap().split('_').next().unwrap().to_string();
             if name == "meduza-np-planner" {
                 assert_eq!(self.installed.borrow()["meduza-np-updater"], "0.2.0", "native planner install must run under the new updater");
@@ -757,13 +769,202 @@ fn native_opkg_and_apk_install_updater_before_planner() {
         assert_eq!(*pm.installs.borrow(), ["meduza-np-updater"]);
         assert_eq!(pm.installed.borrow()["meduza-np-planner"], "0.1.0");
         assert!(!planner.calls.borrow().iter().any(|m| m == "planner.restart"));
+        if backend == Backend::Apk {
+            // The first upgrade into this release can have been prepared by the previous bulk updater.
+            let mut journal = e.load_journal().unwrap();
+            journal.native = None;
+            let pending = journal.handoff.as_ref().unwrap().plan.clone();
+            meduza_np_runtime::fsutil::write_json_atomic(&e.store().journal_path(), &journal, 0o600).unwrap();
+            for action in pending.actions.iter().filter(|a| a.downloads()) {
+                let art = action.artifact.as_ref().unwrap();
+                std::fs::copy(
+                    env.repo.join(&art.url),
+                    e.store().staging().join(format!("{}_{}.{}", action.package, action.to.as_deref().unwrap(), art.format)),
+                )
+                .unwrap();
+            }
+        }
         let msg = e.recover(true).unwrap();
         assert!(msg.contains("complete"), "{msg}");
         assert_eq!(*pm.installs.borrow(), ["meduza-np-updater", "meduza-np-planner", "meduza-np-cli"]);
         assert!(planner.calls.borrow().iter().any(|m| m == "planner.restart"));
         assert_eq!(e.installed().unwrap().group_version.as_deref(), Some("v0.2.0"));
         assert!(e.load_journal().is_none());
+        assert!(std::fs::read_dir(e.store().staging()).unwrap().next().is_none());
+        assert!(!e.store().root.join("openwrt/cache").exists(), "native installs must not copy archives to overlay");
+        let progress = meduza_np_runtime::update::snapshot(&e.store().root, &cfg.paths.run).unwrap();
+        assert_eq!(progress["completedPackages"], 3);
+        assert_eq!(progress["downloadedBytes"], progress["bytesTotal"]);
+        assert!(!meduza_np_runtime::update::native_download_dir(&e.store().root).unwrap().exists());
         std::fs::remove_dir_all(env.root).unwrap();
+    }
+}
+
+/// Native package-manager boundary: actual signed source/files/journals, with simulated installed database.
+struct NativeStreamPackages {
+    backend: Backend,
+    installed: RefCell<BTreeMap<String, String>>,
+    installs: RefCell<Vec<(String, String)>>,
+    fail: Cell<bool>,
+    crash: Cell<bool>,
+    remove_later_source: RefCell<Option<PathBuf>>,
+}
+impl Runner for NativeStreamPackages {
+    fn run(&self, program: &str, args: &[String]) -> Result<String, String> {
+        assert_eq!(program, self.backend.name());
+        if matches!(args[0].as_str(), "list-installed" | "list") {
+            return Ok(self
+                .installed
+                .borrow()
+                .iter()
+                .map(
+                    |(n, v)| {
+                        if self.backend == Backend::Opkg {
+                            format!("{n} - {v}\n")
+                        } else {
+                            format!("{n}-{v}-r1 test {{{n}}} [installed]\n")
+                        }
+                    },
+                )
+                .collect());
+        }
+        if matches!(args[0].as_str(), "remove" | "del") {
+            self.installed.borrow_mut().remove(&args[1]);
+            return Ok(String::new());
+        }
+        if self.backend == Backend::Apk {
+            assert!(args.iter().any(|a| a == "--allow-untrusted"));
+            assert!(args.iter().any(|a| a == "--no-cache"));
+        }
+        let file = PathBuf::from(args.last().unwrap());
+        #[cfg(target_os = "linux")]
+        assert!(file.starts_with("/tmp"));
+        let archives: Vec<_> = std::fs::read_dir(file.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .filter(|e| matches!(e.path().extension().and_then(|e| e.to_str()), Some("ipk" | "apk")))
+            .collect();
+        assert_eq!(archives.len(), 1, "multiple archives retained before an install");
+        let name = file.file_name().unwrap().to_str().unwrap();
+        let (package, tail) = name.split_once('_').unwrap();
+        let version = tail.strip_suffix(&format!(".{}", file.extension().unwrap().to_str().unwrap())).unwrap();
+        self.installed.borrow_mut().insert(package.into(), version.into());
+        self.installs.borrow_mut().push((package.into(), version.into()));
+        if package == "meduza-np-planner" {
+            if let Some(path) = self.remove_later_source.borrow_mut().take() {
+                std::fs::remove_file(path).unwrap();
+            }
+        }
+        if package == "meduza-np-cli" && version == "0.3.0" {
+            assert!(!self.crash.replace(false), "simulated power loss after native files/database changed");
+            if self.fail.replace(false) {
+                return Err("simulated install failure after partial mutation".into());
+            }
+        }
+        Ok(String::new())
+    }
+}
+
+#[test]
+fn native_streaming_rolls_back_by_redownloading_and_recovers_without_tmp_archives() {
+    for backend in [Backend::Opkg, Backend::Apk] {
+        for mode in ["install-failure", "digest-failure", "later-download", "power-loss"] {
+            let env = Env::new(&format!("stream-{}-{mode}", backend.name()));
+            let mut cfg = env.config(None);
+            cfg.backend = backend;
+            cfg.image_updater_version = None;
+            let pm = NativeStreamPackages {
+                backend,
+                installed: RefCell::new(
+                    [
+                        ("meduza-np-updater".into(), "0.1.0".into()),
+                        ("meduza-np-planner".into(), "0.1.0".into()),
+                        ("meduza-np-cli".into(), "0.1.0".into()),
+                    ]
+                    .into(),
+                ),
+                installs: Default::default(),
+                fail: Cell::new(false),
+                crash: Cell::new(false),
+                remove_later_source: Default::default(),
+            };
+            let planner = FakePlanner { store: cfg.store_dir(), up: Cell::new(false), boot: Cell::new(1), calls: Default::default() };
+            let e = Engine {
+                cfg: &cfg,
+                planner: &planner,
+                runner: &pm,
+                now: &now,
+                planner_timeout: Duration::from_millis(100),
+                poll: Duration::from_millis(5),
+            };
+            let publish = |version: &str, sequence| {
+                let mut packages: Vec<_> = ["meduza-np-updater", "meduza-np-planner", "meduza-np-cli"]
+                    .iter()
+                    .map(|name| env.package(name, if *name == "meduza-np-updater" { "0.1.0" } else { version }, false))
+                    .collect();
+                for package in &mut packages {
+                    package.artifacts[0].format = if backend == Backend::Opkg { "ipk" } else { "apk" }.into();
+                }
+                let later = env.repo.join(&packages.iter().find(|p| p.name == "meduza-np-cli").unwrap().artifacts[0].url);
+                env.publish(&format!("v{version}"), sequence, packages, FAR);
+                later
+            };
+            publish("0.2.0", 2);
+            assert_eq!(e.run_once(true).unwrap().1, Some(Outcome::Applied));
+            assert!(!e.store().root.join("openwrt/cache").exists());
+            let later = publish("0.3.0", 3);
+            pm.installs.borrow_mut().clear();
+            match mode {
+                "install-failure" => pm.fail.set(true),
+                "digest-failure" => std::fs::write(&later, b"tampered artifact").unwrap(),
+                "later-download" => *pm.remove_later_source.borrow_mut() = Some(later),
+                "power-loss" => pm.crash.set(true),
+                _ => unreachable!(),
+            }
+            if mode == "power-loss" {
+                assert!(std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| e.run_once(true))).is_err());
+                assert_eq!(e.load_journal().unwrap().phase, Phase::Locked);
+                // A reboot loses all /tmp files; recovery must use the persisted plan, not an archive inventory.
+                meduza_np_updater::openwrt::clean_downloads(&e.store()).unwrap();
+                assert!(e.recover(false).unwrap().contains("completed"));
+                assert_eq!(pm.installed.borrow()["meduza-np-planner"], "0.3.0");
+                assert_eq!(pm.installed.borrow()["meduza-np-cli"], "0.3.0");
+                assert_eq!(
+                    pm.installs.borrow().iter().filter(|(n, _)| n == "meduza-np-planner").count(),
+                    1,
+                    "completed packages must not be reinstalled"
+                );
+            } else {
+                if mode == "install-failure" {
+                    assert!(matches!(e.run_once(true).unwrap().1, Some(Outcome::RolledBack(_))));
+                } else {
+                    assert!(e.run_once(true).unwrap_err().starts_with("native download failed:"));
+                    assert!(
+                        !e.load_state().failed_groups.iter().any(|g| g == "v0.3.0"),
+                        "a failed download must remain eligible for automatic retry"
+                    );
+                }
+                assert_eq!(pm.installed.borrow()["meduza-np-planner"], "0.2.0");
+                assert_eq!(pm.installed.borrow()["meduza-np-cli"], "0.2.0");
+                assert!(
+                    pm.installs.borrow().iter().any(|(n, v)| n == "meduza-np-planner" && v == "0.2.0"),
+                    "rollback obtains prior artifact without persistent archive cache"
+                );
+                if mode != "install-failure" {
+                    assert!(
+                        !pm.installs.borrow().iter().any(|(n, _)| n == "meduza-np-cli"),
+                        "unverified and untouched later packages must not be installed or rolled back"
+                    );
+                    env.package("meduza-np-cli", "0.3.0", false); // source repaired; scheduled retry must need no forced apply.
+                    assert_eq!(e.run_once(true).unwrap().1, Some(Outcome::Applied));
+                }
+            }
+            assert!(e.load_journal().is_none());
+            assert!(std::fs::read_dir(e.store().staging()).unwrap().next().is_none());
+            assert!(!meduza_np_runtime::update::native_download_dir(&e.store().root).unwrap().exists());
+            assert!(!e.store().root.join("openwrt/cache").exists());
+            std::fs::remove_dir_all(env.root).unwrap();
+        }
     }
 }
 

@@ -8,7 +8,7 @@
 #      package script, plugin registered by the rescan, trust store in place
 #   2. the updater (opkg/apk backend) upgrades planner + wireguard to the next group: installed versions, planner
 #      restarted and registered at the new version, journal `done`, install marker removed
-#   3. an updater-only group: the updater installs itself last, exits 75, the launcher starts the new binary and the
+#   3. an updater-only group: the updater is taken over first, exits 75, the launcher starts the new binary and the
 #      journal completes (`done`); a single updater process remains
 #   4. removal stops and disables the services
 # Also: building the same packages twice gives identical files (ipk and apk).
@@ -29,6 +29,12 @@ fail() { echo "FAIL: $*" >&2; podman exec $C logread 2>/dev/null | tail -40 >&2 
 step() { echo "== $*"; }
 ox() { podman exec $C "$@"; }
 oj() { podman exec $C meduza-np --json "$@"; }
+archives_clean() {
+	ox sh -c 'for d in /etc/meduza-np-state/store/staging /etc/meduza-np-state/store/openwrt/cache /tmp/meduza-np-updater-*; do
+		[ -d "$d" ] || continue
+		for f in "$d"/*.apk "$d"/*.ipk; do [ ! -f "$f" ] || exit 1; done
+	done'
+}
 
 step "build binaries and tools"
 cd "$REPO"
@@ -147,6 +153,7 @@ run() { # image format
 	phase=$(oj update status | jq -r .lastJournal.phase)
 	[ "$phase" = done ] || fail "journal phase $phase: $(oj update status | jq -c .lastJournal)"
 	ox test ! -e /var/run/meduza-np/updater-installing || fail "install marker left behind"
+	archives_clean || fail "package archives retained after native upgrade"
 	echo "upgraded: planner $(version_of meduza-np-planner), wireguard $(version_of meduza-np-wireguard)"
 
 	step "[$fmt] updater self-update to v0.3.0 (installed last, exit 75, launcher starts the new binary)"
@@ -163,6 +170,7 @@ run() { # image format
 	ox $list | grep -q 'meduza-np-updater.*0\.3\.0' || fail "package manager does not list updater 0.3.0"
 	n=$(ox sh -c 'pidof meduza-np-updater | wc -w')
 	[ "$n" = 1 ] || fail "$n updater processes after the self-update"
+	archives_clean || fail "package archives retained after native self-update"
 	[ "$(version_of meduza-np-planner)" = "0.2.0 registered" ] || fail "planner changed by an updater-only group"
 	# the new updater process has no plan yet: check again, nothing may be left to do
 	oj update check >/dev/null || fail "update check after the self-update"

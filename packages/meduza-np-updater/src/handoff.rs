@@ -54,6 +54,14 @@ pub fn activate(store: &Store, backend: Backend, runner: &dyn Runner, run: &Path
     if expected != h.installed || h.installed.backend != backend.name() {
         return Err("updater handoff must preserve every other package".into());
     }
+    if j.native.is_some()
+        && backend != Backend::Store
+        && store.load_installed()?.as_ref() == Some(&h.installed)
+        && openwrt::installed(runner, backend)?.get("meduza-np-updater") == Some(&updater.version)
+    {
+        // The previous helper may have installed and recorded the package before its acknowledgement was lost.
+        return Ok(());
+    }
     match backend {
         Backend::Store => {
             let view = h.view.as_deref().ok_or("missing updater handoff view")?;
@@ -66,15 +74,32 @@ pub fn activate(store: &Store, backend: Backend, runner: &dyn Runner, run: &Path
             store.switch(view)?;
         }
         _ => {
-            let files = staged_files(store, &h.plan)?;
+            let files = if j.native.is_none() {
+                staged_files(store, &h.plan)?
+            } else {
+                let action = h.plan.action("meduza-np-updater").ok_or("missing updater action")?;
+                let artifact = action.artifact.as_ref().ok_or("missing updater artifact")?;
+                let file = openwrt::archive(store, "meduza-np-updater", &updater.version, &artifact.format)?;
+                crate::store::verify_file(&file, artifact.size, &artifact.sha256)?;
+                openwrt::check_install_space(store, artifact.size)?;
+                [("meduza-np-updater".into(), file)].into()
+            };
             let file = files.get("meduza-np-updater").ok_or("missing updater archive")?;
             let _marker = openwrt::InstallMarker::hold(run);
             let (prog, args) = openwrt::install_args(backend, file);
             runner.run(prog, &args)?;
-            let cache = openwrt::Cache::new(&store.root, backend);
-            std::fs::create_dir_all(&cache.dir).map_err(|e| e.to_string())?;
-            std::fs::copy(file, cache.file("meduza-np-updater", &updater.version)).map_err(|e| e.to_string())?;
+            if j.native.is_none() {
+                let cache = openwrt::Cache::new(&store.root, backend);
+                std::fs::create_dir_all(&cache.dir).map_err(|e| e.to_string())?;
+                std::fs::copy(file, cache.file("meduza-np-updater", &updater.version)).map_err(|e| e.to_string())?;
+            }
         }
     }
-    store.save_installed(&h.installed)
+    store.save_installed(&h.installed)?;
+    if j.native.is_some() && backend != Backend::Store {
+        let action = h.plan.action("meduza-np-updater").ok_or("missing updater action")?;
+        let artifact = action.artifact.as_ref().ok_or("missing updater artifact")?;
+        let _ = std::fs::remove_file(openwrt::archive(store, "meduza-np-updater", &updater.version, &artifact.format)?);
+    }
+    Ok(())
 }

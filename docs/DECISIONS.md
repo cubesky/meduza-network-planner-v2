@@ -2523,3 +2523,45 @@ Manager server compilation, frontend/renderer typechecks, both production fronte
 whitespace checks pass. Evidence: target/check-access-frr-*.log and browser screenshots. No production
 deployment, live OpenVPN/FRR handshake test or Git staging/commit; coordinated package update and
 client reconnection remain the operator's release steps.
+
+## D104 — single-package OpenWrt updates in /tmp (2026-11-13)
+
+Replace native opkg/apk bulk staging with a download/verify/install/delete loop. Keep at most one
+full ipk/apk archive in a stable per-store /tmp directory (0700, real directory, current owner),
+including during updater takeover. Preserve signed group verification and complete artifact size/SHA256
+checks. APK uses --allow-untrusted --no-cache; opkg retains --force-downgrade for rollback. Store
+backend chunk downloads and activation remain unchanged. Download guards clean partial/failed files;
+idle collection removes known orphan archives and obsolete legacy overlay cache/staging, preserving
+unknown files and legacy repair archives still needed by an unresolved transaction.
+
+Persist the verified target plan, original source, attempted mutations and completed packages before
+native package changes. A Locked journal resumes the transaction after losing /tmp, verifies completed
+entries against the native package database and reinstalls incomplete entries. Updater is installed
+and taken over first; the new process then downloads the remaining packages individually. Accept a
+previous release's bulk-prepared handoff and migrate it to this flow. Do not hold planner maintenance
+across network downloads; pause only around each local package installation and its restart/verification.
+Shared runtime progress reads the private temporary archive and distinguishes downloading/retrying
+from installation, so planner reports remain useful with the new layout.
+
+Keep bounded verified artifact URLs/digests for current and retained rollback versions, instead of
+copying new archives into persistent storage. Rollback downloads and verifies previous packages one
+at a time and only restores packages whose mutation was attempted. This deliberately trades offline
+rollback for lower overlay use: missing verified metadata or unavailable old artifacts must report
+repair required, never claim successful restoration. Legacy cached archives remain a compatibility
+fallback when metadata is unavailable. Successfully restored download failures enter automatic
+backoff/retry rather than permanently blacklisting the release group.
+
+Preflight reserves largest pending archive + 8 MiB on both tmpfs and MemAvailable, separately from
+estimated install space (compressed size * 3 + 1 MiB). Recheck install space before each mutation on
+the actual system filesystem (/usr on OpenWrt), even if updater metadata uses an external volume.
+These are conservative estimates, not measured guarantees for a 128 MiB device; installed binaries
+still occupy native package storage and native installation can reject an update independently.
+
+Validation: 23 runtime, 30 updater library, 18 flow and one version test pass, plus the updater native
+packaging/trust test. New opkg/apk fixtures verify updater-first order, only one temporary archive,
+no residual overlay archives, old handoff migration, download/digest/install failures, verified online
+rollback, automatic download retries, and recovery after partial mutation with missing /tmp archives.
+All-target updater/runtime Clippy with warnings denied, shell syntax, rustfmt and diff checks pass.
+Update the real OpenWrt userspace end-to-end script's cleanup assertions, but do not claim it ran:
+this environment has no Podman/Docker and no hardware peak-RAM measurement was performed. Evidence:
+target/check-openwrt-stream-{tests,clippy,packaging}.log. Source only; no device changes or Git staging.

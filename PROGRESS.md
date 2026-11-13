@@ -10,6 +10,29 @@ scheduled "continue" task) must:
 
 Design decisions live in `docs/DECISIONS.md`.
 
+### 2026-11-13 — D104: native OpenWrt single-package /tmp updates
+
+Implement the requested download/verify/install/delete loop for native opkg/ipk and apk/apk, with
+only one full archive in an owned private /tmp directory. Keep group/artifact verification, updater
+takeover before planner, APK --allow-untrusted and add --no-cache. Persist source/plan and attempted/
+completed mutations for recovery after losing /tmp; migrate legacy bulk-prepared updater handoffs.
+Downloads release maintenance; each local mutation restarts/verifies its affected component before
+continuing. Runtime progress follows temporary byte counts and download/retry/install phases.
+
+Persist bounded artifact metadata instead of new rollback archives, restore old packages by verified
+single-file re-download, and clean obsolete persistent cache/staging except unresolved legacy repair
+data. Online rollback requires available source metadata/artifacts and reports restoration failures
+explicitly. Restored download failures retain automatic backoff/retry. Preflight separately checks
+largest single archive against /tmp/MemAvailable and each install's actual system partition space.
+
+All 72 runtime/updater tests and one packaging/trust test pass; all-target Clippy with warnings denied,
+shell syntax, rustfmt and diff checks pass. Fixtures cover both native managers, single-file cleanup,
+updater-first/migration, corrupt/missing downloads, partial native failures, online rollback and reboot
+recovery. Evidence: target/check-openwrt-stream-{tests,clippy,packaging}.log. Real OpenWrt userspace
+end-to-end and hardware memory measurements remain pending (no local Podman/Docker). Update AGENT.md,
+operations and D104; source only, no deployment or Git staging/commit. Release updater for this flow
+and planner for the shared runtime's native download progress reporting.
+
 ### 2026-11-13 — D103: FRR route push for Access and Access-first console lists
 
 Per user request, add default-off access.pushRoutes.frr to the OpenVPN model/schema and shared
@@ -416,6 +439,22 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   namespace, host LAN not announced → new `frr/main/origination` status, routerId pre-check, capability warning)
 
 ## Session log
+
+- 2026-11-13 (D104, user request): Implement native single-package /tmp download/install/delete,
+  verified online rollback metadata, interrupted-transaction recovery and old handoff migration.
+  Preserve updater-first order and download retries; add APK --no-cache, per-package installation
+  locks/progress and separate temporary/memory/system-space preflight. 72 tests plus packaging trust,
+  Clippy, shell syntax, formatting and diff checks pass. Real OpenWrt userspace/RAM acceptance pending;
+  no device changes or Git staging/commit. See detailed D104 entry above and operations.
+
+- 2026-11-13 (read-only OpenWrt updater audit): Confirm automatic opkg/ipk vs apk/apk selection and
+  apk add --allow-untrusted after project signature/digest verification. Current implementation downloads
+  all changed archives sequentially into persistent /etc/meduza-np-state/store/staging before installing
+  packages one by one, then clears staging after completion (except pending repair). Native cache retains
+  current/rollback archives and installation copies downloads there. It does not yet implement a single
+  /tmp archive download/install/delete loop; preflight still budgets total download bytes * 4 + 16 MiB.
+  Report gaps relative to user's low-storage/RAM requirement; /tmp normally consumes RAM, so moving all
+  staging there would not solve peak use. Static source audit only; no runtime tests or device changes.
 
 - 2026-11-13 (D103, user request): Implement optional connection-time FRR route push for Access;
   preserve authorization/static pushes, bounded complete snapshots and per-connection failure isolation.
