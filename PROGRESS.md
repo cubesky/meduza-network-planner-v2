@@ -10,6 +10,39 @@ scheduled "continue" task) must:
 
 Design decisions live in `docs/DECISIONS.md`.
 
+### 2026-11-13 — D102: fix Site2Site static-key direction compatibility
+
+Per the user's follow-up authorization, add independent optional staticKeyDirection (0/1) to the
+OpenVPN model, generated schema and shared Manager/Dashboard descriptor. Omission/null emits the
+same undirected secret directive as v1 in either role; explicit values stay explicit. Match native
+staged-key crypto preflight to runtime settings. Preserve tls-auth direction rules, compression,
+static-mode provider opt-in and disabled-instance isolation. Correct v1 importer to retain static
+key_direction under the new field and leave absent directions absent.
+
+All 30 relevant tests pass: 15 OpenVPN, six Manager import/i18n, five renderer/schema and four package
+manifest checks. All-target OpenVPN Clippy, Manager server compile, renderer typecheck, rustfmt and
+git diff --check pass. Regressions cover omitted/null/0/1 for both roles, independent TLS fields,
+invalid values, disabled instances, staged-key check arguments, explicit imported zero and nullable
+UI editing/labels. Evidence: target/check-openvpn-static-{direction,import,ui,manifests}.log.
+Use explicit directions for previously paired v2 peers during staggered upgrades; documented under
+operations and D102. No production modifications, deployment or Git staging/commit. The diagnosed
+lemon instance needs the updated meduza-np-openvpn package and reapply with staticKeyDirection unset;
+live peer decryption/connection must be checked after deployment.
+
+### 2026-11-13 — Read-only v1 Site2Site server comparison
+
+Per the user's request to report differences before changing anything, compare v1 gen_openvpn.py,
+the redacted XuZhou-B1/Lemon export and .9's active rev-000027 lemon config. TCP 20100, tuns1,
+ifconfig 10.42.248.13/14, SHA256, AES-256-CBC, comp-lzo yes, allow-compression asym and keepalive
+10/120 match. The significant incompatibility is static-key direction: v1 omits direction, while
+the current renderer unconditionally appends server=0/client=1 and ignores tls.keyDirection for
+static keys. OpenVPN documents omitted direction as bidirectional, distinct from complementary
+0/1 operation. Live remote TCP connections reach .2:20100 and immediately repeat fatal decryption
+errors; this matches the identified compatibility issue, though the peer's current configuration
+and key equality have not been inspected. The provider is OpenVPN 2.7.8 with LZO/LZ4 support and
+explicit static-mode compatibility opt-in. No service/source changes or production mutations;
+report the finding and recommend configurable static-key direction with legacy omission support.
+
 ### 2026-11-13 — D101: corrected VNC target exposes side-router reply misrouting
 
 User corrects the target to 10.42.10.4:5900. Its listener and RFB banner work from both 10.42.10.2

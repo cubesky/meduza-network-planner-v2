@@ -621,6 +621,8 @@ WireGuard / OpenVPN 以实例为应用和故障隔离边界：单个实例缺失
 
 证书/密钥支持导入与界面生成。实例密钥写独立 0600 文件。基础配置中不提供不受校验的任意 shell hook；高级原生指令若开放，需要白名单、冲突检查和受限权限。
 
+静态密钥方向使用独立的 `staticKeyDirection`：省略或 null 时生成不带方向的 `secret`，兼容 v1 双向密钥；显式 0/1 时按原值生成，不能由 client/server 角色推断。`tls.keyDirection` 仅用于 tls-auth。原生预检和运行配置必须一致；v1 导入将静态模式的 key_direction 转到独立字段，省略的方向保持省略。使用此前 v2 自动生成 0/1 的对端，分步升级时需明确保留原方向（D102）。
+
 状态优先使用 OpenVPN management/status 接口，并将进程存活、隧道设备、会话建立分开。普通实例与 Access 都由同一插件管理，但类型与模板分开。
 
 系统 OpenVPN 可以裁剪 management；不得仅因缺少这一监控功能拒绝隧道配置。生成配置仅对 management 使用 `ignore-unknown-option`，保留加密、密钥和其余原生检查。所有实例生成独立 writepid 与 status 路径；进程存活须核对 PID 对应的实际二进制和本实例 `--config` 参数，不能仅依据残留 socket/PID 文件。状态文件只接受运行进程本次生命周期内且最近 30 秒更新的数据。缺少 management 时可上报进程、设备和流量，精确会话状态显示不可观测，不能把存活或历史流量当作连接成功。定点断开客户端需要支持 management 的本体，不支持时返回明确错误；项目 openvpn-pkg 保留此功能（D97）。

@@ -681,3 +681,24 @@ The standalone real regression uses only synthetic generated tables and isolated
 cargo run --locked -q -p meduza-np-mihomo --example reply-routing-fixture > /tmp/reply-fixtures.json
 sudo python3 tools/mihomo-reply-network-test.py /tmp/reply-fixtures.json
 ```
+
+### Site2Site static-key peers connect over TCP but fail to decrypt
+
+The D102 OpenVPN adapter restores v1's default bidirectional static-key behavior. Leave
+`staticKeyDirection` blank (or null/absent in JSON) to emit `secret ".../static.key"` without a
+direction. Set it explicitly to 0 or 1 only when the other peer uses the complementary direction.
+This is independent of `tls.keyDirection`, which controls tls-auth. The native preflight uses the
+same static direction as the running configuration. Both Manager and Dashboard expose the field
+in the certificate/key section, with zero retained as an explicit value.
+
+For the diagnosed xuzhou-b1/lemon instance, TCP 20100 is reached and then fatal decryption errors
+repeat. The v1 export has no direction, whereas the old v2 adapter forced server direction 0.
+Update meduza-np-openvpn and reapply with the new field unset to restore the v1 behavior; confirm
+the peer's direction and shared key if decryption still fails. No port/NAT or TLS policy changes
+are required for this compatibility correction. Manager's v1 importer preserves explicit legacy
+key_direction in staticKeyDirection and keeps an omitted direction absent.
+
+If a peer was configured for the previous v2 adapter's automatic 0/1 convention, explicitly set
+the corresponding staticKeyDirection before upgrading only one side, or coordinate both sides'
+configuration. Previously imported explicit static key directions under tls.keyDirection must be
+moved to staticKeyDirection. This release does not reinterpret the TLS field in static mode.

@@ -435,6 +435,16 @@
           ],
           "description": "Server-mode Site2Site address pool."
         },
+        "staticKeyDirection": {
+          "description": "Static key direction: omit for bidirectional keys (v1 compatibility), or pair 0 with 1 on the peer.\nIndependent of `tls.keyDirection`, which applies only to `tls-auth`.",
+          "format": "uint8",
+          "maximum": 1,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "staticKeyRef": {
           "description": "Pre-shared static key mode (p2p without TLS). Mutually exclusive with certificates.",
           "type": [

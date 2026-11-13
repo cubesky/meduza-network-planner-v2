@@ -69,7 +69,8 @@
             "tls.tlsCryptRef",
             "tls.tlsAuthRef",
             "tls.keyDirection",
-            "staticKeyRef"
+            "staticKeyRef",
+            "staticKeyDirection"
           ],
           "widget": "certificate"
         },
@@ -211,6 +212,7 @@
       },
       "fields": {
         "reason": "Connection error",
+        "staticKeyDirection": "Static key direction (blank: bidirectional; 0/1: paired)",
         "accept": "Accepted prefixes",
         "acceptDefault": "Accept a default route",
         "address": "Neighbor address",
@@ -323,6 +325,7 @@
         "since": "自",
         "state": "状态",
         "staticKeyRef": "静态密钥",
+        "staticKeyDirection": "静态密钥方向（留空：双向；0/1：配对）",
         "statusUpdated": "状态更新时间",
         "tlsAuthRef": "tls-auth 密钥",
         "tlsCryptRef": "tls-crypt 密钥",
@@ -428,6 +431,7 @@
         "since": "自",
         "state": "狀態",
         "staticKeyRef": "靜態金鑰",
+        "staticKeyDirection": "靜態金鑰方向（留空：雙向；0/1：配對）",
         "statusUpdated": "狀態更新時間",
         "tlsAuthRef": "tls-auth 金鑰",
         "tlsCryptRef": "tls-crypt 金鑰",

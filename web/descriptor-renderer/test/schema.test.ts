@@ -45,6 +45,29 @@ test("immutable set removes undefined keys and get follows paths", () => {
   assert.ok(!("enabled" in (x.services.wireguard as Record<string, unknown>)));
 });
 
+test("OpenVPN static-key direction edits zero, one and legacy omission independently of TLS", () => {
+  const root = new URL("../../../packages/meduza-np-openvpn/", import.meta.url);
+  const schema = JSON.parse(readFileSync(new URL("schema/config.json", root), "utf8")) as JsonSchema;
+  const descriptor = JSON.parse(readFileSync(new URL("ui/descriptor.json", root), "utf8"));
+  const instance = itemSchema(childSchema(schema, "instances", schema), schema)!;
+  const info = fieldInfo(childSchema(instance, "staticKeyDirection", schema), schema);
+  assert.equal(info.kind, "integer");
+  assert.equal(info.nullable, true);
+  for (const value of [undefined, null, 0, 1]) assert.equal(fieldError(info, value), undefined);
+  for (const value of [-1, 2, 0.5]) assert.ok(fieldError(info, value));
+  let draft = { tls: { keyDirection: 1 } };
+  for (const value of [0, 1, undefined]) {
+    draft = setAt(draft, ["staticKeyDirection"], value);
+    assert.equal(getAt(draft, ["staticKeyDirection"]), value);
+    assert.equal(draft.tls.keyDirection, 1);
+  }
+  assert.equal(Object.hasOwn(draft, "staticKeyDirection"), false);
+  assert.ok(descriptor.collections[0].sections.some((s: { fields: string[] }) => s.fields.includes("staticKeyDirection")));
+  for (const locale of ["en", "zh-Hans", "zh-Hant"]) {
+    assert.ok(descriptor.i18n[locale].fields.staticKeyDirection);
+  }
+});
+
 test("when expressions", () => {
   assert.equal(evalWhen('kind == "access"', { kind: "access" }), true);
   assert.equal(evalWhen('kind != "access"', { kind: "access" }), false);

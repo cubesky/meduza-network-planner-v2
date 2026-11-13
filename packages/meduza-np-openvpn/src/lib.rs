@@ -270,6 +270,11 @@ pub struct Instance {
     /// Pre-shared static key mode (p2p without TLS). Mutually exclusive with certificates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub static_key_ref: Option<String>,
+    /// Static key direction: omit for bidirectional keys (v1 compatibility), or pair 0 with 1 on the peer.
+    /// Independent of `tls.keyDirection`, which applies only to `tls-auth`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 0, max = 1))]
+    pub static_key_direction: Option<u8>,
     /// Client: accept server-pushed options (still never routes unless `acceptRoutes`).
     #[serde(default = "default_true")]
     pub pull: bool,
@@ -378,6 +383,10 @@ pub fn validate(cfg: &OpenVpnConfig, req: &PluginRequest) -> Vec<ValidationError
         }
         if let Some(k) = inst.tls.key_direction {
             v.check(k <= 1, format!("{b}/tls/keyDirection"), "key-direction is 0 or 1");
+        }
+        if let Some(k) = inst.static_key_direction {
+            v.check(k <= 1, format!("{b}/staticKeyDirection"), "static key direction is 0 or 1; omit for bidirectional keys");
+            v.check(inst.static_key_ref.is_some(), format!("{b}/staticKeyDirection"), "static key direction requires staticKeyRef");
         }
         v.check(
             inst.tls.tls_crypt_ref.is_none() || inst.tls.tls_auth_ref.is_none(),
@@ -694,8 +703,8 @@ pub fn render(inst: &Instance, req: &PluginRequest) -> Result<Rendered, PluginEr
         add("ignore-unknown-option allow-deprecated-insecure-static-crypto".into());
         add("allow-deprecated-insecure-static-crypto".into());
         let path = secret_file("static.key", id, &mut files)?;
-        let dir_word = if inst.role == Role::Server { 0 } else { 1 };
-        add(format!("secret {} {dir_word}", quote(&path)));
+        let direction = inst.static_key_direction.map(|d| format!(" {d}")).unwrap_or_default();
+        add(format!("secret {}{direction}", quote(&path)));
     } else {
         if let Some(id) = &inst.tls.ca_ref {
             add(format!("ca {}", quote(&secret_file("ca.pem", id, &mut files)?)));
@@ -787,7 +796,7 @@ pub fn plan(cfg: &OpenVpnConfig, req: &PluginRequest) -> Result<Vec<GenerationPl
                 argv: if inst.static_key_ref.is_some() {
                     // Config content uses the stable current link, which still names the previous generation
                     // during preflight. Override only the key path for this check to read the staged key.
-                    vec![
+                    let mut argv = vec![
                         "--config".into(),
                         config_path,
                         "--test-crypto".into(),
@@ -795,8 +804,11 @@ pub fn plan(cfg: &OpenVpnConfig, req: &PluginRequest) -> Result<Vec<GenerationPl
                         "0".into(),
                         "--secret".into(),
                         format!("${{GENERATION_ROOT}}/openvpn/{}/static.key", inst.id),
-                        if inst.role == Role::Server { "0".into() } else { "1".into() },
-                    ]
+                    ];
+                    if let Some(direction) = inst.static_key_direction {
+                        argv.push(direction.to_string());
+                    }
+                    argv
                 } else {
                     vec!["--config".into(), config_path, "--show-ciphers".into()]
                 },
@@ -1184,9 +1196,69 @@ mod tests {
             assert_eq!(plan.processes[0].restart, RestartPolicy::Always);
             assert_eq!(plan.checks[0].argv[2], if plan.instance == "openvpn/cli" { "--show-ciphers" } else { "--test-crypto" });
             if plan.instance != "openvpn/cli" {
-                assert_eq!(&plan.checks[0].argv[5..], ["--secret", &format!("${{GENERATION_ROOT}}/{}/static.key", plan.instance), "0"]);
+                assert_eq!(&plan.checks[0].argv[5..], ["--secret", &format!("${{GENERATION_ROOT}}/{}/static.key", plan.instance)]);
             }
             assert!(plan.checks[0].required);
+        }
+    }
+
+    #[test]
+    fn static_key_direction_preserves_legacy_and_explicit_peer_choices() {
+        for role in ["server", "client"] {
+            for direction in [Value::Null, json!(0), json!(1)] {
+                let r = req(json!([{
+                    "id":"legacy", "role":role, "staticKeyRef":"tc", "staticKeyDirection":direction,
+                    "ifconfig":{"local":"10.8.0.1","remote":"10.8.0.2"},
+                    "remotes":[{"host":"vpn.example.test"}], "tls":{"keyDirection":1}
+                }]));
+                let cfg = load(&r).unwrap();
+                assert!(validate(&cfg, &r).is_empty());
+                let plans = plan(&cfg, &r).unwrap();
+                let content = &plans[0].files[0].content;
+                let secret = content.lines().find(|l| l.starts_with("secret ")).unwrap();
+                let suffix = direction.as_u64().map(|d| format!(" {d}")).unwrap_or_default();
+                assert!(secret.ends_with(&format!("/static.key\"{suffix}")), "{role}: {secret}");
+                assert!(!content.lines().any(|l| l.starts_with("key-direction ") || l.starts_with("tls-auth ")));
+                let mut expected = vec!["--secret".to_string(), "${GENERATION_ROOT}/openvpn/legacy/static.key".into()];
+                if let Some(d) = direction.as_u64() {
+                    expected.push(d.to_string());
+                }
+                assert_eq!(plans[0].checks[0].argv[5..], expected);
+            }
+        }
+        // Old documents omit the field entirely. Neither client nor server role selects a direction.
+        for role in ["server", "client"] {
+            let r = req(json!([{"id":"old", "role":role, "staticKeyRef":"tc",
+                "ifconfig":{"local":"10.8.0.1","remote":"10.8.0.2"}, "remotes":[{"host":"vpn.example.test"}]}]));
+            let cfg = load(&r).unwrap();
+            assert!(cfg.instances[0].static_key_direction.is_none());
+            assert!(!serde_json::to_value(&cfg.instances[0]).unwrap().as_object().unwrap().contains_key("staticKeyDirection"));
+            assert!(render(&cfg.instances[0], &r).unwrap().config.lines().any(|l| l.starts_with("secret ") && l.ends_with("static.key\"")));
+        }
+    }
+
+    #[test]
+    fn static_key_direction_validation_and_tls_auth_are_independent() {
+        let mut r = req(json!([{"id":"bad", "staticKeyRef":"tc", "staticKeyDirection":2,
+            "ifconfig":{"local":"10.8.0.1","remote":"10.8.0.2"}, "remotes":[{"host":"vpn.example.test"}]}]));
+        let cfg = load(&r).unwrap();
+        assert!(validate(&cfg, &r).iter().any(|e| e.path == "/instances/0/staticKeyDirection"));
+        r.config.services.get_mut("openvpn").unwrap()["instances"][0]["enabled"] = json!(false);
+        assert!(validate(&load(&r).unwrap(), &r).is_empty());
+        for role in ["server", "client"] {
+            for direction in [Value::Null, json!(0), json!(1)] {
+                let r = req(json!([{"id":"tls", "role":role,
+                    "ifconfig":{"local":"10.8.0.1","remote":"10.8.0.2"}, "remotes":[{"host":"vpn.example.test"}],
+                    "tls":{"caRef":"ca","certRef":"crt","keyRef":"key","tlsAuthRef":"tc","keyDirection":direction}}]));
+                let cfg = load(&r).unwrap();
+                assert!(validate(&cfg, &r).is_empty());
+                let out = render(&cfg.instances[0], &r).unwrap();
+                let expected = direction.as_u64().unwrap_or(if role == "server" { 0 } else { 1 });
+                assert!(out.config.lines().any(|l| l.starts_with("tls-auth ") && l.ends_with(&format!(" {expected}"))));
+                let mut cfg = cfg;
+                cfg.instances[0].static_key_direction = Some(0);
+                assert!(validate(&cfg, &r).iter().any(|e| e.path == "/instances/0/staticKeyDirection"));
+            }
         }
     }
 

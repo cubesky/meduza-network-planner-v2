@@ -285,7 +285,7 @@ export function convertEtcdExport(input: unknown): ImportResult {
             ...(ref("key", "pem-private-key", "private key") ? { keyRef: `ovpn-${id}-${iid}-key` } : {}),
             ...(ref("tls_auth", "openvpn-static-key", "tls-auth key") ? { tlsAuthRef: `ovpn-${id}-${iid}-tls-auth` } : {}),
             ...(ref("tls_crypt", "openvpn-tls-crypt", "tls-crypt key") ? { tlsCryptRef: `ovpn-${id}-${iid}-tls-crypt` } : {}),
-            ...(num(o.key_direction) !== undefined ? { keyDirection: num(o.key_direction) } : {}),
+            ...(o.secret === undefined && num(o.key_direction) !== undefined ? { keyDirection: num(o.key_direction) } : {}),
             ...(o.remote_cert_tls ? { remoteCertTls: o.remote_cert_tls } : {}),
           };
           const staticKeyRef = ref("secret", "openvpn-static-key", "static key");
@@ -320,6 +320,7 @@ export function convertEtcdExport(input: unknown): ImportResult {
             ...(num(o.verb) !== undefined ? { verb: num(o.verb) } : {}),
             ...(!server && (bool(o.client) || bool(o.pull)) ? { p2pPull: true } : {}),
             ...(staticKeyRef ? { staticKeyRef } : {}),
+            ...(staticKeyRef && num(o.key_direction) !== undefined ? { staticKeyDirection: num(o.key_direction) } : {}),
             ...(Object.keys(tls).length ? { tls } : {}),
             ...(bgp ? { bgp } : {}),
           };

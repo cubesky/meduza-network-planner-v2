@@ -2455,3 +2455,30 @@ downloaded/unpacked only into an owned temporary directory without installing or
 Children/namespaces and owned files were removed; .45's primary route/rules remain unchanged.
 Evidence: target/check-access-return.log and target/check-access-return-network.log. Native rustfmt
 and git diff --check pass. No production rule/service changes, workstation gateway edits or Git staging/commit.
+
+## D102 — explicit static-key direction with v1 bidirectional compatibility (2026-11-13)
+
+Read-only diagnosis finds xuzhou-b1/lemon accepts TCP connections on 20100, then repeatedly reports
+fatal decryption errors. The v1 generator/export omits static-key direction; v2 unconditionally
+appends server=0/client=1. These select different key material, despite matching cipher, auth,
+compression, ifconfig and keepalive. The peer's current configuration/key equality was not inspected.
+
+Add optional numeric staticKeyDirection (0/1) to the OpenVPN instance. Absence/null means omit the
+direction for both roles; explicit zero/one is preserved regardless of role. Keep tls.keyDirection
+exclusive to tls-auth and preserve that option's existing role defaults. Validate static direction
+range and require staticKeyRef. Disabled instances retain normal validation/retry isolation.
+Native crypto preflight overrides the staged key path using the same configured direction, including
+omission. Keep OpenVPN 2.7 static-mode opt-in, compression and all other TLS/service behavior.
+
+Regenerate the package schema, expose the independent numeric field through the shared descriptor
+with English/Simplified/Traditional labels, and preserve v1 importer direction semantics. An explicit
+legacy static key_direction maps to staticKeyDirection, while a missing value remains missing;
+TLS key_direction continues to map to tls.keyDirection. Document coordinated upgrades or explicit
+directions for peers relying on the previous v2 0/1 defaults, and migration of already imported
+explicit static directions stored under the TLS field. No implicit role-based compatibility mode.
+
+Validation: 15 OpenVPN tests, six Manager import/i18n tests, five renderer/schema tests and four
+package manifest tests pass, along with all-target OpenVPN Clippy, Manager server compilation,
+renderer typecheck, rustfmt and git diff --check. Evidence: target/check-openvpn-static-*.log.
+No production changes/deployment or Git staging/commit. Live peer acceptance remains pending the
+normal package upgrade/reapply; unit/schema checks do not claim an actual peer handshake.

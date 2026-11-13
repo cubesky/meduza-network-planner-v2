@@ -152,6 +152,20 @@ test("etcd import (D58): conversion of every taken-over key family", () => {
   assert.throws(() => convertEtcdExport({ format: "other", kvs: [] }), /meduza-etcd-export-v1/);
 });
 
+test("etcd import: static-key direction preserves omission and explicit zero/one independently of TLS", () => {
+  for (const direction of [undefined, "0", "1"]) {
+    const input = fixture() as any;
+    if (direction !== undefined) input.kvs.push(kv("/nodes/Node-A/openvpn/Lemon/key_direction", direction));
+    input.kvs.push(kv("/nodes/Node-A/openvpn/Far/key_direction", "0"));
+    const d = convertEtcdExport(input).document as any;
+    const [lemon, far] = d.nodes["node-a"].services.openvpn.instances;
+    assert.equal(lemon.staticKeyDirection, direction === undefined ? undefined : Number(direction));
+    assert.equal(lemon.tls?.keyDirection, undefined);
+    assert.equal(far.staticKeyDirection, undefined);
+    assert.equal(far.tls.keyDirection, 0);
+  }
+});
+
 test("etcd import (D58): preview, staging with supplied values, and the compiled result", async () => {
   const ctx = await startManager();
   const { app, s } = ctx;
