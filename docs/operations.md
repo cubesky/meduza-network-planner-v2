@@ -95,6 +95,14 @@ paths itself, so no environment variables are needed. Optional updater settings 
 (`baseUrl`, `channel`, `autoApply`, `window`, `checkIntervalSeconds`). Removing the packages stops and disables the
 services; state under `/etc/meduza-np-state` and `/etc/meduza-np` is kept.
 
+The default signed update source is `https://cubesky.github.io/meduza-network-planner-v2`.
+Older native updater builds default to an obsolete `meduza-np.github.io` URL that returns 404.
+For those builds, set `baseUrl` in the existing `updater.json` (preserving its other options), restart
+only `/etc/init.d/meduza-np-updater`, and use `meduza-np update check` to verify without installing.
+An empty new updater store can also hide remote controls until its first jittered check in older
+planner builds. A fresh local `meduza-np status --json` report with `update.remoteControl: true`
+confirms planner support; refresh Manager after the next report or request `meduza-np sync`.
+
 ## 3. Enroll with the manager
 
 1. In the manager: Nodes → create the node → "enrollment token" (single use, expires).
@@ -745,3 +753,12 @@ list is rejected when the option is enabled. The option left off retains the pre
 
 Both consoles show Access before Site2Site in OpenVPN settings and status, including disabled Access
 entries. The ordering is only visual; stored array indexes and instance IDs remain unchanged.
+
+If enabling FRR push leaves Access degraded with `FRR route push requires enabled FRR configuration`
+while FRR is configured and running, check the Access instance error, not only the node's `in-sync`
+revision. Older planner releases discard other service configuration during isolated tunnel
+preparation; Access is rejected and its previous process/configuration is retained without the new
+FRR hook flag. Update planner with the D106 context fix, reapply the configuration, then reconnect
+clients. OpenVPN declares `services.frr` as consumed context. The diagnosed xuzhou-b1 v0.4.2 FRR
+plugin exports 61 eligible routes successfully; changing client pull options or restarting the old
+Access configuration does not repair the planner validation error.

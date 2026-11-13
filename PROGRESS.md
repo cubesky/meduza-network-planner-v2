@@ -10,6 +10,40 @@ scheduled "continue" task) must:
 
 Design decisions live in `docs/DECISIONS.md`.
 
+### 2026-11-13 — D106: Access FRR push rejected by isolated preparation
+
+Read-only inspect xuzhou-b1 on .9: rev-000032 is in-sync, but Access repeatedly reports FRR not
+enabled and retains its old process/config without the FRR hook flag. Full configuration contains
+FRR and Access frr/lan/privateLan pushes; registered planner/openvpn/frr are 0.4.2. The actual FRR
+access-routes action returns 61 eligible routes, confirming the failure precedes client delivery.
+
+Fix planner per-tunnel prepare to preserve other services' context while excluding them from repeat
+preparation; replace only the current tunnel instances array. Keep sibling-error isolation, disabled
+handling and survivor conflict validation. Declare services.frr in the OpenVPN manifest. Add real-
+plugin regression for Access with FRR, healthy/broken Site2Site siblings, no duplicate other-service
+planning, absent/disabled FRR rejection and option-off compatibility. Update AGENT.md, operations
+and D106. All 110 relevant engine/library/hook/manifest tests, Clippy, formatting/diff checks pass;
+evidence: target/check-access-frr-context-*.log. No production mutations, deployment, real client
+reconnection or Git staging/commit. Publish the planner fix, reapply and reconnect for acceptance;
+existing OpenVPN/FRR hook/export support does not require a system-binary replacement.
+
+### 2026-11-13 — D105: native updater visibility and default update source
+
+Diagnose 10.42.9.1 / roaming-cat1: updater 0.4.3 and its socket are running, planner 0.3.7 already
+reports remoteControl=true after a check. Earlier empty-store reports lack update entirely because
+snapshot ignores daemon activity before the first jittered check. Accept activity-only startup as
+idle without claiming any successful/installed group, and extend the shared runtime regression.
+Correct updater/base-image/example defaults from the obsolete 404 Pages URL to the actual repository
+source; preserve explicit configuration priority. Document D105 and the operational recovery.
+
+On the authorized node, persist baseUrl in a new 0600 updater.json, restart only updater, request
+check and planner sync. Verify trusted stable v0.4.3 / aarch64_generic resolution with no blockers,
+running service, error=null and in-sync rev-000013. Existing auto-apply policy stays enabled; no
+manual apply, package upgrades or business-service restarts. Old system-installed versions have
+rollback metadata warnings. Manager browser rendering remains unverified; local capability is true.
+All 72 runtime/updater tests, all-target Clippy, formatting and diff checks pass. Evidence:
+target/check-updater-source-{tests,clippy}.log. Source changes await release; no Git staging/commit.
+
 ### 2026-11-13 — D104: native OpenWrt single-package /tmp updates
 
 Implement the requested download/verify/install/delete loop for native opkg/ipk and apk/apk, with
@@ -439,6 +473,18 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   namespace, host LAN not announced → new `frr/main/origination` status, routerId pre-check, capability warning)
 
 ## Session log
+
+- 2026-11-13 (D106): Diagnose .9 Access FRR push: isolated planner validation erased FRR context,
+  leaving the old Access config running. Actual FRR export returns 61 routes. Preserve service
+  context without duplicate planning and declare OpenVPN's FRR consumption; 110 tests and Clippy/
+  formatting/diff checks pass. Source-only fix, no production mutations or Git staging/commit;
+  release planner/reapply/reconnect still required. See detailed D106 entry above.
+
+- 2026-11-13 (D105): Diagnose and correct .1's obsolete 404 update source, restart only updater and
+  request check/sync; signature/platform/plan, running socket and remoteControl=true verified.
+  Fix source defaults and activity-only startup visibility in shared runtime. 72 tests, Clippy,
+  formatting/diff checks pass. No manual upgrades, business restarts, publication or Git staging.
+  Authenticated Manager browser acceptance remains with the operator; see D105 above.
 
 - 2026-11-13 (D104, user request): Implement native single-package /tmp download/install/delete,
   verified online rollback metadata, interrupted-transaction recovery and old handoff migration.

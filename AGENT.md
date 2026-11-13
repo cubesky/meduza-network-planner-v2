@@ -635,6 +635,8 @@ Access 是 OpenVPN server 实例类型，不再固定只能有一个名为 acces
 
 `access.pushRoutes.frr` 默认关闭；启用后在已鉴权客户端连接时，从本节点 FRR 的 meduza pathspace 获取已选中并安装的 IPv4 BGP/OSPF/static 转发路由，规范化、合并被覆盖前缀，排除默认路由、特殊地址、黑洞及已启用 Access 池内的路由。要求本节点已有启用的 FRR 配置和已注册插件/provider，不为 Access 擅自创建 ASN 或邻居。快照按配置摘要缓存 5 秒，路由变化由客户端重连获取，不强制中断已有会话。查询有超时与大小上限，最多推送 256 条动态路由；查询失败或超限明确拒绝本次连接，不推送截断或陈旧列表，不中止整次配置应用。Manager/Dashboard 的 OpenVPN 状态与配置列表始终将 Access 放在 Site2Site 前，包括禁用条目；只改显示顺序，保留原配置下标与稳定 ID（D103）。
 
+planner 隔离 OpenVPN/WireGuard 单实例校验与规划时，保留其他服务的配置上下文，只排除重复规划其他服务；不能将 services 清空到仅剩该隧道，否则 Access 会误判 FRR 未启用而继续运行旧配置。OpenVPN manifest 的 consumes 必须包含 services.frr。兄弟实例错误隔离、禁用条目及跨实例冲突检查仍须保留（D106）。
+
 鉴权链路必须为：
 
 ```text
@@ -1040,6 +1042,8 @@ CLI 至少提供 `status`、`features`、`packages`、`enroll`、`sync`、`valid
 非 OpenWrt 的 Podman 部署中，updater 随 base-container 预装，启动时无需联网下载自己；它读取环境变量选择的组件集合，下载对应平台的 planner、插件及明确选择的额外 provider，不要求把 updater 安装到宿主系统。其容器生命周期与 planner 独立，首次安装、环境变量变更、包更新和基础镜像替换的分工遵循第 14.3 节。
 
 二者通过有版本的本地协议交换：运行版本、注册包、能力、维护锁、暂停配置应用、停止/排空、健康检查和升级结果。原生节点未安装 updater 时，面板明确显示不提供自动升级；base-container 中 updater 不健康则显示具体故障，不能当作未选择的可选功能忽略。
+
+updater 首次启动后，在等待错峰检查期间也须可被识别：共享状态读取须接受 daemon 的启动 activity 记录，不依赖已有 installed/state/journal。planner 已支持转发时应及时上报远程控制能力，不能因首次检查尚未执行而提示必须更新 planner。默认签名源与本项目实际 Pages 地址保持一致；用户显式环境变量或 updater.json 配置仍优先（D105）。
 
 新包组可用时自动解析本节点目标，按配置通道/维护窗口安排更新；允许界面/CLI 暂停、延迟或立即执行。默认不因发布了一个新包就安装所有可选功能，更不能一起装入互斥包。
 

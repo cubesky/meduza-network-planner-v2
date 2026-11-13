@@ -13,7 +13,7 @@ ARG TARGETARCH
 ARG TARGETVARIANT
 ARG BASE_CONTAINER_VERSION
 ARG UPDATER_VERSION
-ARG UPDATE_BASE_URL=https://meduza-np.github.io/meduza-network-planner
+ARG UPDATE_BASE_URL=https://cubesky.github.io/meduza-network-planner-v2
 
 # Minimal runtime: TLS roots + curl for verified downloads, tini as PID 1, iproute2/nftables for planner-owned
 # network resources. Service software (wireguard-tools, dnsmasq, frr, ...) is added per selected component at

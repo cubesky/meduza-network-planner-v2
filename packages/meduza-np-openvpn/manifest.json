@@ -54,6 +54,7 @@
   ],
   "consumes": [
     "services.openvpn",
+    "services.frr",
     "networks.lan",
     "networks.privateLan",
     "networks.mappings",

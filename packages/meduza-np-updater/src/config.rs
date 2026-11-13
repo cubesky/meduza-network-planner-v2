@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 /// Official update source (GitHub Pages of the project repository). Deployments may point elsewhere
 /// (mirror, `file:///` offline import directory) with `MEDUZA_NP_UPDATE_BASE_URL`.
-pub const DEFAULT_BASE_URL: &str = "https://meduza-np.github.io/meduza-network-planner";
+pub const DEFAULT_BASE_URL: &str = "https://cubesky.github.io/meduza-network-planner-v2";
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]

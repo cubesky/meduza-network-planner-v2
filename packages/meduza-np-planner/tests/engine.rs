@@ -203,6 +203,61 @@ fn tunnel_config(env: &Env, short: &str, rev: u64, ids: &[&str]) -> (Value, Stri
     (raw, digest)
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn isolated_access_keeps_frr_context_without_replanning_other_services_or_accepting_broken_siblings() {
+    let Some(env) = setup("access-frr-context") else { return };
+    if !env.have_openvpn {
+        return;
+    }
+    // Only the capability is needed for OpenVPN preparation; the separate FRR action tests cover route queries.
+    write_json(
+        &env.paths.packages.join("meduza-np-frr/manifest.json"),
+        &json!({
+            "manifestVersion":1,"package":"meduza-np-frr","version":"0.1.0","role":"binary-provider",
+            "plannerApi":{"min":1,"max":1},"requires":["meduza-np-planner"],"provides":["frr.bgp"],
+            "providers":[{"slot":"frr.daemons","binary":target_dir().join("examples").join(format!("fake_tool{EXE}"))}]
+        }),
+    );
+    let reg = registry::scan(&env.paths.packages, &Default::default());
+    assert!(reg.by_short("frr").unwrap().registered(), "{:?}", reg.by_short("frr").unwrap().reason);
+    let (mut raw, _) = tunnel_config(&env, "openvpn", 1, &["good", "broken"]);
+    raw["services"]["openvpn"]["instances"][1]["port"] = json!("invalid");
+    raw["services"]["openvpn"]["instances"].as_array_mut().unwrap().push(json!({
+        "id":"access","kind":"access","port":1443,"tls":{"caRef":"ca","certRef":"crt","keyRef":"key"},
+        "access":{"pool":"10.88.0.0/24","pushRoutes":{"frr":true,"lan":true}}
+    }));
+    raw["secrets"]["ca"] = json!({"kind":"pem-certificate","value":"-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----"});
+    raw["secrets"]["crt"] = json!({"kind":"pem-certificate","value":"-----BEGIN CERTIFICATE-----\nX\n-----END CERTIFICATE-----"});
+    raw["secrets"]["key"] = json!({"kind":"pem-private-key","value":"-----BEGIN PRIVATE KEY-----\nK\n-----END PRIVATE KEY-----"});
+    raw["services"]["frr"] = json!({"enabled":true,"localAsn":65001});
+    raw["networks"] = json!({"lan":["10.42.10.0/24"]});
+    let prepare = |config: &Value| canonical_digest(config).unwrap();
+    let prepared = env.engine.prepare(&raw, &prepare(&raw), &reg, &Default::default()).await.unwrap();
+    assert_eq!(prepared.instance_errors.len(), 1, "only the broken sibling is rejected: {:?}", prepared.instance_errors);
+    assert!(prepared.instance_errors.contains_key("openvpn/broken"));
+    assert_eq!(prepared.plans.iter().filter(|(_, p)| p.instance == "avahi/local").count(), 1, "other services are planned once");
+    assert_eq!(prepared.plans.iter().filter(|(_, p)| p.instance == "openvpn/good").count(), 1);
+    let access = &prepared.plans.iter().find(|(_, p)| p.instance == "openvpn/access").unwrap().1;
+    let config = &access.files.iter().find(|f| f.path.ends_with("config.ovpn")).unwrap().content;
+    assert!(config.contains("setenv MEDUZA_NP_ACCESS_PUSH_FRR 1\n"));
+    assert!(config.contains("push \"route 10.42.10.0 255.255.255.0\"\n"));
+
+    for frr in [Some(json!({"enabled":false})), None] {
+        if let Some(frr) = frr {
+            raw["services"]["frr"] = frr;
+        } else {
+            raw["services"].as_object_mut().unwrap().remove("frr");
+        }
+        let prepared = env.engine.prepare(&raw, &prepare(&raw), &reg, &Default::default()).await.unwrap();
+        assert!(prepared.instance_errors["openvpn/access"].message.contains("enabled FRR configuration"));
+        assert!(prepared.plans.iter().any(|(_, p)| p.instance == "openvpn/good"));
+    }
+    raw["services"]["openvpn"]["instances"][2]["access"]["pushRoutes"]["frr"] = json!(false);
+    let prepared = env.engine.prepare(&raw, &prepare(&raw), &reg, &Default::default()).await.unwrap();
+    assert!(!prepared.instance_errors.contains_key("openvpn/access"), "option-off still works without FRR");
+    std::fs::remove_dir_all(env.paths.state.parent().unwrap()).unwrap();
+}
+
 #[cfg(target_os = "linux")]
 #[tokio::test(flavor = "current_thread")]
 async fn openvpn_without_management_passes_checks_and_is_observed_via_its_owned_pid() {

@@ -304,8 +304,11 @@ impl Engine {
                 let mut scoped = raw.clone();
                 let mut one = service.clone();
                 one["instances"] = serde_json::json!([value]);
-                scoped["services"] = serde_json::json!({short:one});
-                match self.prepare_complete(&scoped, digest, registry, platform, &BTreeSet::new()).await {
+                // Isolate the tunnel instances, not their cross-service context (e.g. Access reads FRR).
+                // Other services were prepared above; leave their configuration visible without planning them again.
+                scoped["services"][short] = one;
+                let others = parsed.services.keys().filter(|name| *name != short).cloned().collect();
+                match self.prepare_complete(&scoped, digest, registry, platform, &others).await {
                     Ok(single) if !single.held_back.is_empty() => {
                         let message = single.warnings.join("; ");
                         prepared.warnings.extend(single.warnings);

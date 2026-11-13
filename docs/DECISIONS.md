@@ -2565,3 +2565,70 @@ All-target updater/runtime Clippy with warnings denied, shell syntax, rustfmt an
 Update the real OpenWrt userspace end-to-end script's cleanup assertions, but do not claim it ran:
 this environment has no Podman/Docker and no hardware peak-RAM measurement was performed. Evidence:
 target/check-openwrt-stream-{tests,clippy,packaging}.log. Source only; no device changes or Git staging.
+
+## D105 — discover native updater before its first check and correct default source (2026-11-13)
+
+Diagnose the user's 10.42.9.1 / roaming-cat1 installation over SSH. Native opkg records show updater
+0.4.3 and planner 0.3.7; the updater service and local control socket are running. Planner's current
+report already contains update.remoteControl=true. Its initial empty store has only activity.json
+until the first jittered check; the previous snapshot reader ignores that file for availability and
+returns no update section, allowing Manager's earlier report to show unsupported controls.
+
+Accept the daemon's startup activity record as sufficient to construct an idle progress snapshot,
+without fabricating an installed group, successful check or active operation. Preserve the absent
+snapshot when no updater observation exists. Extend the real snapshot regression to cover activity
+only before any installed/state/journal records; existing retry/download/failure checks still pass.
+The planner must be updated to obtain this startup reporting fix; updater's independent lifecycle
+and the authenticated remote job boundary remain unchanged.
+
+The live updater defaults to the obsolete https://meduza-np.github.io/meduza-network-planner source,
+whose channel returns HTTP 404. The actual repository's Pages source is
+https://cubesky.github.io/meduza-network-planner-v2; verify its stable v0.4.3 signature with the device's
+installed trust root and resolve the matching openwrt/aarch64_generic packages. Correct the updater
+fallback, base Containerfile default and environment example; explicit deployment overrides retain
+priority, and release workflow PAGES_URL still overrides the image build default.
+
+Persist only baseUrl in the previously absent /etc/meduza-np/updater.json on .1 (0600), restart only
+the independent updater, request a check and planner sync, then verify socket readiness/source,
+error=null, availableGroupVersion=v0.4.3, remoteControl=true and in-sync rev-000013. Do not trigger an
+apply, upgrade planner or restart business services. Existing autoApply=true remains enabled for
+the normal scheduled policy. The resolved native plan has no blockers but warns old manually
+installed versions lack verified rollback metadata. Manager's browser session was not available;
+local capability/report and synchronization are checked, not the rendered authenticated Manager UI.
+
+Validation: all 72 runtime/updater tests and all-target Clippy with warnings denied pass, along with
+rustfmt and diff checks. Evidence: target/check-updater-source-{tests,clippy}.log and live SSH/API
+observations. No Git staging/commit or publication; source reporting/default fixes need a release.
+
+## D106 — retain FRR configuration during isolated Access preparation (2026-11-13)
+
+Read-only diagnosis of xuzhou-b1 on 10.42.10.9 finds applied/desired rev-000032 in-sync and the Access
+process running, but its row has a repeatedly retried invalid-config error: FRR route push requires
+enabled FRR configuration. The saved configuration enables Access frr/lan/privateLan pushes and
+contains FRR, while the retained generated Access config lacks MEDUZA_NP_ACCESS_PUSH_FRR. Registered
+planner/openvpn/frr packages are 0.4.2. Execute only the existing read-only access-routes FRR action
+with a secret-free snapshot: it returns 61 eligible routes successfully. FRR data/export is usable;
+the requested Access update never reached the running process, whose previous config was retained.
+
+Planner's per-tunnel isolation replaces the entire services map with the single tunnel instance
+before prepare_complete. This erases the services.frr context required by OpenVPN validation, even
+though the full configuration enables routing. Preserve all other service configurations and replace
+only this tunnel service's instances array. Pass other service names as excluded from preparation,
+so their context remains readable while availability checks/validation/planning are not repeated.
+Keep survivor-group collision checks, disabled-entry handling and per-instance failures unchanged.
+Declare services.frr in the OpenVPN manifest's consumed paths; do not weaken FRR-enabled validation
+or invent a routing configuration merely to bypass it.
+
+Add a real-plugin planner integration with an enabled FRR capability/configuration, Access push,
+healthy and malformed Site2Site siblings and an independent Avahi service. Verify dynamic/static
+push directives are generated, only the malformed sibling fails, and unrelated service plans appear
+once. Verify missing/disabled FRR rejects only Access and option-off still works without FRR.
+
+Validation passes: all 16 real-plugin engine tests, 51 planner/16 OpenVPN/21 FRR library tests,
+two real connect-hook/socket tests and four package manifest tests (110 total). All-target planner/
+OpenVPN Clippy with warnings denied, rustfmt and diff checks pass. Evidence:
+target/check-access-frr-context-{build,test,engine,libs,hook,manifests,clippy}.log. Production commands
+are read-only; no config edits, service restarts, package deployment, authenticated test-client
+connection or Git staging/commit. Release the planner fix, reapply and reconnect clients for live
+acceptance. The node's existing OpenVPN/FRR 0.4.2 implementations already provide the required hook
+and export; no replacement OpenVPN/FRR system binary is required for this correction.

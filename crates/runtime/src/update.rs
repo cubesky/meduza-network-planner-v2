@@ -18,12 +18,14 @@ pub fn snapshot(store: &Path, run: &Path) -> Option<Value> {
     let state = read(&store.join("state.json"));
     let journal = read(&store.join("journal.json"));
     let last = read(&store.join("journal.last.json"));
-    if installed.is_null() && state.is_null() && journal.is_null() && last.is_null() {
+    let activity = read(&store.join("activity.json"));
+    // Native installs can wait for the first jittered check without any installed/state journal yet.
+    // The daemon publishes activity on startup, so its controls must already be discoverable then.
+    if installed.is_null() && state.is_null() && journal.is_null() && last.is_null() && activity.is_null() {
         return None;
     }
     let active = !journal.is_null();
     let job = if active { &journal } else { &last };
-    let activity = read(&store.join("activity.json"));
     let busy = activity.get("busy").and_then(Value::as_str);
     let control = read(&store.join("control.json"));
     let requested = read(&run.join("wanted-components.json"));
@@ -129,6 +131,10 @@ mod tests {
         std::fs::create_dir_all(&run).unwrap();
         let write = |name: &str, v: Value| crate::fsutil::write_json_atomic(&store.join(name), &v, 0o644).unwrap();
         assert!(snapshot(&store, &run).is_none());
+        write("activity.json", json!({"busy":null}));
+        let startup = snapshot(&store, &run).unwrap();
+        assert_eq!(startup["phase"], "idle", "native updater is discoverable before its first scheduled check");
+        assert_eq!(startup["active"], false);
         write("installed.json", json!({"packages":{},"selected":[]}));
         std::fs::write(run.join("wanted-components.json"), br#"["tinc","frr"]"#).unwrap();
         write("journal.json", json!({"phase":"downloading","startedAt":"a"}));
