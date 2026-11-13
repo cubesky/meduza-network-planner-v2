@@ -10,6 +10,71 @@ scheduled "continue" task) must:
 
 Design decisions live in `docs/DECISIONS.md`.
 
+### 2026-11-13 — D101: corrected VNC target exposes side-router reply misrouting
+
+User corrects the target to 10.42.10.4:5900. Its listener and RFB banner work from both 10.42.10.2
+and 10.42.49.1, while the actual Android client .49.2 stalls in SYN_RECEIVED. Live lookups show the
+unmarked client route uses tun_ovpn_access, but reply fwmark 0x4d50 forces it to .1 in table 4627.
+The side-router reply jump precedes destination bypasses, so VPN-client SYN-ACKs take the wrong path.
+The .49.1 probe had terminated locally and therefore did not exercise this faulty forwarded branch.
+
+Fix meduza-np-mihomo's not_proxied chain to honor configured destination/routed-device bypasses before
+setting its upstream mark. Preserve normal WAN replies, disabled bypass choices and cached TPROXY
+ordering. No OpenVPN/profile or workstation route changes. Add native synthetic plan fixture example
+and isolated Linux socket regression. Twenty Mihomo tests, all-target Clippy and native rustfmt pass.
+Twenty-four real probes on authorized test container .45 reproduce prior VPN failures and validate
+private/public VPN TCP/UDP recovery with conntrack on/off, retaining WAN replies. Test tools were
+unpacked into an owned temporary directory; no services installed/started. Peer namespaces/processes
+and owned temporary files cleaned, primary network unchanged. WSL lacks namespace permissions.
+Evidence: target/check-access-return.log and target/check-access-return-network.log. Source fix needs
+the normal Mihomo package update/reapply. No production mutation, workstation gateway edit or Git staging/commit.
+
+### 2026-11-13 — Initial Access route diagnosis (target later corrected; see D101)
+
+User reports missing 10.42.10.0/24 after enabling Access LAN/private-LAN pushes, using Android
+OpenVPN Connect and repeated reconnects. Read-only SSH finds the Access server on 10.42.10.9's
+Meduza planner, node xuzhou-b1, revision rev-000027. Both flags are true; its LANs are 10.42.10.0/24
+and 10.42.49.0/24, privateLan is empty and the latter LAN equals the Access pool. Correct native
+output therefore pushes only route 10.42.10.0 255.255.255.0, excluding its own pool.
+
+Server PUSH_REPLY events at 21:48:56, 21:49:55 and 21:56:59 UTC on Nov 12 include that route.
+Clients close/reset the TCP connections subsequently; the 21:58:46 status has no active clients.
+IPv4 forwarding is 1, the LAN is on eth0 (10.42.10.2), and the pool route is on tun_ovpn_access
+(10.42.49.1). These are server observations, not proof Android installed a route or of end-to-end
+return-path reachability. No deployment, restart, configuration or workstation gateway change.
+
+Checked Manager's Access profile export: it emits client and no route-nopull/pull-filter. OpenVPN's
+official manual defines client as pull plus tls-client, so the missing separate pull line is not a
+confirmed defect and no redundant directive/source patch is made. v1 aggregates all nodes' networks
+where v2 currently uses local networks, but the user clarifies this complaint is the already-pushed
+local 10.42.10.0/24, not other nodes; no route-scope expansion is made. At this point Android logs were
+requested to distinguish route receipt from a data-path issue. Do not guess that Allow LAN Access is
+responsible without evidence.
+Source: https://openvpn.net/community-docs/community-articles/openvpn-2-6-manual/
+
+Follow-up: user supplies C:/Users/max_3/Downloads/LocalSend/log_1794521025115.txt. Read it in place,
+omitting sensitive auth lines. Its OPTIONS at lines 55/220/319/418 retain route 10.42.10.0/24, gateway
+10.42.49.1 and client address 10.42.49.2; multiple CONNECTED events follow without route/TUN errors.
+One separate attempt has AUTH_FAILED; the other sessions connect. The block-ipv4/block-ipv6 entries
+are not proof of blocking the assigned IPv4 family: the core uses them for unused-family allowance,
+and Android implicitly permits a family when its address/route is added. Do not recommend disabling
+IPv6 protections based only on their names. Official core/Android references checked read-only.
+
+While the user stays connected over mobile data, node netstat confirms ESTABLISHED TCP from
+10.42.49.2 to 10.42.10.2:8443 and nonzero tunnel traffic. User clarifies the actual target is VNC on
+10.42.10.5:5900. Two ICMP probes from each existing source 10.42.10.2 and 10.42.49.1 both succeed.
+TCP connections to .5:5900 are immediately refused from both sources. Independently reproduce the
+same refusal from this Windows LAN client 10.42.10.4. This applies only to the initially supplied .5;
+the user subsequently corrects the VNC destination to .4. See D101 above for the actual reply-routing
+defect and source fix. The earlier .5 refusal must not be used to diagnose the corrected target.
+
+Additional bounded probes: .1 answers LAN-source ping but not pool-source ping; .45 answers both.
+Do not infer a general pool return-path failure from the router's ping policy. SSH to .45 fails
+public-key/password authentication and is not retried; it is unnecessary for the reproduced VNC
+refusal. All probes used existing addresses and only read state/handshakes; no production service,
+route, firewall, workstation gateway, VM or package change. No raw client-log copy or authentication
+token persistence, Git staging or commit.
+
 ### 2026-11-13 — D100: LDAP save error details and transport hints
 
 The user's ldap:// plus startTls=false is correctly rejected by the existing TLS-only password policy;

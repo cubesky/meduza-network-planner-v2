@@ -890,6 +890,18 @@ pub fn tproxy_table(cfg: &MihomoConfig, req: &PluginRequest) -> String {
     s.push_str("\t}\n");
     s.push_str("\tchain not_proxied {\n");
     if t.side_router.is_some() {
+        // Replies enter this chain before the ordinary destination exclusions. Keep the same declared
+        // bypass policy here, or a LAN server's SYN-ACK to an Access client is marked for the upstream
+        // gateway instead of returning through its VPN route. Never override a cached proxy decision.
+        if !bypass.is_empty() {
+            s.push_str("\t\tip daddr @bypass_v4 return\n");
+        }
+        if t.bypass_routed && !devices.is_empty() {
+            s.push_str(&format!(
+                "\t\tfib daddr oifname {{ {} }} return comment \"routed replies stay on their route\"\n",
+                quoted(&devices)
+            ));
+        }
         s.push_str(&format!("\t\tmeta mark set {:#x} comment \"to the main router\"\n", reply_mark(t)));
     }
     s.push_str("\t}\n");
@@ -1198,6 +1210,38 @@ mod tests {
         m["tproxy"]["sideRouter"]["gateway"] = json!("192.0.2.1");
         let r = req(m);
         assert!(validate(&load(&r).unwrap().unwrap(), &r).iter().any(|e| e.path == "/tproxy/sideRouter/gateway"));
+    }
+
+    #[test]
+    fn side_router_preserves_bypassed_and_routed_reply_destinations() {
+        let mut m = base();
+        m["tproxy"] = json!({"sideRouter":{"gateway":"10.42.10.1"},"excludePorts":[5900]});
+        let r = req(m.clone());
+        let cfg = load(&r).unwrap().unwrap();
+        let table = tproxy_table(&cfg, &r);
+        let reply = table.split("chain not_proxied {\n").nth(1).unwrap().split("\n\t}").next().unwrap();
+        let mark = reply.find("meta mark set 0x4d50").unwrap();
+        assert!(
+            reply.find("ip daddr @bypass_v4 return").unwrap() < mark,
+            "private/custom bypass replies must not be sent to the WAN gateway"
+        );
+        assert!(reply.find("fib daddr oifname").unwrap() < mark, "public mesh/VPN replies also keep their route");
+        assert!(table.contains("ct direction reply goto not_proxied"), "the same guard covers conntrack replies");
+        assert!(
+            table.contains("tcp flags & (fin | syn | rst | ack) != syn goto not_proxied"),
+            "and asymmetric/non-conntracked TCP replies"
+        );
+        // Operator choices still control new-flow and reply bypasses; no hidden private-net exemption.
+        m["tproxy"]["excludePrivateDestinations"] = json!(false);
+        let r = req(m.clone());
+        let table = tproxy_table(&load(&r).unwrap().unwrap(), &r);
+        let reply = table.split("chain not_proxied {\n").nth(1).unwrap();
+        assert!(!reply.contains("@bypass_v4"));
+        assert!(reply.contains("fib daddr oifname"));
+        m["tproxy"]["bypassRouted"] = json!(false);
+        let r = req(m);
+        let table = tproxy_table(&load(&r).unwrap().unwrap(), &r);
+        assert!(table.contains("chain not_proxied {\n\t\tmeta mark set 0x4d50"));
     }
 
     #[test]

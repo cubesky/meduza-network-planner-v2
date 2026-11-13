@@ -2421,3 +2421,37 @@ invalid-transport settings/secret writes, rendered textual 422 without undefined
 and LDAPS saves. Evidence: target/check-ldap-save-tests.log, target/check-ldap-save-browser.log and
 target/check-ldap-save-build.log. No actual LDAP connection, production settings change, deployment or
 Git staging/commit.
+
+## D101 — preserve VPN/LAN destinations before side-router reply marking (2026-11-13)
+
+The user corrects the VNC destination to 10.42.10.4, this Windows workstation. The previous refusal
+on .5 was a test of the initially supplied address and does not diagnose the actual target. .4 listens
+on 5900; both LAN-source and pool-source direct probes read its RFB 003.008 banner. Actual Android
+10.42.49.2 connections reach .4 but stall in SYN_RECEIVED. Android OPTIONS already retain the pushed
+10.42.10.0/24, and its TCP connection to the Meduza Dashboard is established.
+
+The actual defect is the side-router not_proxied chain. Reply-direction conntrack packets jump there
+before normal destination exclusions, then unconditionally receive fwmark 0x4d50. Live read-only
+lookups demonstrate 10.42.49.2 normally uses tun_ovpn_access, but with this mark uses table 4627's
+default via 10.42.10.1. Thus the original SYN arrives through Access but the LAN server's SYN-ACK
+leaves toward the main router. A probe sourced from 10.42.49.1 cannot reveal it because replies to
+that address terminate locally before the faulty branch.
+
+Before setting the upstream reply mark, honor the same configured destination bypass set and, when
+bypassRouted is enabled, the same routing-system device lookup. This covers conntrack replies,
+explicit reply ports and non-initial/asymmetric TCP/old-connection branches. Preserve upstream marks
+for ordinary public replies and operator choices when private/routed bypass is disabled. Leave the
+cached TPROXY decision ordering, source exclusions, sysctls, host routes and NAT policy unchanged.
+The permanent fix is in meduza-np-mihomo and needs its normal package update/reapply, not a change
+to OpenVPN pull/profile/route-push settings or to the workstation gateway.
+
+Validation: twenty Mihomo tests and all-target Clippy with warnings denied pass. New pure example
+reply-routing-fixture emits actual plan tables without applying them. tools/mihomo-reply-network-test.py
+creates an isolated side router plus LAN, VPN and upstream peer namespaces, reproduces the old helper
+and tests the fixed table. Twenty-four actual socket probes cover TCP/UDP, private/public VPN client
+addresses, conntrack on/off, expected pre-fix failures and preserved WAN replies. Run on authorized
+test Incus container .45; WSL denies network namespace creation. Test nftables binaries/libraries were
+downloaded/unpacked only into an owned temporary directory without installing or starting a service.
+Children/namespaces and owned files were removed; .45's primary route/rules remain unchanged.
+Evidence: target/check-access-return.log and target/check-access-return-network.log. Native rustfmt
+and git diff --check pass. No production rule/service changes, workstation gateway edits or Git staging/commit.

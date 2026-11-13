@@ -652,3 +652,32 @@ Manager now explains incompatible transport choices beside URL and blocks save b
 bind password. Older interfaces may display undefined for a textual validation problem; inspect the
 response's problems array or update Manager to obtain the actual reason. Backend rejection leaves
 the previous LDAP settings intact.
+
+### Access clients reach the node but LAN TCP handshakes stall
+
+Check the client OPTIONS for the pushed route, then check the actual LAN destination and port. A LAN
+server in SYN_RECEIVED while the same client reaches the Meduza Dashboard can indicate misrouted
+replies. With the affected Mihomo side-router rules, replies receive the upstream mark before private
+or routing-system exclusions. Compare `ip route get CLIENT_IP` with
+`ip route get CLIENT_IP mark 0x4d50` inside the planner container; adjust the mark to the configured
+fwmark plus two. If only the marked lookup sends the VPN destination to the main router, update
+meduza-np-mihomo to the D101 fix and reapply. This retains the original OpenVPN client profile.
+
+For the specifically diagnosed .9 deployment, the operator can temporarily restore replies to its
+configured bypass destinations without a service restart:
+
+```sh
+podman exec meduza-np-planner nft insert rule inet meduza_np_mihomo not_proxied ip daddr @bypass_v4 return
+```
+
+This command assumes the existing owned table, chain and bypass_v4 set observed on that deployment.
+It restores its 10.42.49.0/24 client return path; a later Mihomo apply replaces this temporary rule.
+The packaged fix also preserves public-prefix VPN routes when bypassRouted is enabled. No workstation
+gateway, host routes, NAT or broader firewall access changes are needed for this defect.
+
+The standalone real regression uses only synthetic generated tables and isolated namespaces:
+
+```sh
+cargo run --locked -q -p meduza-np-mihomo --example reply-routing-fixture > /tmp/reply-fixtures.json
+sudo python3 tools/mihomo-reply-network-test.py /tmp/reply-fixtures.json
+```

@@ -726,6 +726,8 @@ FRR 目录属主必须与实际 provider 的编译用户/组一致，通过有�
 
 TPROXY 标记仅用于单向本地接收，不能让反向来源校验使用该标记。独立 bridge/macvlan 部署的 `net.ipv4.conf.all.src_valid_mark` 和 `default.src_valid_mark` 应为 `0`，并检查实际入接口的有效值；Linux 取 all 与接口值的最大值。仅关闭 rp_filter 不能代替此要求。容器创建参数由部署文件控制，升级组件不能修正已创建容器的只读 `/proc/sys`；host 模式需由管理员明确设置，不能擅自修改宿主网络（D91）。
 
+旁路由的“送回主路由”标记不得覆盖已选择的目的绕过策略。`not_proxied` 回包分支在设置该标记前，同样检查 RFC1918/自定义 bypass 目的集合，以及启用 `bypassRouted` 时的 Mesh/VPN/Access 出接口；否则 LAN 服务给 VPN 客户端的 SYN-ACK 会被送往主路由，造成客户端能访问节点自身但无法访问 LAN 服务。该保护覆盖 conntrack 回复、显式服务回复端口及非初始 TCP/旧连接分支，不修改已缓存的透明代理决定。关闭相应绕过选项时仍尊重明确配置；普通公网回复继续经主路由（D101）。
+
 TPROXY 默认只处理 PREROUTING 转发流量，不处理本机 OUTPUT。至少支持：
 
 - 按来源 CIDR 选择代理范围，默认从已选择的 LAN/private LAN 引用，不误当目的网段。
