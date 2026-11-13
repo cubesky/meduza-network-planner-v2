@@ -92,6 +92,7 @@ pub struct Planner {
     jitter: Mutex<OsJitter>,
     /// Access auth decisions handed to OpenVPN's connect hook (D38).
     pub access_sessions: Mutex<crate::access::Sessions>,
+    pub access_routes: tokio::sync::Mutex<crate::access_routes::Cache>,
     pub resource_cache: Mutex<crate::resources::Cache>,
 }
 
@@ -129,6 +130,7 @@ impl Planner {
             acks: Mutex::new(VecDeque::new()),
             jitter: Mutex::new(OsJitter::new()),
             access_sessions: Mutex::new(Default::default()),
+            access_routes: tokio::sync::Mutex::new(Default::default()),
             resource_cache: Mutex::new(Default::default()),
         })
     }

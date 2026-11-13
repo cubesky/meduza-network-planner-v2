@@ -3,7 +3,7 @@ import { useState } from "preact/hooks";
 import { Badge, Button, StateBadge, StatusDot, stateTone, t } from "./index.tsx";
 import { buildInstanceTree, type InstanceTreeNode, type RuntimeStatus } from "./instance-tree-model.ts";
 
-export { buildInstanceTree, withWireGuardNames, type RuntimeStatus } from "./instance-tree-model.ts";
+export { accessFirst, buildInstanceTree, withWireGuardNames, type RuntimeStatus } from "./instance-tree-model.ts";
 
 function label(node: InstanceTreeNode): string {
   if (node.item?.kind === "process") {

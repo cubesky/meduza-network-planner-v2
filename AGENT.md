@@ -633,6 +633,8 @@ Access 是 OpenVPN server 实例类型，不再固定只能有一个名为 acces
 
 路由推送可选择已批准的内部 LAN/private LAN、映射发布网段、额外前缀；需显式排除自身池并规范化去重。目标网段变化必须使 Access 配置失效重生成。Access pool 可关联 FRR 发布，不以“有 pool”就擅自打开 BGP。
 
+`access.pushRoutes.frr` 默认关闭；启用后在已鉴权客户端连接时，从本节点 FRR 的 meduza pathspace 获取已选中并安装的 IPv4 BGP/OSPF/static 转发路由，规范化、合并被覆盖前缀，排除默认路由、特殊地址、黑洞及已启用 Access 池内的路由。要求本节点已有启用的 FRR 配置和已注册插件/provider，不为 Access 擅自创建 ASN 或邻居。快照按配置摘要缓存 5 秒，路由变化由客户端重连获取，不强制中断已有会话。查询有超时与大小上限，最多推送 256 条动态路由；查询失败或超限明确拒绝本次连接，不推送截断或陈旧列表，不中止整次配置应用。Manager/Dashboard 的 OpenVPN 状态与配置列表始终将 Access 放在 Site2Site 前，包括禁用条目；只改显示顺序，保留原配置下标与稳定 ID（D103）。
+
 鉴权链路必须为：
 
 ```text

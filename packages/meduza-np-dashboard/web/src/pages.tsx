@@ -1,5 +1,5 @@
 import { useState } from "preact/hooks";
-import { InstanceTree } from "@meduza-np/ui-kit/instance-tree";
+import { accessFirst, InstanceTree } from "@meduza-np/ui-kit/instance-tree";
 import { BinaryProgress, PackageProgress, installPhaseLabel, progressFromStatus } from "@meduza-np/ui-kit/package-progress";
 import { PackageResourceCard, type PackageResources } from "@meduza-np/ui-kit/package-resources";
 import { Badge, Button, Card, Field, Loadable, StateBadge, Table, TextInput, NumberInput, Checkbox, bytes, getLocale, relativeTime, t, toast, useAsync, type AsyncState } from "@meduza-np/ui-kit";
@@ -215,7 +215,8 @@ export function InstancesPage(props: { session: Session }) {
           {(p) => (
             <Table
               rowKey={(x) => String(x.id)}
-              rows={Object.entries(p.applied ?? {}).map(([id, a]) => ({ id, package: a.package, processes: a.processes.join(", ") })) as never}
+              rows={accessFirst(Object.entries(p.applied ?? {}).map(([id, a]) => ({ id, package: a.package, processes: a.processes.join(", ") })),
+                (x) => report.data?.instances.find((i) => i.id === x.id)?.kind) as never}
               columns={[
                 { key: "id", label: t("Instances") },
                 { key: "package", label: t("Package") },
@@ -242,7 +243,7 @@ export function InstancesPage(props: { session: Session }) {
           {(p) => (
             <Table
               rowKey={(x) => String(x.id)}
-              rows={p.processes as never}
+              rows={accessFirst(p.processes, (x) => report.data?.instances.find((i) => i.id === x.id.split("/").slice(0, 2).join("/"))?.kind) as never}
               columns={[
                 { key: "id", label: t("Processes") },
                 { key: "state", label: t("Status"), render: (x: Proc) => <StateBadge state={x.state} /> },

@@ -16,6 +16,12 @@ export interface InstanceTreeNode {
   children: InstanceTreeNode[];
 }
 
+/** Presentation only: never reorder stored arrays or change collection edit/error indexes. */
+export function accessFirst<T>(items: readonly T[], kind: (item: T) => unknown): T[] {
+  const rank = (item: T) => kind(item) === "access" || kind(item) === "openvpn-access" ? 0 : kind(item) === "openvpn-client" ? 1 : 2;
+  return [...items].sort((a, b) => rank(a) - rank(b));
+}
+
 export function buildInstanceTree(items: readonly RuntimeStatus[]): InstanceTreeNode[] {
   const roots: InstanceTreeNode[] = [];
   const paths = new Map<string, InstanceTreeNode>();
@@ -45,6 +51,8 @@ export function buildInstanceTree(items: readonly RuntimeStatus[]): InstanceTree
   }
   const sort = (nodes: InstanceTreeNode[]) => {
     nodes.sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+    const ordered = accessFirst(nodes, (n) => n.item?.kind);
+    nodes.splice(0, nodes.length, ...ordered);
     for (const node of nodes) sort(node.children);
   };
   sort(roots);

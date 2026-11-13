@@ -8,9 +8,24 @@ import { REPO_ROOT } from "./helpers.js";
 // Exercise the model shared by both frontends without introducing a second tree implementation in tests.
 const source = readFileSync(join(REPO_ROOT, "web/ui-kit/src/instance-tree-model.ts"), "utf8");
 const compiled = transpileModule(source, { compilerOptions: { target: ScriptTarget.ES2023, module: ModuleKind.ESNext } }).outputText;
-const { buildInstanceTree, withWireGuardNames } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`);
+const { accessFirst, buildInstanceTree, withWireGuardNames } = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString("base64")}`);
 interface Tree { key: string; path: string; label: string; item?: Record<string, unknown>; children: Tree[] }
 const flat = (roots: Tree[]): Tree[] => roots.flatMap((node) => [node, ...flat(node.children)]);
+
+test("OpenVPN Access always precedes Site2Site without changing stored indexes or row identities", () => {
+  const items = [{id:"a-site",kind:"site2site"}, {id:"z-access",kind:"access",enabled:false}, {id:"b-site",kind:"site2site"}, {id:"y-access",kind:"access"}];
+  const sorted = accessFirst(items, (i: {kind:string}) => i.kind);
+  assert.deepEqual(sorted.map((i: {id:string}) => i.id), ["z-access","y-access","a-site","b-site"]);
+  assert.equal(items.indexOf(sorted[0]), 1, "edit/enable/delete/error indexes stay in the stored array");
+  assert.deepEqual(items.map((i) => i.id), ["a-site","z-access","b-site","y-access"]);
+  const reports = [{id:"openvpn/a-site",kind:"openvpn-site2site",state:"up"},
+    {id:"openvpn/z-access",kind:"openvpn-access",state:"disabled"},
+    {id:"openvpn/z-access/alice",kind:"openvpn-client",state:"up"}];
+  const tree: Tree[] = buildInstanceTree(reports);
+  assert.deepEqual(tree[0]!.children.map((n) => n.path), ["openvpn/z-access","openvpn/a-site"]);
+  assert.equal(tree[0]!.children[0]!.children[0]!.path, "openvpn/z-access/alice");
+  assert.deepEqual(buildInstanceTree([...reports].reverse()), tree);
+});
 
 test("status tree: repeated endpoint helpers belong to their named WireGuard interfaces", () => {
   const reports = [

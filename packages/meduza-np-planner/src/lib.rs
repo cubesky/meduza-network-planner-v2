@@ -6,6 +6,7 @@
 pub mod log;
 
 pub mod access;
+pub mod access_routes;
 pub mod apply;
 pub mod identity;
 pub mod jobs;

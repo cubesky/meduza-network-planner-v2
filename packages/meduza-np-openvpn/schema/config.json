@@ -45,6 +45,7 @@
           "$ref": "#/$defs/PushRoutes",
           "default": {
             "extra": [],
+            "frr": false,
             "lan": false,
             "mappings": false,
             "privateLan": false
@@ -561,6 +562,11 @@
             "$ref": "#/$defs/IpNet"
           },
           "type": "array"
+        },
+        "frr": {
+          "default": false,
+          "description": "Push this node's selected, installed FRR IPv4 routes on client connection (reconnect to refresh).\nExcludes default routes and Access pools; FRR must be available. Off by default.",
+          "type": "boolean"
         },
         "lan": {
           "default": false,

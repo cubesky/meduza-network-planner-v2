@@ -2482,3 +2482,44 @@ package manifest tests pass, along with all-target OpenVPN Clippy, Manager serve
 renderer typecheck, rustfmt and git diff --check. Evidence: target/check-openvpn-static-*.log.
 No production changes/deployment or Git staging/commit. Live peer acceptance remains pending the
 normal package upgrade/reapply; unit/schema checks do not claim an actual peer handshake.
+
+## D103 — optional FRR route push and Access-first OpenVPN lists (2026-11-13)
+
+Add access.pushRoutes.frr (default false) to the OpenVPN model/generated schema/shared descriptor,
+with English/Simplified/Traditional labels. Manager validates that enabled Access entries requesting
+FRR push have enabled local FRR routing (derived or explicit); the node validates registered FRR
+capability and configuration. Include FRR in the required-package closure for this opt-in case,
+without making plain Access require FRR or inventing a routing ASN/neighbor configuration.
+
+Authentication and the one-use session handoff retain the existing authorization boundary. The
+client-connect helper requests pushFrr through the restricted Access socket. Only after the verified
+handoff does planner call the registered FRR plugin/provider, with configuration secrets removed.
+The plugin queries show ip route json using the owned meduza pathspace, returning selected and
+installed IPv4 BGP/OSPF/static forwarding routes. Normalize and discard covered prefixes, defaults,
+loopback/link-local/multicast/unspecified prefixes and blackholes; planner removes all active Access
+pool-contained routes. Existing configured LAN/private/mapping/extra pushes remain independent.
+
+Cache complete snapshots/errors for five seconds per configuration digest to coalesce connections;
+never use stale successful routes after a failed refresh. Existing clients must reconnect to obtain
+route changes. Bound vtysh to five seconds/four MiB, plugin call to six seconds, connect route wait
+to seven seconds; reject over 4096 eligible source prefixes or 256 final dynamic routes explicitly.
+The helper validates/reconstructs route-only IPv4 push directives, preserving session-timeout and
+writing no config on malformed/incomplete results. An old planner missing pushRoutes denies this
+opt-in connection, rather than silently accepting without routes. Option-off remains compatible.
+Query/limit failure denies only that connection, not a whole configuration apply or existing sessions.
+
+Use shared presentation-only Access priority in the status tree, Manager connections, Dashboard
+applied/process tables and descriptor configuration lists. Keep original arrays/indexes for editing,
+disabling/deleting and validation errors, and put disabled Access first too. Order descriptor Access
+service/client sections before Site2Site. Fix configuration rows matching Access runtime status using
+the Site2Site-only collection kind. No topology, routing/NAT policies or host routes change.
+
+Validation: OpenVPN 16 library plus two real helper/Unix-socket tests, FRR 21 library plus one owned
+vtysh action test, planner 50 existing library tests plus the new real registered-plugin/cache test,
+protocol 27 library/four manifest/one schema tests, and eight targeted Manager tests pass. Browser
+checks exercise both actual status pages and shared settings: Access priority, translated toggle/save,
+runtime matching and correct stored-index disable. All affected Rust Clippy targets (warnings denied),
+Manager server compilation, frontend/renderer typechecks, both production frontend builds and diff
+whitespace checks pass. Evidence: target/check-access-frr-*.log and browser screenshots. No production
+deployment, live OpenVPN/FRR handshake test or Git staging/commit; coordinated package update and
+client reconnection remain the operator's release steps.

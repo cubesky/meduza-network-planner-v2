@@ -11,7 +11,7 @@ import { NodeSettings } from "./NodeSettings.tsx";
 import { BinaryProgress, UpdateNotice, type BinaryTransferProgress } from "@meduza-np/ui-kit/package-progress";
 import { NodeUpdates } from "./NodeUpdates.tsx";
 import { PackageResourceCard } from "@meduza-np/ui-kit/package-resources";
-import { InstanceTree, withWireGuardNames, type RuntimeStatus } from "@meduza-np/ui-kit/instance-tree";
+import { accessFirst, InstanceTree, withWireGuardNames, type RuntimeStatus } from "@meduza-np/ui-kit/instance-tree";
 
 type Role = "admin" | "operator" | "viewer";
 
@@ -299,7 +299,7 @@ function RoutingTab(props: { items: Inst[]; canAct: boolean; restart: (instance:
 function ConnectionsTab(props: { items: Inst[]; canAct: boolean; restart: (instance: string, process?: string, label?: string) => void }) {
   const of = (k: string) => props.items.filter((i) => i.kind === k) as unknown as Record<string, unknown>[];
   const tinc = of("tinc-peer"), wg = of("wireguard-peer");
-  const ovpn = props.items.filter((i) => i.kind.startsWith("openvpn-")) as unknown as Record<string, unknown>[];
+  const ovpn = accessFirst(props.items.filter((i) => i.kind.startsWith("openvpn-")), (i) => i.kind) as unknown as Record<string, unknown>[];
   if (!props.items.length) return <div class="empty">{t("This node reports no tunnel peers.")}</div>;
   const instanceOf = (id: string) => id.split("/").slice(0, 2).join("/");
   const restartBtn = (rows: Record<string, unknown>[], label: string) => {

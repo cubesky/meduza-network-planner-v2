@@ -294,6 +294,14 @@ test("WireGuard and OpenVPN are external-only: own public key filled, managed-no
   const reneg = (n: number) => s.config.preview({ ...doc, nodes: { ...doc.nodes, "gw-a": { services: access(n) } } }).problems.filter((p) => p.path.endsWith("/renegSeconds"));
   assert.equal(reneg(60).length, 1, JSON.stringify(reneg(60)));
   assert.deepEqual([reneg(0), reneg(300)], [[], []]);
+  const frrPush = { ...access(3600) } as any;
+  frrPush.openvpn.instances[0].access.pushRoutes = { frr: true };
+  const frrProblems = (services: any) => s.config.preview({ ...doc, nodes: { ...doc.nodes, "gw-a": { services } } }).problems.filter((p) => p.path.endsWith("/pushRoutes/frr"));
+  assert.equal(frrProblems(frrPush).length, 1);
+  assert.equal(frrProblems({...frrPush,frr:{enabled:false}}).length, 1);
+  assert.equal(frrProblems({...frrPush,frr:{localAsn:65001}}).length, 0);
+  frrPush.openvpn.instances[0].enabled = false;
+  assert.equal(frrProblems(frrPush).length, 0);
   await app.close();
 });
 

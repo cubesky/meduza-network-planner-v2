@@ -395,7 +395,7 @@ pub mod server {
     /// The Access socket only accepts `access.auth` and `access.session`, so the OpenVPN user gains nothing else (§9.3).
     async fn access(p: &Arc<Planner>, req: LocalRequest) -> LocalResponse {
         if req.method == "access.session" {
-            return access_session(p, req);
+            return access_session(p, req).await;
         }
         if req.method != "access.auth" {
             return LocalResponse::err(req.id, "forbidden", "only access.auth and access.session are served here");
@@ -433,8 +433,8 @@ pub mod server {
     }
 
     /// OpenVPN's client-connect hook: the session lifetime of the connection the auth hook just allowed (D38).
-    /// `{instanceId, username, ip, port}` → `{allow, sessionSeconds}`; no recorded decision → deny.
-    fn access_session(p: &Arc<Planner>, req: LocalRequest) -> LocalResponse {
+    /// `{instanceId, username, ip, port, pushFrr?}` → `{allow, sessionSeconds, pushRoutes?}`; no recorded decision → deny.
+    async fn access_session(p: &Arc<Planner>, req: LocalRequest) -> LocalResponse {
         let s = |k: &str| req.params.get(k).and_then(Value::as_str);
         let (Some(instance), Some(username)) = (s("instanceId"), s("username")) else {
             return LocalResponse::err(req.id, "invalid-params", "instanceId and username are required");
@@ -442,7 +442,22 @@ pub mod server {
         let port = req.params.get("port").and_then(Value::as_u64).and_then(|v| u16::try_from(v).ok());
         let found = p.access_sessions.lock().unwrap().take(instance, username, s("ip"), port, std::time::Instant::now());
         let result = match found {
-            Some(crate::access::Handoff::Lifetime(secs)) => json!({"allow": true, "sessionSeconds": secs}),
+            Some(crate::access::Handoff::Lifetime(secs)) => {
+                if req.params.get("pushFrr").and_then(Value::as_bool) == Some(true) {
+                    let routes = tokio::time::timeout(Duration::from_secs(7), crate::access_routes::push(p, instance))
+                        .await
+                        .unwrap_or_else(|_| Err("FRR route push timed out".into()));
+                    match routes {
+                        Ok(routes) => json!({"allow":true,"sessionSeconds":secs,"pushRoutes":routes}),
+                        Err(error) => {
+                            warn!("Access {instance} FRR route push unavailable: {error}");
+                            json!({"allow":false,"reasonCode":"frr-routes-unavailable"})
+                        }
+                    }
+                } else {
+                    json!({"allow": true, "sessionSeconds": secs})
+                }
+            }
             Some(crate::access::Handoff::Unverified) => {
                 info!("access {username} on {instance}: new connection without a manager decision refused");
                 json!({"allow": false, "reasonCode": "unverified"})

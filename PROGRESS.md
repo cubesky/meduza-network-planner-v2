@@ -10,6 +10,31 @@ scheduled "continue" task) must:
 
 Design decisions live in `docs/DECISIONS.md`.
 
+### 2026-11-13 — D103: FRR route push for Access and Access-first console lists
+
+Per user request, add default-off access.pushRoutes.frr to the OpenVPN model/schema and shared
+Manager/Dashboard Access tab. Validate enabled local routing and include FRR in required packages
+only when requested. After authentication, the client-connect hook asks planner's restricted socket
+for selected, installed IPv4 BGP/OSPF/static routes from the owned FRR meduza pathspace. Exclude
+defaults, special/blackhole routes and active Access pools; normalize covered prefixes. Cache five
+seconds per revision, bound query/output/routes and reject the individual connection explicitly on
+failure/overflow rather than truncate or reuse stale data. Preserve existing static pushes/session
+lifetime; connected clients refresh by reconnecting. Document coordinated component upgrades.
+
+Use presentation-only Access-first ordering for both consoles' OpenVPN settings/status, including
+disabled Access entries and Dashboard applied/process tables. Preserve original config indexes and
+stable IDs for edits/actions/errors. Reorder descriptor status sections and fix Access config rows
+matching only Site2Site runtime kinds. No routing/NAT changes or forced client disconnections.
+
+Validation passes: OpenVPN 16 library/two real helper socket tests; FRR 21 library/one owned-vtysh
+action test; planner 50 library tests plus the new registered-plugin/cache integration; protocol 27
+library/four manifest/one schema tests; eight targeted Manager tests. Chrome checks both actual
+status pages plus translated FRR toggle/save, runtime match and correct-index disable/disabled
+ordering. All affected Rust all-target Clippy, server compile, frontend/renderer typechecks, both
+production frontend builds, rustfmt and git diff --check pass. Evidence: target/check-access-frr-*.
+Updated AGENT.md §9.3, operations and D103. No deployment, live FRR/OpenVPN handshake, or Git
+staging/commit; release updated planner/frr/openvpn and consoles, apply, then reconnect clients.
+
 ### 2026-11-13 — D102: fix Site2Site static-key direction compatibility
 
 Per the user's follow-up authorization, add independent optional staticKeyDirection (0/1) to the
@@ -391,6 +416,13 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   namespace, host LAN not announced → new `frr/main/origination` status, routerId pre-check, capability warning)
 
 ## Session log
+
+- 2026-11-13 (D103, user request): Implement optional connection-time FRR route push for Access;
+  preserve authorization/static pushes, bounded complete snapshots and per-connection failure isolation.
+  Make Access first in both consoles' settings/status without changing stored indexes, including disabled
+  entries; fix Access runtime matching. Rust/Manager tests, Clippy, typechecks, production builds and actual
+  Chrome flows pass (target/check-access-frr-*). Source only; release coordinated planner/frr/openvpn and
+  console updates, apply and reconnect clients. See the detailed D103 entry above and operations.
 
 - 2026-10-22: Read AGENT.md, created this checklist, set up hourly scheduled continuation task.
 - 2026-10-22: Phase 1 complete (protocol/plugin-sdk/runtime crates, generated schemas, 19 manifests, CI). Manager server

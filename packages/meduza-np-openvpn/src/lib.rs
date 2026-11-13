@@ -169,6 +169,10 @@ pub struct Tls {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PushRoutes {
+    /// Push this node's selected, installed FRR IPv4 routes on client connection (reconnect to refresh).
+    /// Excludes default routes and Access pools; FRR must be available. Off by default.
+    #[serde(default)]
+    pub frr: bool,
     #[serde(default)]
     pub lan: bool,
     #[serde(default)]
@@ -436,6 +440,18 @@ pub fn validate(cfg: &OpenVpnConfig, req: &PluginRequest) -> Vec<ValidationError
                     v.error(format!("{b}/access"), "Access instances need access settings (pool)");
                     continue;
                 };
+                if a.push_routes.frr {
+                    v.check(
+                        req.context.capabilities.iter().any(|c| c == "frr.bgp"),
+                        format!("{b}/access/pushRoutes/frr"),
+                        "FRR route push requires registered FRR support",
+                    );
+                    v.check(
+                        req.config.services.get("frr").is_some_and(|f| f.get("enabled").and_then(Value::as_bool) != Some(false)),
+                        format!("{b}/access/pushRoutes/frr"),
+                        "FRR route push requires enabled FRR configuration",
+                    );
+                }
                 v.check(a.pool.prefix_len() <= 29, format!("{b}/access/pool"), "pool must be /29 or larger");
                 for (other, p) in &pools {
                     if other != inst.id.as_str() && (p.contains(&a.pool.network()) || a.pool.contains(&p.network())) {
@@ -588,6 +604,9 @@ pub fn render(inst: &Instance, req: &PluginRequest) -> Result<Rendered, PluginEr
             }
             add("script-security 2".into());
             add(format!("setenv MEDUZA_NP_ACCESS_SOCKET {}", quote(&format!("{run}/access.sock"))));
+            if a.push_routes.frr {
+                add("setenv MEDUZA_NP_ACCESS_PUSH_FRR 1".into());
+            }
             let helper = format!("{}/openvpn-auth", req.context.libexec_dir.trim_end_matches('/'));
             add(format!("auth-user-pass-verify {} via-file", quote(&format!("{helper} --instance {}", inst.id))));
             // The session lifetime the manager granted becomes this client's `session-timeout` (D38).
@@ -1200,6 +1219,26 @@ mod tests {
             }
             assert!(plan.checks[0].required);
         }
+    }
+
+    #[test]
+    fn access_frr_push_is_opt_in_and_requires_local_routing() {
+        let mut r = req(json!([{"id":"access","kind":"access","tls":{"caRef":"ca","certRef":"crt","keyRef":"key"},
+            "access":{"pool":"10.88.0.0/24","pushRoutes":{"lan":true}}}]));
+        let cfg = load(&r).unwrap();
+        assert!(!cfg.instances[0].access.as_ref().unwrap().push_routes.frr);
+        assert!(!render(&cfg.instances[0], &r).unwrap().config.contains("MEDUZA_NP_ACCESS_PUSH_FRR"));
+        r.config.services.get_mut("openvpn").unwrap()["instances"][0]["access"]["pushRoutes"]["frr"] = json!(true);
+        let cfg = load(&r).unwrap();
+        assert!(validate(&cfg, &r).iter().any(|e| e.path.ends_with("/pushRoutes/frr")));
+        r.context.capabilities.push("frr.bgp".into());
+        r.config.services.insert("frr".into(), json!({"localAsn":65001}));
+        assert!(validate(&cfg, &r).is_empty());
+        let out = render(&cfg.instances[0], &r).unwrap();
+        assert!(out.config.contains("setenv MEDUZA_NP_ACCESS_PUSH_FRR 1\n"));
+        assert!(out.config.contains("push \"route 10.42.10.0 255.255.255.0\"\n"));
+        r.config.services.insert("frr".into(), json!({"enabled":false}));
+        assert!(validate(&cfg, &r).iter().any(|e| e.path.ends_with("/pushRoutes/frr")));
     }
 
     #[test]

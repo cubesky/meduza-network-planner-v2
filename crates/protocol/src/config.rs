@@ -51,12 +51,13 @@ pub fn needs_routing_package(services: &BTreeMap<String, Value>) -> bool {
         }
     }
     ["wireguard", "openvpn"].iter().any(|key| {
-        services
-            .get(*key)
-            .filter(|v| enabled(v))
-            .and_then(|v| v.get("instances"))
-            .and_then(Value::as_array)
-            .is_some_and(|list| list.iter().any(|v| enabled(v) && v.get("kind").and_then(Value::as_str) != Some("access")))
+        services.get(*key).filter(|v| enabled(v)).and_then(|v| v.get("instances")).and_then(Value::as_array).is_some_and(|list| {
+            list.iter().any(|v| {
+                enabled(v)
+                    && (v.get("kind").and_then(Value::as_str) != Some("access")
+                        || v.pointer("/access/pushRoutes/frr").and_then(Value::as_bool) == Some(true))
+            })
+        })
     })
 }
 
@@ -372,6 +373,10 @@ mod tests {
         assert!(!needs(serde_json::json!({"wireguard":{"enabled":false,"instances":[{}]}})));
         assert!(!needs(serde_json::json!({"wireguard":{"instances":[]}})));
         assert!(!needs(serde_json::json!({"openvpn":{"instances":[{"kind":"access"}]}})));
+        assert!(needs(serde_json::json!({"openvpn":{"instances":[{"kind":"access","access":{"pushRoutes":{"frr":true}}}]}})));
+        assert!(!needs(
+            serde_json::json!({"openvpn":{"instances":[{"kind":"access","enabled":false,"access":{"pushRoutes":{"frr":true}}}]}})
+        ));
     }
     use serde_json::json;
 

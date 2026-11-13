@@ -39,6 +39,19 @@ fn vtysh(req: &PluginRequest, cmd: &str) -> Option<Value> {
 }
 
 impl Plugin for Frr {
+    fn action(&self, req: &PluginRequest) -> Result<Value, PluginError> {
+        if req.params.get("action").and_then(Value::as_str) != Some("access-routes") {
+            return Err(PluginError::new("unsupported", "unknown FRR action"));
+        }
+        if !frr::load(req)?.enabled {
+            return Err(PluginError::new("unavailable", "FRR is disabled"));
+        }
+        let routes = vtysh_result(req, "show ip route json")
+            .and_then(|table| frr::access_routes::selected(&table))
+            .map_err(|e| PluginError::new("routes-unavailable", e))?;
+        Ok(serde_json::json!({"routes":routes}))
+    }
+
     fn validate(&self, req: &PluginRequest) -> Result<ValidateResult, PluginError> {
         let cfg = frr::load(req)?;
         Ok(ValidateResult { errors: frr::validate(&cfg, req), warnings: Vec::new() })
@@ -206,4 +219,36 @@ fn main() {
         anycast_guard(&args[2..]);
     }
     run(&Frr, env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"))
+}
+
+#[cfg(all(test, unix))]
+mod access_tests {
+    use super::*;
+    use serde_json::json;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn owned_vtysh_action_returns_complete_forwarding_routes_or_error() {
+        let dir = std::env::temp_dir().join(format!("mnp-frr-access-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let program = dir.join("vtysh");
+        std::fs::write(&program, "#!/bin/sh\n[ \"$*\" = '-N meduza -c show ip route json' ] || exit 2\nprintf '%s\\n' '{\"192.0.2.0/24\":[{\"protocol\":\"bgp\",\"selected\":true,\"installed\":true}]}'\n").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let mut req = meduza_np_plugin_sdk::test_request("action", json!({"services":{"frr":{"localAsn":65001}}}));
+        req.params = json!({"action":"access-routes"});
+        req.providers.insert(
+            frr::SLOT.into(),
+            meduza_np_plugin_sdk::ResolvedProvider {
+                path: dir.join("zebra").to_string_lossy().into_owned(),
+                source: "system".into(),
+                version: None,
+            },
+        );
+        assert_eq!(Frr.action(&req).unwrap(), json!({"routes":["192.0.2.0/24"]}));
+        std::fs::write(&program, "#!/bin/sh\nprintf '%s\\n' 'incomplete table'\n").unwrap();
+        assert_eq!(Frr.action(&req).unwrap_err().code, "routes-unavailable");
+        req.config.services.insert("frr".into(), json!({"enabled":false}));
+        assert_eq!(Frr.action(&req).unwrap_err().code, "unavailable");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

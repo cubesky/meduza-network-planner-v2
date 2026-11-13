@@ -83,6 +83,7 @@ fn connect(instance: &str, config_file: &str) -> ! {
     let params = serde_json::json!({
         "instanceId": instance,
         "username": username,
+        "pushFrr": env("MEDUZA_NP_ACCESS_PUSH_FRR").as_deref() == Some("1"),
         "ip": env("trusted_ip").or_else(|| env("trusted_ip6")),
         "port": env("trusted_port").and_then(|p| p.parse::<u16>().ok()),
     });
@@ -91,9 +92,24 @@ fn connect(instance: &str, config_file: &str) -> ! {
         deny(v.pointer("/result/reasonCode").and_then(|d| d.as_str()).unwrap_or("unknown"))
     }
     let secs = v.pointer("/result/sessionSeconds").and_then(|s| s.as_u64()).unwrap_or(0);
-    if secs > 0 {
-        std::fs::write(config_file, format!("session-timeout {secs}\n")).unwrap_or_else(|_| deny("cannot write the client config"));
+    if env("MEDUZA_NP_ACCESS_PUSH_FRR").as_deref() == Some("1") && !v.pointer("/result/pushRoutes").is_some_and(serde_json::Value::is_array)
+    {
+        deny("planner does not support FRR route push");
     }
+    let mut config = if secs > 0 { format!("session-timeout {secs}\n") } else { String::new() };
+    if let Some(routes) = v.pointer("/result/pushRoutes").and_then(serde_json::Value::as_array) {
+        if routes.len() > 256 {
+            deny("too many pushed routes");
+        }
+        for route in routes {
+            let words: Vec<_> = route.as_str().unwrap_or_default().split_whitespace().collect();
+            if words.len() != 3 || words[0] != "route" || words[1..].iter().any(|s| s.parse::<std::net::Ipv4Addr>().is_err()) {
+                deny("invalid pushed route");
+            }
+            config.push_str(&format!("push \"{}\"\n", words.join(" ")));
+        }
+    }
+    std::fs::write(config_file, config).unwrap_or_else(|_| deny("cannot write the client config"));
     std::process::exit(0)
 }
 

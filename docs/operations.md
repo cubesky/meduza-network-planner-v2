@@ -120,7 +120,7 @@ waiting for installation. A 100% download is followed by installation, system de
 registration checks before packages are ready. Older updaters expose phases/errors without invented byte counts.
 
 Tinc mesh and active WireGuard/OpenVPN external connections automatically request `meduza-np-frr` in the planner's
-component list, without requiring a handwritten FRR service. OpenVPN Access-only instances and disabled connections
+component list, without requiring a handwritten FRR service. OpenVPN Access-only instances (unless FRR route push is enabled) and disabled connections
 do not add this routing prerequisite. The manager continues to derive FRR's actual routing configuration from the
 internal ASN, peers, external BGP and Anycast settings. The base image installs the Alpine `frr` dependency when the
 new adapter arrives; FRR still needs `SYS_ADMIN` in the planner container (fixed when creating the container).
@@ -702,3 +702,30 @@ If a peer was configured for the previous v2 adapter's automatic 0/1 convention,
 the corresponding staticKeyDirection before upgrading only one side, or coordinate both sides'
 configuration. Previously imported explicit static key directions under tls.keyDirection must be
 moved to staticKeyDirection. This release does not reinterpret the TLS field in static mode.
+
+### Push FRR routes to OpenVPN Access clients
+
+In Manager or Dashboard, edit the Access instance, open its Access tab and enable
+"Push installed FRR IPv4 routes (refresh on reconnect)" under Push routes. The JSON option is
+`services.openvpn.instances[].access.pushRoutes.frr`; it defaults to false. Keep the existing LAN,
+Private LAN, mapping and extra-prefix choices as needed. FRR routing must already be enabled on
+that node (derived routing configuration or explicit services.frr); this option does not create an
+ASN, neighbor, NAT rule or remote return route. Publish/apply, then reconnect the client.
+
+The client-connect hook queries the node's owned FRR meduza pathspace after authentication. It pushes
+selected, installed IPv4 BGP/OSPF/static routes, deduplicating covered prefixes and excluding defaults,
+loopback/link-local/multicast addresses, blackholes and prefixes inside any active Access pool.
+Kernel/connected routes are not imported; use the existing LAN/Private LAN options for local networks.
+The complete snapshot is cached for five seconds across connections. Route additions/withdrawals reach
+clients on reconnection; existing connections are not forcibly restarted or updated in place.
+
+Queries are bounded (five-second vtysh, four MiB output, 4096 eligible source prefixes, 256 final dynamic
+push routes). Aggregate routes in FRR if the result exceeds these limits. Query failure, incompatible
+plugin versions, or excess routes rejects that client connection with an explicit hook/planner error
+rather than sending a partial or stale set. Other running sessions and configuration application remain
+independent. Upgrade planner, meduza-np-frr and meduza-np-openvpn together before enabling the option;
+update Manager/Dashboard for the field and Access-first lists. An old planner response without a route
+list is rejected when the option is enabled. The option left off retains the previous connect protocol.
+
+Both consoles show Access before Site2Site in OpenVPN settings and status, including disabled Access
+entries. The ordering is only visual; stored array indexes and instance IDs remain unchanged.

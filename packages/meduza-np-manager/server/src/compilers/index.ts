@@ -17,7 +17,7 @@ export type ServiceCompiler = (nodeId: string, service: Record<string, unknown>,
 
 import { compileWireGuard } from "./wireguard.js";
 import { compileTinc, normalizeTinc } from "./tinc.js";
-import { compileFrr } from "./frr.js";
+import { compileFrr, frrOf } from "./frr.js";
 import { compileMihomo } from "./mihomo.js";
 
 /** MosDNS: the cluster's shared configuration (D58) under the node's own fields. */
@@ -28,11 +28,18 @@ const compileMosdns: ServiceCompiler = (_nodeId, service, ctx) => ({ ...structur
  * The plugin's renegotiation rule is checked here too, so such a publish fails instead of only the node's apply.
  */
 const compileOpenVpn: ServiceCompiler = (nodeId, service, ctx) => {
-  const out = structuredClone(service) as { enabled?: boolean; instances?: Array<{ enabled?: boolean; bgp?: unknown; kind?: string; access?: { renegSeconds?: number } }> };
+  const out = structuredClone(service) as { enabled?: boolean; instances?: Array<{ enabled?: boolean; bgp?: unknown; kind?: string; access?: { renegSeconds?: number; pushRoutes?: { frr?: boolean } } }> };
   if (out.enabled === false) return out;
   (out.instances ?? []).forEach((inst, i) => {
     delete inst.bgp;
     if (inst.enabled === false) return;
+    if (inst.kind === "access" && inst.access?.pushRoutes?.frr) {
+      const frr = frrOf(nodeId, ctx.doc);
+      if (!frr || frr.enabled === false) ctx.problems.push({
+        path: `/nodes/${nodeId}/services/openvpn/instances/${i}/access/pushRoutes/frr`, node: nodeId,
+        message: "FRR route push requires enabled FRR routing on this node",
+      });
+    }
     const reneg = inst.access?.renegSeconds;
     if (inst.kind === "access" && typeof reneg === "number" && reneg > 0 && reneg < 300) {
       ctx.problems.push({

@@ -18,6 +18,7 @@
 //! deny — no trailing permit can bypass the filters. Roaming peers (mobile, metered) never get BFD, and routes they
 //! only transit are de-preferred so traffic crosses them only when no other path exists.
 
+pub mod access_routes;
 pub mod guard;
 pub mod paths;
 

@@ -6,6 +6,7 @@ import { useContext, useEffect, useMemo, useState } from "preact/hooks";
 import { Badge, Button, Field, FieldGroup, ListInput, Modal, NumberInput, Select, StateBadge, Table, Tabs, TextInput, ToggleField, ask, formatCell, getLocale, t, type Column } from "@meduza-np/ui-kit";
 import { childSchema, evalWhen, fieldError, fieldInfo, getAt, humanize, itemSchema, resolve, setAt, splitPath, unwrapNullable, walk, type FieldInfo, type JsonSchema } from "./schema.ts";
 import "./messages.ts";
+import { accessFirst } from "@meduza-np/ui-kit/instance-tree";
 
 export * from "./schema.ts";
 
@@ -257,7 +258,8 @@ function CollectionEditor(props: RendererProps & { collection: NonNullable<UiDes
 
   const write = (next: Array<Record<string, unknown>>) => props.onChange(setAt(props.value, path, next));
   const idOf = (it: Record<string, unknown>) => String(it[c.itemId] ?? "");
-  const runtimeOf = (it: Record<string, unknown>) => props.runtime?.find((r) => r.id === `${props.short}/${idOf(it)}` && (!c.runtimeKind || r.kind === c.runtimeKind));
+  const runtimeOf = (it: Record<string, unknown>) => props.runtime?.find((r) => r.id === `${props.short}/${idOf(it)}`
+    && (!c.runtimeKind || r.kind === (props.short === "openvpn" && it.kind === "access" ? "openvpn-access" : c.runtimeKind)));
   const collectionProblems = prefixProblems(props.problems, `/services/${props.short}${relPath}`);
   const uniqueId = (base: string) => {
     let n = 1;
@@ -335,7 +337,7 @@ function CollectionEditor(props: RendererProps & { collection: NonNullable<UiDes
           </Button>
         )}
       </div>
-      <Table columns={columns} rows={items} rowKey={idOf} onSelect={(r) => setEditing({ index: items.indexOf(r), item: structuredClone(r) })} empty={t("No instances. Add one to configure this feature.")} />
+      <Table columns={columns} rows={props.short === "openvpn" ? accessFirst(items, (i) => i.kind) : items} rowKey={idOf} onSelect={(r) => setEditing({ index: items.indexOf(r), item: structuredClone(r) })} empty={t("No instances. Add one to configure this feature.")} />
       {editing && (
         <Modal
           wide

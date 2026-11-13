@@ -152,6 +152,11 @@
   ],
   "status": [
     {
+      "title": "Access 服务",
+      "instanceKind": "openvpn-access",
+      "columns": ["id", "state", "clients", "processRunning", "devicePresent", "statusUpdated", "reason"]
+    },
+    {
       "title": "Access 在线客户端",
       "instanceKind": "openvpn-client",
       "columns": [
@@ -178,19 +183,6 @@
         "devicePresent",
         "reason"
       ]
-    },
-    {
-      "title": "Access 服务",
-      "instanceKind": "openvpn-access",
-      "columns": [
-        "id",
-        "state",
-        "clients",
-        "processRunning",
-        "devicePresent",
-        "statusUpdated",
-        "reason"
-      ]
     }
   ],
   "i18n": {
@@ -213,6 +205,7 @@
       "fields": {
         "reason": "Connection error",
         "staticKeyDirection": "Static key direction (blank: bidirectional; 0/1: paired)",
+        "frr": "Push installed FRR IPv4 routes (refresh on reconnect)",
         "accept": "Accepted prefixes",
         "acceptDefault": "Accept a default route",
         "address": "Neighbor address",
@@ -326,6 +319,7 @@
         "state": "状态",
         "staticKeyRef": "静态密钥",
         "staticKeyDirection": "静态密钥方向（留空：双向；0/1：配对）",
+        "frr": "推送 FRR 已安装的 IPv4 路由（重连时更新）",
         "statusUpdated": "状态更新时间",
         "tlsAuthRef": "tls-auth 密钥",
         "tlsCryptRef": "tls-crypt 密钥",
@@ -432,6 +426,7 @@
         "state": "狀態",
         "staticKeyRef": "靜態金鑰",
         "staticKeyDirection": "靜態金鑰方向（留空：雙向；0/1：配對）",
+        "frr": "推送 FRR 已安裝的 IPv4 路由（重新連線時更新）",
         "statusUpdated": "狀態更新時間",
         "tlsAuthRef": "tls-auth 金鑰",
         "tlsCryptRef": "tls-crypt 金鑰",
