@@ -1,6 +1,7 @@
 import { Badge, Card, Loadable, PageHead, StateBadge, StatusDot, Table, msg, relativeTime, t, useAsync } from "@meduza-np/ui-kit";
 import { get } from "../api.ts";
 import { PackageUpdateSummary } from "@meduza-np/ui-kit/package-progress";
+import { needsAttention, presenceTone } from "../node-status.ts";
 
 export interface NodeSummary {
   update?: import("@meduza-np/ui-kit/package-progress").InstallProgress | null;
@@ -51,8 +52,6 @@ export function revisionBadge(n: NodeSummary) {
   return <Badge tone="ok" title={n.appliedRevision ?? ""}>{t("up to date")}</Badge>;
 }
 
-export const needsAttention = (n: NodeSummary) => n.problems.length > 0 || n.freshness === "offline" || (!!n.failedRevision && n.failedRevision === n.desiredRevision);
-
 export function OverviewPage() {
   const state = useAsync(() => get<Overview>("/api/v1/overview"), [], 10_000);
   return (
@@ -68,6 +67,7 @@ export function OverviewPage() {
                   [
                     [msg("Nodes"), o.counts.total, ""],
                     [msg("Online"), o.counts.online, ""],
+                    [msg("Offline"), o.counts.offline, ""],
                     [msg("Need attention"), attention.length, attention.length ? "bad" : ""],
                     [msg("Not at the desired revision"), o.counts.outOfSync, o.counts.outOfSync ? "warn" : ""],
                   ] as const
@@ -83,7 +83,7 @@ export function OverviewPage() {
                   <div class="stack" style={{ gap: "8px" }}>
                     {attention.map((n) => (
                       <a class="row" href={`#/nodes/${encodeURIComponent(n.id)}`} style={{ color: "inherit" }}>
-                        <StatusDot state={n.freshness} />
+                        <StatusDot state={n.freshness} tone={presenceTone(n)} />
                         <strong>{n.displayName || n.id}</strong>
                         <span class="muted small">
                           {n.freshness === "offline"
@@ -108,7 +108,7 @@ export function OverviewPage() {
                     label: t("Node"),
                     render: (r) => (
                       <span class="row" style={{ gap: "10px", flexWrap: "nowrap" }}>
-                        <StatusDot state={String(r.freshness)} />
+                        <StatusDot state={String(r.freshness)} tone={presenceTone(r)} />
                         <strong>{String(r.displayName || r.id)}</strong>
                       </span>
                     ),

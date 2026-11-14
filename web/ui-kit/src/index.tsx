@@ -65,15 +65,15 @@ export function Badge(props: { tone?: Tone; children: ComponentChildren; title?:
   );
 }
 
-export function StateBadge(props: { state: string | null | undefined; label?: string }) {
+export function StateBadge(props: { state: string | null | undefined; label?: string; tone?: Tone }) {
   const s = props.state ?? "unknown";
-  return <Badge tone={stateTone(s)}>{props.label ?? t(s)}</Badge>;
+  return <Badge tone={props.tone ?? stateTone(s)}>{props.label ?? t(s)}</Badge>;
 }
 
 /** A coloured dot for a state; the state word is the tooltip. */
-export function StatusDot(props: { state: string | null | undefined }) {
+export function StatusDot(props: { state: string | null | undefined; tone?: Tone }) {
   const s = props.state ?? "unknown";
-  return <span class={`dot ${stateTone(s)}`} title={t(s)} />;
+  return <span class={`dot ${props.tone ?? stateTone(s)}`} title={t(s)} />;
 }
 
 /** Page title with optional breadcrumb, subtitle and actions. */
@@ -322,11 +322,13 @@ export function Tabs(props: { tabs: Array<{ id: string; label: string; count?: n
 }
 
 /**
- * Dialog over the page. Escape and a click on the backdrop close it; focus moves into it on open (the first input,
+ * Dialog over the page. Escape and a press/release on the backdrop close it; text-selection drags do not.
+ * Focus moves into it on open (the first input,
  * else the first action) and returns to where it was on close.
  */
 export function Modal(props: { title: string; onClose: () => void; children: ComponentChildren; actions?: ComponentChildren; wide?: boolean; closeLabel?: string }) {
   const ref = useRef<HTMLDivElement>(null);
+  const backdropPress = useRef(false);
   const close = useRef(props.onClose);
   close.current = props.onClose;
   useEffect(() => {
@@ -343,7 +345,15 @@ export function Modal(props: { title: string; onClose: () => void; children: Com
     };
   }, []);
   return (
-    <div class="modal-back" onClick={(e) => e.target === e.currentTarget && props.onClose()}>
+    <div class="modal-back"
+      onPointerDown={(e) => { backdropPress.current = e.button === 0 && e.target === e.currentTarget; }}
+      onPointerUp={(e) => { backdropPress.current = backdropPress.current && e.target === e.currentTarget; }}
+      onPointerCancel={() => { backdropPress.current = false; }}
+      onClick={(e) => {
+        const dismiss = backdropPress.current && e.target === e.currentTarget;
+        backdropPress.current = false;
+        if (dismiss) props.onClose();
+      }}>
       <div ref={ref} class={props.wide ? "modal wide" : "modal"} role="dialog" aria-modal="true" aria-label={props.title}>
         <h2 style={{ marginTop: 0 }}>{props.title}</h2>
         {props.children}

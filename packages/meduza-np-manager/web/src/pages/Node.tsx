@@ -7,6 +7,7 @@ import { Badge, Button, Card, CopyBlock, Loadable, Modal, PageHead, StateBadge, 
 import { errorText, get, post } from "../api.ts";
 import { isError, problemsFor, useConfig } from "../store.ts";
 import { revisionBadge, syncCell, type NodeSummary } from "./Overview.tsx";
+import { presenceTone } from "../node-status.ts";
 import { NodeSettings } from "./NodeSettings.tsx";
 import { BinaryProgress, UpdateNotice, type BinaryTransferProgress } from "@meduza-np/ui-kit/package-progress";
 import { NodeUpdates } from "./NodeUpdates.tsx";
@@ -70,7 +71,7 @@ export function NodePage(props: { id: string; tab?: string; role: Role }) {
             <>
               <PageHead
                 crumbs={<a href="#/nodes">{t("Nodes")}</a>}
-                title={<span class="row" style={{ gap: "10px" }}><StatusDot state={n.freshness} />{n.displayName || n.id}</span>}
+                title={<span class="row" style={{ gap: "10px" }}><StatusDot state={n.freshness} tone={presenceTone(n)} />{n.displayName || n.id}</span>}
                 sub={[
                   n.id,
                   t(n.behavior),
@@ -126,7 +127,7 @@ function StatusTab(props: { n: NodeDetail; instances: Inst[]; canAct: boolean; r
   return (
     <>
       <div class="stats">
-        <div class="stat"><div class="value small"><StateBadge state={n.freshness} /></div><div class="label">{t("last seen {time}", { time: relativeTime(n.lastSeenAt) })}</div></div>
+        <div class="stat"><div class="value small"><StateBadge state={n.freshness} tone={presenceTone(n)} /></div><div class="label">{t("last seen {time}", { time: relativeTime(n.lastSeenAt) })}</div></div>
         <div class="stat"><div class="value small">{syncCell(n)}</div><div class="label">{t("sync")}</div></div>
         <div class="stat"><div class="value small">{revisionBadge(n)}</div><div class="label mono">{n.appliedRevision ?? "—"}</div></div>
         <div class="stat">

@@ -3,7 +3,8 @@
 import { useState } from "preact/hooks";
 import { Badge, Button, Card, CopyBlock, Field, Loadable, PageHead, Select, StatusDot, Table, TextInput, msg, relativeTime, t, toast, useAsync } from "@meduza-np/ui-kit";
 import { errorText, get, post } from "../api.ts";
-import { needsAttention, revisionBadge, syncCell, type NodeSummary } from "./Overview.tsx";
+import { revisionBadge, syncCell, type NodeSummary } from "./Overview.tsx";
+import { isOffline, needsAttention, presenceTone } from "../node-status.ts";
 import { PackageUpdateSummary } from "@meduza-np/ui-kit/package-progress";
 
 type Role = "admin" | "operator" | "viewer";
@@ -18,7 +19,7 @@ const SHOW = [
 /** Whether a node matches the search text (id, name, tags, behavior) and the chosen state filter. */
 function matches(n: NodeSummary, q: string, show: string): boolean {
   if (show === "attention" && !needsAttention(n)) return false;
-  if (show === "offline" && n.freshness !== "offline") return false;
+  if (show === "offline" && !isOffline(n)) return false;
   if (show === "pending" && (n.inSync || !n.desiredRevision)) return false;
   if (!q) return true;
   return [n.id, n.displayName, n.behavior, n.arch, ...n.tags].some((x) => x?.toLowerCase().includes(q));
@@ -67,7 +68,7 @@ export function NodesPage(props: { role: Role }) {
                     label: t("Node"),
                     render: (r) => (
                       <span class="row" style={{ gap: "10px", flexWrap: "nowrap" }}>
-                        <StatusDot state={String(r.freshness)} />
+                        <StatusDot state={String(r.freshness)} tone={presenceTone(r)} />
                         <span>
                           <strong>{String(r.displayName || r.id)}</strong>
                           {r.displayName && r.displayName !== r.id && <div class="faint small mono">{String(r.id)}</div>}

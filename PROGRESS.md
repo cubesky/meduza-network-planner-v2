@@ -10,6 +10,63 @@ scheduled "continue" task) must:
 
 Design decisions live in `docs/DECISIONS.md`.
 
+### 2026-11-15 — Modal text selection and roaming presence
+
+Require both pointer press and release on the shared modal backdrop before click dismissal, clearing
+the gesture on cancellation/click. Preserve content-to-backdrop and reverse text-selection drags,
+Close/Escape/focus restoration. Shared change applies to Manager and ordinary Dashboard.
+
+Separate Manager roaming absence from health: offline alone no longer enters the attention card or
+filter, but explicit package/service problems and current apply failures still do. Add neutral offline
+total to overview; align offline filtering with server counts including never-reported enrolled nodes.
+Use neutral dots/badges for roaming stale/offline/never presence in overview, nodes and node details,
+retaining actual status labels and static-node outage alerts. Add optional tone to shared state widgets.
+
+All 14 targeted policy/i18n/modal/theme regressions pass; Manager/server/shared UI/Dashboard type checks
+and both production web builds pass. Actual Chrome validates input/textarea selection outside the
+dialog, reverse drags, backdrop click, Escape/focus and Close, plus overview offline count, neutral
+roaming presence, attention filtering, static outage and real-error alerts. Evidence: target/check-modal-
+roaming-browser.mjs and target/modal-roaming-acceptance.png. Update AGENT.md UI contract. Local source
+only; no production deployment or Git staging/commit.
+
+### 2026-11-13 — Follow-up audit of .11.2 update residue
+
+Read-only SSH audit finds no duplicate Meduza NP versions, overlay package archives, or deleted
+Meduza executables/mappings held open. Eight current native packages total 7,370 KiB installed;
+persistent state remains 104 KiB, updater store 36 KiB, private /tmp download directory empty.
+Four separately placed APKs total about 3.1 MiB and APK indexes about 1.5 MiB, all on tmpfs rather
+than overlay. Initially find 74 old v1 Python bytecode files, about 1,520 KiB logical, with sampled
+files unowned; old /etc/meduza, init script and UCI configuration also remain, about 20 KiB.
+The Python directory disappears during subsequent read-only probes, and overlay later changes
+from 97–98% / 2–3 MiB free to 77% / about 21 MiB free. No agent cleanup or remote mutation occurs;
+do not attribute this change to an agent action or infer a historical growth cause without evidence.
+
+System FRR packages occupy about 40 MiB uncompressed installed size, separate from Meduza's FRR
+plugin; these are package-owned active installations, not updater residue. Other large installed
+files include tailscaled and speed-test tools. UBIFS physical use differs from logical sizes, and
+no earlier disk baseline exists to prove which installation caused the historical increase. Final
+status still v0.4.3, no active update; lastCheck and the space-blocked v0.4.4 plan predate the free-space
+change. Save evidence in target/check-openwrt11-residue.txt and residue-updater.json. No restart,
+update check/apply, package removal, source behavior change or Git staging/commit performed.
+
+### 2026-11-13 — Read-only diagnosis of .11.2 v0.4.4 update not starting
+
+Inspect 10.42.11.2 / CudyMeduza over SSH. The native APK updater is running with the correct source,
+autoApply enabled and a verified stable v0.4.4 plan. Installed group remains v0.4.3; no active journal,
+worker or download exists. The last in-memory plan explicitly blocks installation: /usr has 2,793,472
+bytes free versus 5,864,512 estimated need for the largest changed archive. Later df shows overlay
+97% used / about 2.4 MiB available; /tmp has 236 MiB free and MemAvailable about 232 MiB, so moving
+downloads to /tmp already works and does not solve native package installation headroom.
+
+Meduza store is only 36 KiB with empty staging, all persistent Meduza state about 104 KiB; no stale
+archive cache can free the required space. Overlay contains substantial OpenClash data/core/UI,
+including about 12 MiB logical UI files, but no unrelated files/packages are deleted. Advise free
+roughly 8–10 MiB of overlay before retrying. Note compressed UBIFS physical use differs from du's
+logical directory totals. Manager reports the old done v0.4.3 progress with error=null because plan
+blockers are only retained in daemon memory/local lastPlan; this conceals the real blocker. No
+source behavior changes in this diagnostic session. Evidence: target/check-openwrt11-v044-status.json.
+No update/apply/restart, remote file/config changes or Git staging/commit performed.
+
 ### 2026-11-13 — D106: Access FRR push rejected by isolated preparation
 
 Read-only inspect xuzhou-b1 on .9: rev-000032 is in-sync, but Access repeatedly reports FRR not
@@ -473,6 +530,23 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   namespace, host LAN not announced → new `frr/main/origination` status, routerId pre-check, capability warning)
 
 ## Session log
+
+- 2026-11-15 (modal and roaming UI): Fix shared modal text-selection dismissal and neutral Manager
+  roaming absence; add offline count/filter consistency while retaining explicit health failures.
+  14 targeted tests, type checks, both builds and actual Chrome interaction acceptance pass.
+  No production changes or Git staging/commit; see detailed entry above.
+
+- 2026-11-13 (read-only .11.2 residue follow-up): No NP archive/version/deleted-executable leak;
+  current native payload totals 7.2 MiB. Find old v1 Python caches (~1.5 MiB logical), which disappear
+  during observation; overlay later has ~21 MiB free without any agent mutation. System FRR is
+  ~40 MiB installed, not residue. No historical baseline supports attributing all growth to updates.
+  v0.4.3 remains installed; its last blocked plan predates recovered space. No production changes.
+
+- 2026-11-13 (read-only .11.2 v0.4.4 diagnosis): Correct source and running APK updater already see
+  v0.4.4, but overlay installation-space preflight blocks (2.66 MiB free / 5.59 MiB required).
+  /tmp and RAM are sufficient; empty Meduza staging/store cannot recover significant space. Report
+  unrelated OpenClash storage and stale Manager done/error-null presentation. No remote mutations,
+  cleanup, upgrades or behavior changes; saved filtered status evidence under target.
 
 - 2026-11-13 (D106): Diagnose .9 Access FRR push: isolated planner validation erased FRR context,
   leaving the old Access config running. Actual FRR export returns 61 routes. Preserve service
