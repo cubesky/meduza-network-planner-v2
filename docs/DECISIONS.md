@@ -2633,7 +2633,7 @@ connection or Git staging/commit. Release the planner fix, reapply and reconnect
 acceptance. The node's existing OpenVPN/FRR 0.4.2 implementations already provide the required hook
 and export; no replacement OpenVPN/FRR system binary is required for this correction.
 
-## D107 — optional private-network LookingGlass (2026-11-17)
+## D107 — optional LookingGlass API with private-target diagnostics (2026-11-17)
 
 Add `meduza-np-lookingglass` as the twentieth optional package: a service-adapter plugin with a small
 independent HTTP API process and short-lived diagnostic commands. Generic archive/OCI distribution and native ipk/apk packaging use the existing
@@ -2653,18 +2653,22 @@ Per the user's revised scope, provide no webpage or Dashboard API. LookingGlass 
 login-free `/api/ilg/` JSON API on a separate configurable listener, default `0.0.0.0:18080`.
 `services.lookingglass` exposes enabled/listen settings; planner supervises the API process, checks
 TCP health and stops/restarts it when disabled or reconfigured. Manual `serve --listen IP:PORT` is
-also available. The API requires the package to be registered and executable to exist. Its ACL uses
-actual TCP peer addresses in RFC1918/RFC4193 (including normalized IPv4-mapped addresses). No login,
-client-side check, or forwarded header can expand these ranges. Public/loopback/link-local/CGNAT
-sources fail closed, including a missing peer extension. Reverse proxies must enforce original-client
-ACLs themselves. A same-origin request marker and body cap guard public browser probe submissions;
+also available. The API requires the package to be registered and executable to exist. Per the user's
+latest policy, remove client source checks entirely. Enforce RFC1918/RFC4193 destination IPs in both
+HTTP validation and the native command builder; normalize IPv4-mapped IPv6 before checking/executing.
+Reject public, loopback, link-local, CGNAT, unspecified and multicast targets, including mapped-public
+bypasses. Keep ASN queries: these read local BGP state, not active probes of returned route prefixes.
+No login, peer-address extension or forwarded header is needed for access. A same-origin request marker and body cap guard public browser probe submissions;
 Dashboard authentication and routes remain independent. Limit HTTP concurrency to eight, headers
 to 16 KiB/32 entries and request reads to three seconds; no keep-alive. See operations for the API
 contract, manual startup, port publication, limits and system dependencies.
 
-Regression coverage includes private-range boundaries, spoofed headers over actual TCP, API
+Regression coverage includes private destination-range boundaries, public/loopback source acceptance over TCP, API
 installation/removal gating without cookies, request limits, real plugin argv/exit reporting, planner
 authorization, no configuration/secret forwarding, rate/concurrency limits and missing executables.
+All four IP operations reject public/non-private targets at HTTP and native entry points; HTTP
+rejections never reach planner. Mapped-private targets use native IPv4 argv; mapped-public targets
+are rejected. Missing peer metadata does not block status or ASN queries.
 Verify the dedicated executable opens its own configurable port without Dashboard; no page is
 served, disabled plans contain no process, and invalid listen values are rejected. The original
 page and its frontend assets/translations are removed. Rust, schema, release, i18n, Clippy and

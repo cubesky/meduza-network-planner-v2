@@ -95,7 +95,7 @@ flowchart TB
 | `meduza-np-base-container` | 基于 Alpine Linux 的容器运行基础，默认包含 updater，按环境变量自动获取并启用所选节点组件 | 发布可直接使用的基础 OCI 运行镜像与部署入口；默认 bridge，支持 host；updater 自动下载 planner/选定包，不预装全部业务功能 |
 | `meduza-np-avahi` | mDNS 解析与必要的发现/转发集成 | 默认系统 Avahi，按需系统 D-Bus；不强制安装到每个节点 |
 | `meduza-np-tinc` | 覆盖网络、节点公钥、hosts 与配置生成、Tinc Peer 可达状态 | 默认系统 Tinc；注册后提供覆盖网络能力 |
-| `meduza-np-lookingglass` | 按需 Ping/MTR/iPerf3 客户端测速、按 ASN/IP 查询 FRR BGP 路由 | 独立端口 JSON API，不依赖 Dashboard 或提供网页；通过 services.lookingglass 启停/配置监听，默认 0.0.0.0:18080，planner 监督；API 仅允许 RFC1918/RFC4193 TCP 来源，且要求包已注册，无需登录，不信任转发头；固定参数、时限、输出上限及单任务并发 |
+| `meduza-np-lookingglass` | 按需 Ping/MTR/iPerf3 客户端测速、按 ASN/IP 查询 FRR BGP 路由 | 独立端口 JSON API，不依赖 Dashboard 或提供网页；通过 services.lookingglass 启停/配置监听，默认 0.0.0.0:18080，planner 监督；API 不限制客户端来源，要求包已注册且无需登录；所有 IP 目标仅允许 RFC1918/RFC4193，HTTP 与执行层均校验并规范化映射 IPv4，保留本地 ASN 查询；固定参数、时限、输出上限及单任务并发 |
 
 ### 3.1 服务插件与本体 provider
 

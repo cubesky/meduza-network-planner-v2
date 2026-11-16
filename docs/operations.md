@@ -783,7 +783,7 @@ Endpoints on the LookingGlass port (not the Dashboard port):
 - `POST /api/ilg/query` — JSON `{ "operation": "ping", "target": "10.0.0.1" }`.
   Operations are `ping`, `mtr`, `iperf`, `bgp`; BGP also accepts e.g. `AS65000`.
 
-Example from a private-network client:
+Example API request:
 
 ```sh
 curl http://NODE:18080/api/ilg/query \
@@ -793,17 +793,20 @@ curl http://NODE:18080/api/ilg/query \
 ```
 
 The response has `results`, each containing `command`, `arguments`, `stdout`, `stderr`, `exitCode`,
-`timedOut` and `truncated`. Unavailable package is 404, rejected source/header is 403, invalid
-parameters are 400, busy/rate-limited is 429, and unavailable tool/planner is 503. Tool exit failure
+`timedOut` and `truncated`. Unavailable package is 404, rejected request header is 403, invalid
+parameters or non-private IP targets are 400, busy/rate-limited is 429, and unavailable tool/planner is 503. Tool exit failure
 is a diagnostic result. When bridge networking is used, expose/publish this additional port explicitly;
 macvlan/host deployments use the configured node listener directly.
 
-Only the actual TCP peer in RFC1918 (`10/8`, `172.16/12`, `192.168/16`) or RFC4193 (`fc00::/7`)
-may access the API. IPv4-mapped IPv6 peers use the IPv4 rule. Public, loopback,
-link-local and CGNAT source addresses are rejected; signing in does not override this. Forwarded
-and X-Forwarded-For headers do not grant access. A reverse proxy must independently enforce this
-client-address ACL or omit `/api/ilg/` from its public routes: the API server sees the
-proxy's TCP address, not its original client. Direct private-network access is the normal deployment.
+Client source addresses are unrestricted: public, private, loopback and proxied clients may use the
+API without signing in. The restriction applies to **destination IPs**, checked both at the HTTP
+entry point and before the plugin executes a command. Only RFC1918 (`10/8`, `172.16/12`,
+`192.168/16`) and RFC4193 (`fc00::/7`) targets are accepted. IPv4-mapped IPv6 targets are normalized
+to IPv4 before validation and execution; e.g. `::ffff:10.0.0.1` becomes `10.0.0.1`, while
+`::ffff:8.8.8.8` is rejected. Public, loopback, link-local, CGNAT, unspecified and multicast targets
+are rejected. Forwarded headers cannot change the target policy. The same rule applies to Ping,
+MTR, iperf3 and BGP IP lookups. Numeric/AS-prefixed ASN queries read the local BGP table only and
+remain available; their returned paths may include public prefixes without probing those prefixes.
 
 Ping and MTR accept numeric IPv4/IPv6 addresses, never DNS names. BGP accepts a numeric ASN,
 `AS65000`, or an IP lookup; ASN queries cover both FRR IPv4 and IPv6 unicast paths containing that

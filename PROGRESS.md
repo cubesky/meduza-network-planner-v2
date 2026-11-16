@@ -10,6 +10,23 @@ scheduled "continue" task) must:
 
 Design decisions live in `docs/DECISIONS.md`.
 
+### 2026-11-17 — D107 policy revision: private targets, unrestricted sources
+
+Per the user, remove all client source/peer restrictions from the standalone LookingGlass API. TCP
+serving no longer injects peer IP metadata or evaluates source ranges. Keep package registration,
+request marker, independent listener and resource limits. Shared command validation now accepts only
+RFC1918 IPv4 and RFC4193 ULA target IPs, normalizing mapped IPv4 first; reject public/loopback/link-
+local/CGNAT/unspecified/multicast targets. Use the same validator at HTTP entry before planner RPC
+and in the actual plugin action, so direct local invocation cannot bypass target restrictions.
+Retain numeric/AS-prefixed ASN queries of the local BGP table without active probes of route prefixes.
+
+All eight LookingGlass unit/executable/socket/runner tests and warnings-denied Clippy pass. Cover
+every IP operation, range boundaries, mapped-private normalization, mapped-public rejection, public/
+loopback/missing client peer acceptance, API package gating, no RPC for invalid targets and native
+action rejection. Docs/AGENT/D107 now describe destination policy; earlier source-policy entries
+below are historical and superseded. Evidence: target/check-lookingglass-private-target{,-clippy}.log.
+No production deployment, external probes, Git staging/commit or publication.
+
 ### 2026-11-17 — D107 scope revision: independent API, no Dashboard page
 
 Per the user's clarification, remove the LookingGlass Dashboard component, locale strings, frontend
@@ -589,6 +606,10 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   namespace, host LAN not announced → new `frr/main/origination` status, routerId pre-check, capability warning)
 
 ## Session log
+
+- 2026-11-17 (D107 target policy): Remove source ACL; accept all client sources while restricting
+  IP destinations to RFC1918/RFC4193 at HTTP and command execution, including mapped-IP handling.
+  Keep local ASN queries. Eight regressions and Clippy pass; no deployment or Git staging/commit.
 
 - 2026-11-17 (D107 scope revision): Remove all LookingGlass Dashboard UI/API integration and move
   JSON API to the package's own configurable 18080 listener, supervised by planner with explicit

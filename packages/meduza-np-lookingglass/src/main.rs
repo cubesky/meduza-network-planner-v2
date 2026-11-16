@@ -23,17 +23,30 @@ fn settings(req: &PluginRequest) -> Result<(bool, std::net::SocketAddr), PluginE
 }
 
 fn invalid() -> PluginError {
-    PluginError::new("invalid-params", "use ping/mtr/iperf with a unicast IP, or bgp with an ASN/IP; no hostnames or extra arguments")
+    PluginError::new(
+        "invalid-params",
+        "target IP must be RFC1918 private or RFC4193 ULA; bgp also accepts an ASN; no hostnames or extra arguments",
+    )
+}
+
+/// Normalize mapped IPv4 before checking the destination, regardless of the requester's address.
+fn private_target(ip: IpAddr) -> Option<IpAddr> {
+    match ip {
+        IpAddr::V4(ip) if ip.is_private() => Some(ip.into()),
+        IpAddr::V6(ip) => match ip.to_ipv4_mapped() {
+            Some(ip) => private_target(ip.into()),
+            None if ip.segments()[0] & 0xfe00 == 0xfc00 => Some(ip.into()),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 /// Never invoke a shell or accept a CLI fragment, hostname, port, regex or arbitrary FRR command.
 fn commands(params: &Value) -> Result<Vec<(String, Vec<String>, u64)>, PluginError> {
     let operation = params.get("operation").and_then(Value::as_str).ok_or_else(invalid)?;
     let target = params.get("target").and_then(Value::as_str).ok_or_else(invalid)?.trim();
-    let ip = target
-        .parse::<IpAddr>()
-        .ok()
-        .filter(|ip| !ip.is_unspecified() && !ip.is_multicast() && !matches!(ip, IpAddr::V4(v) if v.is_broadcast()));
+    let ip = target.parse::<IpAddr>().ok().and_then(private_target);
     if operation == "bgp" {
         let selector = if let Some(ip) = ip {
             ip.to_string()
@@ -156,6 +169,41 @@ fn main() {
 mod tests {
     use super::*;
     #[test]
+    fn target_acl_applies_to_all_ip_operations_and_normalizes_mapped_ipv4() {
+        for operation in ["ping", "mtr", "iperf", "bgp"] {
+            for target in
+                ["10.0.0.1", "10.255.255.254", "172.16.0.1", "172.31.255.254", "192.168.0.1", "192.168.255.254", "fc00::1", "fdff::1"]
+            {
+                assert!(commands(&json!({"operation":operation,"target":target})).is_ok(), "{operation} {target}");
+            }
+            for target in [
+                "8.8.8.8",
+                "127.0.0.1",
+                "169.254.1.1",
+                "100.64.0.1",
+                "172.15.255.254",
+                "172.32.0.1",
+                "192.167.1.1",
+                "192.169.1.1",
+                "192.0.2.1",
+                "::1",
+                "fe80::1",
+                "2001:db8::1",
+                "fbff::1",
+                "fe00::1",
+                "::ffff:8.8.8.8",
+                "::ffff:127.0.0.1",
+                "::192.168.0.1",
+            ] {
+                assert!(commands(&json!({"operation":operation,"target":target})).is_err(), "{operation} {target}");
+            }
+            let cmds = commands(&json!({"operation":operation,"target":"::ffff:10.0.0.1"})).unwrap();
+            let last = cmds[0].1.last().unwrap();
+            assert!(last.ends_with("10.0.0.1"));
+            assert!(!last.contains("ffff"));
+        }
+    }
+    #[test]
     fn plans_separate_api_process_with_configurable_port_and_honours_disable() {
         let mut req: PluginRequest = serde_json::from_value(json!({"protocolVersion":1,"requestId":"plan","operation":"plan",
             "config":{"schemaVersion":1,"revision":"rev-000001","node":{"id":"test"}},
@@ -196,7 +244,7 @@ mod tests {
     #[test]
     fn bounds_probes_and_as_path_queries() {
         for operation in ["ping", "mtr", "iperf"] {
-            for target in ["10.42.10.1", "2001:db8::1"] {
+            for target in ["10.42.10.1", "fd42::1"] {
                 let cmds = commands(&json!({"operation":operation,"target":target})).unwrap();
                 assert_eq!(cmds.len(), 1);
                 assert_eq!(cmds[0].1.last().unwrap(), target);

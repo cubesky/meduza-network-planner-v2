@@ -1,9 +1,9 @@
-//! Private-network, package-gated public diagnostics; only the actual TCP peer is authoritative.
+//! Package-gated public diagnostics; destination IPs are restricted independently of client sources.
 
 use http_body_util::{BodyExt, Limited};
 use hyper::{Method, Request, StatusCode};
 use serde_json::{json, Value};
-use std::{net::IpAddr, time::Duration};
+use std::time::Duration;
 
 type Resp = hyper::Response<http_body_util::Full<bytes::Bytes>>;
 pub struct App {
@@ -45,14 +45,13 @@ pub async fn serve(listener: tokio::net::TcpListener, app: std::sync::Arc<App>) 
     use hyper_util::rt::{TokioIo, TokioTimer};
     let slots = std::sync::Arc::new(tokio::sync::Semaphore::new(8));
     loop {
-        let (stream, peer) = listener.accept().await?;
+        let (stream, _) = listener.accept().await?;
         let Ok(permit) = slots.clone().try_acquire_owned() else { continue };
         let app = app.clone();
         tokio::spawn(async move {
             let _permit = permit;
-            let service = hyper::service::service_fn(move |mut req: Request<hyper::body::Incoming>| {
+            let service = hyper::service::service_fn(move |req: Request<hyper::body::Incoming>| {
                 let app = app.clone();
-                req.extensions_mut().insert(peer.ip());
                 async move { Ok::<_, std::convert::Infallible>(route(&app, req).await) }
             });
             let _ = hyper::server::conn::http1::Builder::new()
@@ -98,13 +97,6 @@ async fn shutdown() {
     }
 }
 
-fn private(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => ip.is_private(),
-        IpAddr::V6(ip) => ip.to_ipv4_mapped().map(|ip| ip.is_private()).unwrap_or(ip.segments()[0] & 0xfe00 == 0xfc00),
-    }
-}
-
 pub async fn route<B>(app: &App, req: Request<B>) -> Resp
 where
     B: hyper::body::Body<Data = bytes::Bytes>,
@@ -112,9 +104,6 @@ where
 {
     if !matches!(req.uri().path(), "/api/ilg/status" | "/api/ilg/query") {
         return not_found();
-    }
-    if !req.extensions().get::<IpAddr>().copied().is_some_and(private) {
-        return app.reply(Err(("forbidden".into(), "LookingGlass requires an RFC1918 or RFC4193 source address".into())));
     }
     let status = crate::local::call(&app.planner_socket, "lookingglass.status", Value::Null, Duration::from_secs(3)).await;
     if !status.is_ok_and(|v| v.get("available").and_then(Value::as_bool) == Some(true)) {
@@ -135,6 +124,9 @@ where
                 Ok(v) if v.is_object() => v,
                 _ => return app.reply(Err(("invalid-params".into(), "expected JSON query".into()))),
             };
+            if let Err(error) = crate::commands(&params) {
+                return app.reply(Err((error.code, error.message)));
+            }
             app.reply(crate::local::call(&app.planner_socket, "lookingglass.query", params, Duration::from_secs(28)).await)
         }
         _ => not_found(),
@@ -144,13 +136,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::IpAddr;
     #[tokio::test]
-    async fn dedicated_tcp_listener_has_no_page_and_cannot_spoof_a_private_peer() {
+    async fn dedicated_tcp_listener_does_not_reject_loopback_client_sources() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let task = tokio::spawn(serve(listener, std::sync::Arc::new(App { planner_socket: "/not-present/planner.sock".into() })));
-        for (path, expected) in [("/", "404"), ("/ilg", "404"), ("/api/ilg/status", "403"), ("/api/ilg/query", "403")] {
+        for (path, expected) in [("/", "404"), ("/ilg", "404"), ("/api/ilg/status", "404"), ("/api/ilg/query", "404")] {
             let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
             socket
                 .write_all(
@@ -163,35 +156,16 @@ mod tests {
             let text = String::from_utf8(out).unwrap();
             assert!(text.starts_with(&format!("HTTP/1.1 {expected}")), "{text}");
             assert!(text.to_lowercase().contains("cache-control: no-store"));
+            if path.starts_with("/api/") {
+                assert!(text.contains("install and register"));
+            }
         }
         task.abort();
         let _ = task.await;
     }
-    #[test]
-    fn source_acl_uses_exact_private_ranges_including_mapped_v4() {
-        for ip in ["10.0.0.1", "172.16.0.1", "172.31.255.254", "192.168.1.1", "fc00::1", "fd12::1", "::ffff:10.0.0.1"] {
-            assert!(private(ip.parse().unwrap()), "{ip}");
-        }
-        for ip in [
-            "8.8.8.8",
-            "127.0.0.1",
-            "169.254.1.1",
-            "100.64.0.1",
-            "172.15.0.1",
-            "172.32.0.1",
-            "192.0.2.1",
-            "::1",
-            "fe80::1",
-            "2001:db8::1",
-            "::ffff:8.8.8.8",
-        ] {
-            assert!(!private(ip.parse().unwrap()), "{ip}");
-        }
-    }
-
     #[cfg(unix)]
     #[tokio::test]
-    async fn api_requires_private_peer_and_live_package_without_requiring_login_and_has_no_page() {
+    async fn api_allows_all_client_sources_but_only_private_targets_and_live_package() {
         use bytes::Bytes;
         use http_body_util::Full;
         use std::sync::{
@@ -250,11 +224,14 @@ mod tests {
         }
         for path in ["/api/ilg/status", "/api/ilg/query"] {
             for peer in [None, Some("8.8.8.8"), Some("127.0.0.1"), Some("::ffff:8.8.8.8")] {
-                assert_eq!(route(&app, request(path, peer, Method::GET, "", true)).await.status(), StatusCode::FORBIDDEN);
+                assert_eq!(route(&app, request(path, peer, Method::GET, "", true)).await.status(), StatusCode::NOT_FOUND);
             }
             assert_eq!(route(&app, request(path, Some("10.42.0.1"), Method::GET, "", true)).await.status(), StatusCode::NOT_FOUND);
         }
         installed.store(true, Ordering::SeqCst);
+        for peer in [None, Some("8.8.8.8"), Some("127.0.0.1"), Some("2001:db8::1"), Some("::ffff:8.8.8.8")] {
+            assert_eq!(route(&app, request("/api/ilg/status", peer, Method::GET, "", false)).await.status(), StatusCode::OK);
+        }
         assert_eq!(route(&app, request("/ilg", Some("fd00::1"), Method::GET, "", false)).await.status(), StatusCode::NOT_FOUND);
         assert_eq!(route(&app, request("/api/ilg/status", Some("fd00::1"), Method::GET, "", false)).await.status(), StatusCode::OK);
         assert_eq!(route(&app, request("/api/ilg/status", Some("10.0.0.1"), Method::GET, "", false)).await.status(), StatusCode::OK);
@@ -270,19 +247,32 @@ mod tests {
             route(&app, request("/api/ilg/query", Some("10.0.0.1"), Method::POST, "[]", true)).await.status(),
             StatusCode::BAD_REQUEST
         );
+        for operation in ["ping", "mtr", "iperf", "bgp"] {
+            for target in ["8.8.8.8", "2001:4860:4860::8888", "::ffff:8.8.8.8", "127.0.0.1", "fe80::1", "example.com"] {
+                let body = json!({"operation":operation,"target":target}).to_string();
+                let response = route(&app, request("/api/ilg/query", Some("8.8.8.8"), Method::POST, &body, true)).await;
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{operation} {target}");
+            }
+        }
+        assert_eq!(queries.load(Ordering::SeqCst), 0, "rejected targets never reach planner");
         assert_eq!(
-            route(&app, request("/api/ilg/query", Some("10.0.0.1"), Method::POST, r#"{"operation":"ping","target":"10.0.0.1"}"#, true))
+            route(&app, request("/api/ilg/query", Some("8.8.8.8"), Method::POST, r#"{"operation":"ping","target":"10.0.0.1"}"#, true))
                 .await
                 .status(),
             StatusCode::OK
         );
         assert_eq!(queries.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            route(&app, request("/api/ilg/query", None, Method::POST, r#"{"operation":"bgp","target":"AS65000"}"#, true)).await.status(),
+            StatusCode::OK
+        );
+        assert_eq!(queries.load(Ordering::SeqCst), 2);
         installed.store(false, Ordering::SeqCst);
         assert_eq!(
             route(&app, request("/api/ilg/query", Some("10.0.0.1"), Method::POST, "{}", true)).await.status(),
             StatusCode::NOT_FOUND
         );
-        assert_eq!(queries.load(Ordering::SeqCst), 1);
+        assert_eq!(queries.load(Ordering::SeqCst), 2);
         mock.abort();
         let _ = mock.await;
         let _ = std::fs::remove_dir_all(root);

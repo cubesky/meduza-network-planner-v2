@@ -47,8 +47,8 @@ fn serves_json_on_its_own_port_without_dashboard_and_exits_on_invalid_bind() {
     socket.write_all(b"GET /api/ilg/status HTTP/1.1\r\nHost: localhost\r\nX-Forwarded-For: 10.0.0.1\r\nConnection: close\r\n\r\n").unwrap();
     let mut response = String::new();
     socket.read_to_string(&mut response).unwrap();
-    assert!(response.starts_with("HTTP/1.1 403"), "{response}");
-    assert!(response.contains("RFC1918"));
+    assert!(response.starts_with("HTTP/1.1 404"), "{response}");
+    assert!(response.contains("install and register"), "loopback source passes to package gate: {response}");
     drop(process);
     let invalid = Command::new(env!("CARGO_BIN_EXE_meduza-np-lookingglass")).args(["serve", "--listen", "127.0.0.1:0"]).output().unwrap();
     assert!(!invalid.status.success());
@@ -94,5 +94,10 @@ fn real_plugin_executes_only_fixed_tool_arguments_and_returns_diagnostic_failure
         }
     }
     assert_eq!(invoke("ping", "10.0.0.1;touch /tmp/not-allowed")["error"]["code"], "invalid-params");
+    for operation in ["ping", "mtr", "iperf", "bgp"] {
+        for target in ["8.8.8.8", "2001:db8::1", "127.0.0.1", "::ffff:8.8.8.8"] {
+            assert_eq!(invoke(operation, target)["error"]["code"], "invalid-params", "{operation} {target}");
+        }
+    }
     std::fs::remove_dir_all(root).unwrap();
 }
