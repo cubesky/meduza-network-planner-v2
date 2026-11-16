@@ -576,8 +576,16 @@ dependencies = [
 name = "meduza-np-lookingglass"
 version = "0.1.0"
 dependencies = [
+ "bytes",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "meduza-np-plugin-sdk",
+ "meduza-np-protocol",
+ "meduza-np-runtime",
+ "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

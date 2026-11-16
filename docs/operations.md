@@ -763,19 +763,46 @@ clients. OpenVPN declares `services.frr` as consumed context. The diagnosed xuzh
 plugin exports 61 eligible routes successfully; changing client pull options or restarting the old
 Access configuration does not repair the planner validation error.
 
-### LookingGlass (`/ilg`, D107)
+### LookingGlass independent API (D107)
 
-Install `meduza-np-lookingglass` on a node and update its planner and ordinary Dashboard together.
-The package is an on-demand plugin, with no listener or background daemon. Once registered, open
-`https://<node-dashboard>/ilg` without signing in. Both the page and `/api/ilg/*` require the live
-registered package/executable; removing it makes these endpoints unavailable. Other Dashboard APIs
-still require their normal login, role and CSRF checks. The LuCI Dashboard is not this HTTP server.
+Install `meduza-np-lookingglass` and update planner. Enable LookingGlass in its package settings;
+`services.lookingglass.enabled` controls the process and `listen` defaults to `0.0.0.0:18080`.
+Planner supervises `lookingglass/api` separately from Dashboard, restarts it on failure or listener
+changes, stops it when disabled and checks its TCP port. No Dashboard package, login or webpage is
+required. The API has no `/ilg` or root page. For IPv6 listening use e.g. `[::]:18080`.
+
+The executable can also be launched manually as
+`/usr/libexec/meduza-np/plugins/lookingglass serve --listen 0.0.0.0:18080`; with no explicit argument,
+`MEDUZA_NP_LOOKINGGLASS_LISTEN` overrides its default. Do not run a manual copy alongside the
+planner-managed process on the same address. Both modes use planner's local socket under
+`MEDUZA_NP_RUN_DIR` and require live LookingGlass registration/executable presence.
+
+Endpoints on the LookingGlass port (not the Dashboard port):
+
+- `GET /api/ilg/status` — package availability.
+- `POST /api/ilg/query` — JSON `{ "operation": "ping", "target": "10.0.0.1" }`.
+  Operations are `ping`, `mtr`, `iperf`, `bgp`; BGP also accepts e.g. `AS65000`.
+
+Example from a private-network client:
+
+```sh
+curl http://NODE:18080/api/ilg/query \
+  -H 'Content-Type: application/json' \
+  -H 'X-Meduza-LookingGlass: query' \
+  -d '{"operation":"bgp","target":"AS65000"}'
+```
+
+The response has `results`, each containing `command`, `arguments`, `stdout`, `stderr`, `exitCode`,
+`timedOut` and `truncated`. Unavailable package is 404, rejected source/header is 403, invalid
+parameters are 400, busy/rate-limited is 429, and unavailable tool/planner is 503. Tool exit failure
+is a diagnostic result. When bridge networking is used, expose/publish this additional port explicitly;
+macvlan/host deployments use the configured node listener directly.
 
 Only the actual TCP peer in RFC1918 (`10/8`, `172.16/12`, `192.168/16`) or RFC4193 (`fc00::/7`)
-may access the page or its API. IPv4-mapped IPv6 peers use the IPv4 rule. Public, loopback,
+may access the API. IPv4-mapped IPv6 peers use the IPv4 rule. Public, loopback,
 link-local and CGNAT source addresses are rejected; signing in does not override this. Forwarded
 and X-Forwarded-For headers do not grant access. A reverse proxy must independently enforce this
-client-address ACL or omit `/ilg` and `/api/ilg/` from its public routes: the Dashboard sees the
+client-address ACL or omit `/api/ilg/` from its public routes: the API server sees the
 proxy's TCP address, not its original client. Direct private-network access is the normal deployment.
 
 Ping and MTR accept numeric IPv4/IPv6 addresses, never DNS names. BGP accepts a numeric ASN,
@@ -796,5 +823,7 @@ packets/10 seconds; MTR at three cycles, 16 hops/20 seconds; iperf at 12 seconds
 BGP at eight seconds per family. Each command keeps at most 128 KiB stdout and 64 KiB stderr;
 timeout, exit status and truncation are explicit results. Targets cannot specify ports, CLI options,
 shell fragments or arbitrary FRR regular expressions. Browser queries require a same-origin custom
-header and bodies are limited to 1 KiB. No diagnostic request reads or forwards node configuration
-or secrets; a first applied configuration is not required.
+header and bodies are limited to 1 KiB with a three-second read limit. No diagnostic request reads
+or forwards node configuration or secrets. Manual startup does not require an applied configuration;
+automatic startup requires the LookingGlass service to be configured and enabled. At most eight
+HTTP connections are active, with bounded headers and no persistent keep-alive.

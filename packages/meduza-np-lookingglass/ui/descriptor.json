@@ -3,9 +3,10 @@
   "package": "meduza-np-lookingglass",
   "requiresCapability": "diagnostics.lookingglass",
   "title": "LookingGlass",
+  "settings": [{"path":"services.lookingglass","title":"LookingGlass","sections":[{"title":"API","fields":["enabled","listen"]}]}],
   "status": [{"title":"LookingGlass","instanceKind":"lookingglass","columns":["state"]}],
   "i18n": {
-    "zh-Hans": {"text": {"LookingGlass": "LookingGlass"},"fields":{"state":"状态"}},
-    "zh-Hant": {"text": {"LookingGlass": "LookingGlass"},"fields":{"state":"狀態"}}
+    "zh-Hans": {"text": {"LookingGlass": "LookingGlass","API":"API"},"fields":{"state":"状态","enabled":"启用","listen":"监听地址"}},
+    "zh-Hant": {"text": {"LookingGlass": "LookingGlass","API":"API"},"fields":{"state":"狀態","enabled":"啟用","listen":"監聽位址"}}
   }
 }

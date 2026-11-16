@@ -7,6 +7,55 @@ use std::{
 };
 
 #[test]
+fn serves_json_on_its_own_port_without_dashboard_and_exits_on_invalid_bind() {
+    use std::{
+        io::Read,
+        net::{TcpListener, TcpStream},
+        time::Duration,
+    };
+    let reservation = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = reservation.local_addr().unwrap();
+    drop(reservation);
+    let root = std::env::temp_dir().join(format!("mnp-lg-listener-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    struct Stop(std::process::Child);
+    impl Drop for Stop {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let process = Stop(
+        Command::new(env!("CARGO_BIN_EXE_meduza-np-lookingglass"))
+            .args(["serve", "--listen", &address.to_string()])
+            .env("MEDUZA_NP_RUN_DIR", &root)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let mut socket = None;
+    for _ in 0..100 {
+        if let Ok(s) = TcpStream::connect(address) {
+            socket = Some(s);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let mut socket = socket.expect("independent LookingGlass port starts without Dashboard");
+    socket.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+    socket.write_all(b"GET /api/ilg/status HTTP/1.1\r\nHost: localhost\r\nX-Forwarded-For: 10.0.0.1\r\nConnection: close\r\n\r\n").unwrap();
+    let mut response = String::new();
+    socket.read_to_string(&mut response).unwrap();
+    assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+    assert!(response.contains("RFC1918"));
+    drop(process);
+    let invalid = Command::new(env!("CARGO_BIN_EXE_meduza-np-lookingglass")).args(["serve", "--listen", "127.0.0.1:0"]).output().unwrap();
+    assert!(!invalid.status.success());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn real_plugin_executes_only_fixed_tool_arguments_and_returns_diagnostic_failures_as_results() {
     let root = std::env::temp_dir().join(format!("mnp-lg-tools-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();

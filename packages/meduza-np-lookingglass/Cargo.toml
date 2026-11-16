@@ -1,11 +1,19 @@
 [package]
 name = "meduza-np-lookingglass"
 version = "0.1.0"
-description = "On-demand bounded LookingGlass network diagnostics"
+description = "Independent private-network LookingGlass API with bounded on-demand diagnostics"
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
 meduza-np-plugin-sdk.workspace = true
+meduza-np-protocol.workspace = true
+meduza-np-runtime.workspace = true
+serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+tokio = { workspace = true, features = ["rt", "macros", "time", "net", "io-util", "sync", "signal"] }
+hyper = { version = "1", default-features = false, features = ["server", "http1"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"

@@ -10,7 +10,32 @@ scheduled "continue" task) must:
 
 Design decisions live in `docs/DECISIONS.md`.
 
-### 2026-11-17 — D107: optional private-network LookingGlass
+### 2026-11-17 — D107 scope revision: independent API, no Dashboard page
+
+Per the user's clarification, remove the LookingGlass Dashboard component, locale strings, frontend
+entry/helper, Rust routes/module and peer-extension changes. Dashboard no longer provides LookingGlass
+API or a page. Move the source ACL, fixed endpoints and package-gated Unix RPC adapter into the
+LookingGlass executable itself. `serve [--listen IP:PORT]` runs a separate current-thread HTTP listener,
+default 0.0.0.0:18080 (manual environment override supported); roots and /ilg paths return JSON 404.
+
+Expose services.lookingglass enabled/listen settings/schema/translated descriptor. Planner generates
+and supervises lookingglass/api with port reservation/TCP health checking; disabled settings generate
+no process. Enabling the service, reconfiguring its port and upgrading use the normal generation owner.
+Preserve live registration, no-login/private-source ACL, header marker, 1 KiB/three-second body bound
+and planner query limits. HTTP concurrency is eight, headers 16 KiB/32 entries, keep-alive disabled;
+publish daemon footprint for package resource reporting. Update AGENT/D107/operations with independent
+port startup, configuration, bridge publication, request examples and status codes. No Dashboard
+dependency; normal configuration apply is required for automatic startup, manual serve works before it.
+
+Validation: independent binary actually listens without Dashboard and rejects spoofed loopback sources;
+API private-range/package/removal/body/header tests, configurable/disabled/invalid process plans,
+real command plugin runner, Dashboard regression, protocol manifests/schemas and release tests pass.
+Clippy, Rust formatting, i18n, Dashboard typecheck/production build and diff checks pass. Evidence:
+target/check-lookingglass-independent{,-final,-clippy}.log and check-lookingglass-api-only-i18n.log.
+The original page/browser checks below are historical and superseded by this API-only scope. No
+production deployment, external probes, Git staging/commit or publication.
+
+### 2026-11-17 — D107: optional private-network LookingGlass (initial scope, superseded above)
 
 Add meduza-np-lookingglass as the twentieth package/workspace member, protocol catalog entry and
 generic archive/OCI/native OpenWrt release target. Short-lived plugin executes fixed Ping/MTR/iperf3
@@ -564,6 +589,11 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   namespace, host LAN not announced → new `frr/main/origination` status, routerId pre-check, capability warning)
 
 ## Session log
+
+- 2026-11-17 (D107 scope revision): Remove all LookingGlass Dashboard UI/API integration and move
+  JSON API to the package's own configurable 18080 listener, supervised by planner with explicit
+  enabled/listen settings. Dedicated executable/socket/ACL/plan/package/command/release tests,
+  Clippy and Dashboard build/i18n checks pass. No deployment or Git staging/commit.
 
 - 2026-11-17 (D107): Add optional LookingGlass plugin/release package, narrowly scoped planner API
   and private-source/login-free ordinary Dashboard /ilg. Bound execution and require live package

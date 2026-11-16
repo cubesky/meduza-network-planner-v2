@@ -11,5 +11,5 @@
   "operations": ["validate", "plan", "probe", "action"],
   "schemas": {"config": "schema/config.json", "status": "schema/status.json"},
   "ui": {"descriptor": "ui/descriptor.json", "version": 1},
-  "consumes": []
+  "consumes": ["services.lookingglass"]
 }

@@ -11,7 +11,6 @@
 mod assets;
 mod auth;
 mod local;
-mod lookingglass;
 mod server;
 
 use std::net::SocketAddr;
@@ -82,7 +81,7 @@ async fn serve(
     tokio::pin!(shutdown);
     let slots = Arc::new(tokio::sync::Semaphore::new(32));
     loop {
-        let (stream, peer) = tokio::select! {
+        let (stream, _) = tokio::select! {
             r = listener.accept() => match r { Ok(x) => x, Err(_) => continue },
             _ = &mut shutdown => break,
         };
@@ -91,8 +90,7 @@ async fn serve(
         let tls = tls.clone();
         tokio::spawn(async move {
             let _permit = permit;
-            let svc = service_fn(move |mut req: hyper::Request<hyper::body::Incoming>| {
-                req.extensions_mut().insert(peer.ip());
+            let svc = service_fn(move |req| {
                 let app = app.clone();
                 async move { Ok::<_, std::convert::Infallible>(app.handle(req).await) }
             });
@@ -217,10 +215,6 @@ Connection: close
         let r = request(addr, &get("/api/session")).await;
         assert!(r.starts_with("HTTP/1.1 200"), "{r}");
         assert!(r.contains("\"authenticated\":false") && r.to_ascii_lowercase().contains("content-security-policy"), "{r}");
-        for path in ["/ilg", "/api/ilg/status", "/api/ilg/query"] {
-            let raw = format!("GET {path} HTTP/1.1\r\nHost: x\r\nX-Forwarded-For: 10.0.0.1\r\nConnection: close\r\n\r\n");
-            assert!(request(addr, &raw).await.starts_with("HTTP/1.1 403"), "loopback TCP peer cannot spoof a private source");
-        }
         assert!(request(addr, &get("/api/status")).await.starts_with("HTTP/1.1 401"));
         let index = request(addr, &get("/")).await;
         assert!(index.contains("<html>ui</html>") && index.to_ascii_lowercase().contains("cache-control: no-cache"), "{index}");

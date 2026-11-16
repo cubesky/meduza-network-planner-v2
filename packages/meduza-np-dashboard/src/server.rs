@@ -27,7 +27,7 @@ pub struct App {
     pub sessions: Mutex<Sessions>,
 }
 
-pub(crate) fn json_resp(status: StatusCode, v: &Value) -> Resp {
+fn json_resp(status: StatusCode, v: &Value) -> Resp {
     let mut r = Response::new(Full::new(Bytes::from(serde_json::to_vec(v).unwrap_or_default())));
     *r.status_mut() = status;
     r.headers_mut().insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
@@ -117,9 +117,6 @@ impl App {
 
     async fn route(&self, req: Request<Incoming>) -> Resp {
         let path = req.uri().path().to_string();
-        if path == "/ilg" || path.starts_with("/ilg/") || path == "/api/ilg" || path.starts_with("/api/ilg/") {
-            return crate::lookingglass::route(self, req).await;
-        }
         match (req.method().clone(), path.as_str()) {
             (Method::GET, "/auth/login") => self.login().await,
             (Method::GET, "/auth/callback") => self.callback(&req).await,
@@ -202,7 +199,7 @@ impl App {
         self.reply(self.local(*updater, m, params).await)
     }
 
-    pub(crate) fn reply(&self, r: Result<Value, (String, String)>) -> Resp {
+    fn reply(&self, r: Result<Value, (String, String)>) -> Resp {
         match r {
             Ok(v) => json_resp(StatusCode::OK, &v),
             Err((code, msg)) => {

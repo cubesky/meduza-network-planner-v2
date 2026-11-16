@@ -1,9 +1,102 @@
 //! Private-network, package-gated public diagnostics; only the actual TCP peer is authoritative.
-use crate::server::{App, Resp};
+
 use http_body_util::{BodyExt, Limited};
 use hyper::{Method, Request, StatusCode};
 use serde_json::{json, Value};
 use std::{net::IpAddr, time::Duration};
+
+type Resp = hyper::Response<http_body_util::Full<bytes::Bytes>>;
+pub struct App {
+    pub planner_socket: std::path::PathBuf,
+}
+
+fn json_resp(status: StatusCode, value: &Value) -> Resp {
+    hyper::Response::builder()
+        .status(status)
+        .header("content-type", "application/json")
+        .header("cache-control", "no-store")
+        .header("x-content-type-options", "nosniff")
+        .body(http_body_util::Full::new(bytes::Bytes::from(value.to_string())))
+        .unwrap()
+}
+fn not_found() -> Resp {
+    json_resp(StatusCode::NOT_FOUND, &json!({"error":"not-found"}))
+}
+impl App {
+    fn reply(&self, result: Result<Value, (String, String)>) -> Resp {
+        match result {
+            Ok(v) => json_resp(StatusCode::OK, &v),
+            Err((code, message)) => {
+                let status = match code.as_str() {
+                    "forbidden" => StatusCode::FORBIDDEN,
+                    "not-found" => StatusCode::NOT_FOUND,
+                    "invalid-params" => StatusCode::BAD_REQUEST,
+                    "busy" => StatusCode::TOO_MANY_REQUESTS,
+                    "unavailable" => StatusCode::SERVICE_UNAVAILABLE,
+                    _ => StatusCode::BAD_GATEWAY,
+                };
+                json_resp(status, &json!({"error":code,"message":message}))
+            }
+        }
+    }
+}
+
+pub async fn serve(listener: tokio::net::TcpListener, app: std::sync::Arc<App>) -> std::io::Result<()> {
+    use hyper_util::rt::{TokioIo, TokioTimer};
+    let slots = std::sync::Arc::new(tokio::sync::Semaphore::new(8));
+    loop {
+        let (stream, peer) = listener.accept().await?;
+        let Ok(permit) = slots.clone().try_acquire_owned() else { continue };
+        let app = app.clone();
+        tokio::spawn(async move {
+            let _permit = permit;
+            let service = hyper::service::service_fn(move |mut req: Request<hyper::body::Incoming>| {
+                let app = app.clone();
+                req.extensions_mut().insert(peer.ip());
+                async move { Ok::<_, std::convert::Infallible>(route(&app, req).await) }
+            });
+            let _ = hyper::server::conn::http1::Builder::new()
+                .timer(TokioTimer::new())
+                .max_buf_size(16 * 1024)
+                .max_headers(32)
+                .header_read_timeout(Duration::from_secs(5))
+                .keep_alive(false)
+                .serve_connection(TokioIo::new(stream), service)
+                .await;
+        });
+    }
+}
+
+pub fn run(listen: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let address: std::net::SocketAddr = listen.parse()?;
+    if address.port() == 0 {
+        return Err("LookingGlass requires a nonzero port".into());
+    }
+    tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(async {
+        let paths = meduza_np_runtime::paths::NodePaths::from_env();
+        let listener = tokio::net::TcpListener::bind(address).await?;
+        meduza_np_runtime::resources::publish_daemon(paths.run.clone(), "meduza-np-lookingglass");
+        eprintln!("meduza-np-lookingglass API listening on http://{address}");
+        let app = std::sync::Arc::new(App { planner_socket: paths.planner_socket() });
+        tokio::select! {
+            result = serve(listener, app) => result,
+            _ = shutdown() => Ok(()),
+        }
+    })?;
+    Ok(())
+}
+
+async fn shutdown() {
+    #[cfg(unix)]
+    {
+        let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("SIGTERM handler");
+        tokio::select! { _ = term.recv() => {}, _ = tokio::signal::ctrl_c() => {} }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = tokio::signal::ctrl_c().await;
+    }
+}
 
 fn private(ip: IpAddr) -> bool {
     match ip {
@@ -17,6 +110,9 @@ where
     B: hyper::body::Body<Data = bytes::Bytes>,
     B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
+    if !matches!(req.uri().path(), "/api/ilg/status" | "/api/ilg/query") {
+        return not_found();
+    }
     if !req.extensions().get::<IpAddr>().copied().is_some_and(private) {
         return app.reply(Err(("forbidden".into(), "LookingGlass requires an RFC1918 or RFC4193 source address".into())));
     }
@@ -25,16 +121,15 @@ where
         return app.reply(Err(("not-found".into(), "install and register meduza-np-lookingglass first".into())));
     }
     match (req.method(), req.uri().path()) {
-        (&Method::GET, "/ilg" | "/ilg/") => crate::assets::serve(&app.www, "/", req.headers()),
         (&Method::GET, "/api/ilg/status") => app.reply(Ok(json!({"available":true}))),
         (&Method::POST, "/api/ilg/query") => {
             if req.headers().get("x-meduza-lookingglass").and_then(|v| v.to_str().ok()) != Some("query") {
-                return app.reply(Err(("forbidden".into(), "use the LookingGlass page".into())));
+                return app.reply(Err(("forbidden".into(), "set X-Meduza-LookingGlass: query".into())));
             }
             let body = match tokio::time::timeout(Duration::from_secs(3), Limited::new(req.into_body(), 1024).collect()).await {
                 Ok(Ok(body)) => body.to_bytes(),
-                Ok(Err(_)) => return crate::server::json_resp(StatusCode::PAYLOAD_TOO_LARGE, &json!({"error":"too-large"})),
-                Err(_) => return crate::server::json_resp(StatusCode::REQUEST_TIMEOUT, &json!({"error":"request-timeout"})),
+                Ok(Err(_)) => return json_resp(StatusCode::PAYLOAD_TOO_LARGE, &json!({"error":"too-large"})),
+                Err(_) => return json_resp(StatusCode::REQUEST_TIMEOUT, &json!({"error":"request-timeout"})),
             };
             let params = match serde_json::from_slice::<Value>(&body) {
                 Ok(v) if v.is_object() => v,
@@ -42,13 +137,36 @@ where
             };
             app.reply(crate::local::call(&app.planner_socket, "lookingglass.query", params, Duration::from_secs(28)).await)
         }
-        _ => crate::server::not_found(),
+        _ => not_found(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn dedicated_tcp_listener_has_no_page_and_cannot_spoof_a_private_peer() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(serve(listener, std::sync::Arc::new(App { planner_socket: "/not-present/planner.sock".into() })));
+        for (path, expected) in [("/", "404"), ("/ilg", "404"), ("/api/ilg/status", "403"), ("/api/ilg/query", "403")] {
+            let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
+            socket
+                .write_all(
+                    format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nX-Forwarded-For: 10.0.0.1\r\nConnection: close\r\n\r\n").as_bytes(),
+                )
+                .await
+                .unwrap();
+            let mut out = Vec::new();
+            socket.read_to_end(&mut out).await.unwrap();
+            let text = String::from_utf8(out).unwrap();
+            assert!(text.starts_with(&format!("HTTP/1.1 {expected}")), "{text}");
+            assert!(text.to_lowercase().contains("cache-control: no-store"));
+        }
+        task.abort();
+        let _ = task.await;
+    }
     #[test]
     fn source_acl_uses_exact_private_ranges_including_mapped_v4() {
         for ip in ["10.0.0.1", "172.16.0.1", "172.31.255.254", "192.168.1.1", "fc00::1", "fd12::1", "::ffff:10.0.0.1"] {
@@ -73,27 +191,18 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
-    async fn page_and_api_require_private_peer_and_live_package_without_requiring_login() {
+    async fn api_requires_private_peer_and_live_package_without_requiring_login_and_has_no_page() {
         use bytes::Bytes;
         use http_body_util::Full;
         use std::sync::{
             atomic::{AtomicBool, AtomicUsize, Ordering},
-            Arc, Mutex,
+            Arc,
         };
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
         let root = std::env::temp_dir().join(format!("mnp-ilg-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("index.html"), "<html>LookingGlass UI</html>").unwrap();
-        let app = App {
-            www: root.clone(),
-            planner_socket: root.join("planner.sock"),
-            updater_socket: root.join("updater.sock"),
-            run_dir: root.clone(),
-            public_url: None,
-            secure_cookies: false,
-            sessions: Mutex::new(crate::auth::Sessions::default()),
-        };
+        let app = App { planner_socket: root.join("planner.sock") };
         let socket = tokio::net::UnixListener::bind(&app.planner_socket).unwrap();
         let installed = Arc::new(AtomicBool::new(false));
         let queries = Arc::new(AtomicUsize::new(0));
@@ -134,14 +243,20 @@ mod tests {
             }
             req
         };
-        for path in ["/ilg", "/ilg/", "/api/ilg/status", "/api/ilg/query"] {
+        for path in ["/ilg", "/ilg/", "/ilg/example"] {
+            for peer in [None, Some("8.8.8.8"), Some("10.42.0.1")] {
+                assert_eq!(route(&app, request(path, peer, Method::GET, "", true)).await.status(), StatusCode::NOT_FOUND);
+            }
+        }
+        for path in ["/api/ilg/status", "/api/ilg/query"] {
             for peer in [None, Some("8.8.8.8"), Some("127.0.0.1"), Some("::ffff:8.8.8.8")] {
                 assert_eq!(route(&app, request(path, peer, Method::GET, "", true)).await.status(), StatusCode::FORBIDDEN);
             }
             assert_eq!(route(&app, request(path, Some("10.42.0.1"), Method::GET, "", true)).await.status(), StatusCode::NOT_FOUND);
         }
         installed.store(true, Ordering::SeqCst);
-        assert_eq!(route(&app, request("/ilg", Some("fd00::1"), Method::GET, "", false)).await.status(), StatusCode::OK);
+        assert_eq!(route(&app, request("/ilg", Some("fd00::1"), Method::GET, "", false)).await.status(), StatusCode::NOT_FOUND);
+        assert_eq!(route(&app, request("/api/ilg/status", Some("fd00::1"), Method::GET, "", false)).await.status(), StatusCode::OK);
         assert_eq!(route(&app, request("/api/ilg/status", Some("10.0.0.1"), Method::GET, "", false)).await.status(), StatusCode::OK);
         assert_eq!(
             route(&app, request("/api/ilg/query", Some("10.0.0.1"), Method::POST, "{}", false)).await.status(),
