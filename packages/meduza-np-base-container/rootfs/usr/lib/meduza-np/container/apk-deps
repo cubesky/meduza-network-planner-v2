@@ -8,4 +8,6 @@ meduza-np-frr         frr
 meduza-np-dnsmasq     dnsmasq
 meduza-np-avahi       avahi dbus
 meduza-np-lookingglass iputils mtr iperf3
+skip-if meduza-np-mtr-pkg mtr
+skip-if meduza-np-iperf3-pkg iperf3
 skip-if meduza-np-openvpn-pkg openvpn

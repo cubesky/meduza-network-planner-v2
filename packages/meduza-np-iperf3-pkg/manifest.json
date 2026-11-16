@@ -1,0 +1,7 @@
+{
+  "manifestVersion":1,"package":"meduza-np-iperf3-pkg","version":"0.1.0","role":"binary-provider",
+  "plannerApi":{"min":1,"max":1},"requires":["meduza-np-planner"],"conflicts":[],"provides":["iperf3.binary"],
+  "providers":[{"slot":"iperf3.binary","binary":"/usr/lib/meduza-np/providers/iperf3/bin/iperf3","versionArgs":["--version"]}],
+  "schemas":{"config":"schema/config.json","status":"schema/status.json"},
+  "ui":{"descriptor":"ui/descriptor.json","version":1}
+}

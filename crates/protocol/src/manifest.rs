@@ -36,6 +36,8 @@ pub const ALL_PACKAGES: &[&str] = &[
     "meduza-np-avahi",
     "meduza-np-tinc",
     "meduza-np-lookingglass",
+    "meduza-np-mtr-pkg",
+    "meduza-np-iperf3-pkg",
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]

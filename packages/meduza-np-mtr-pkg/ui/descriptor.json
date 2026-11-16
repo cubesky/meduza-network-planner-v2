@@ -1,0 +1,9 @@
+{
+  "uiVersion":1,"package":"meduza-np-mtr-pkg","requiresCapability":"mtr.binary","title":"MTR binary resource",
+  "settings":[{"path":"services.mtr-pkg","title":"Installation request","sections":[{"title":"Component","fields":["enabled"]}]}],
+  "status":[{"title":"Binary status","instanceKind":"mtr-provider","columns":["state","packageVersion","upstreamVersion","activeSource","path","reason"]}],
+  "i18n":{
+    "zh-Hans":{"text":{"MTR binary resource":"MTR 本体资源","Installation request":"安装请求","Component":"组件","Binary status":"本体状态"},"fields":{"enabled":"申请安装本体包","state":"状态","packageVersion":"组件包版本","upstreamVersion":"本体版本","activeSource":"实际 provider","path":"本体路径","reason":"原因"}},
+    "zh-Hant":{"text":{"MTR binary resource":"MTR 本體資源","Installation request":"安裝請求","Component":"元件","Binary status":"本體狀態"},"fields":{"enabled":"申請安裝本體套件","state":"狀態","packageVersion":"元件套件版本","upstreamVersion":"本體版本","activeSource":"實際 provider","path":"本體路徑","reason":"原因"}}
+  }
+}

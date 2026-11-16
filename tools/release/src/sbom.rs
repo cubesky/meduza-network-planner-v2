@@ -689,6 +689,13 @@ D:ca-certificates-bundle so:libc.musl-ARCH.so.1 !curl-legacy so:libmissing.so.1
         assert_eq!(m["purl"], "pkg:github/irinesistiana/mosdns@v5.3.4");
         assert_eq!(m["licenses"][0]["expression"], "GPL-3.0-or-later");
         assert!(names(&mosdns).contains("go-stdlib"));
+        let mtr = build(&ctx, "meduza-np-mtr-pkg", "0.1.0", ts, None).unwrap();
+        let source = mtr["components"].as_array().unwrap().iter().find(|c| c["name"] == "mtr").unwrap();
+        assert_eq!(source["version"], "0.96");
+        assert_eq!(source["hashes"][0]["alg"], "SHA-256");
+        let iperf3 = build(&ctx, "meduza-np-iperf3-pkg", "0.1.0", ts, None).unwrap();
+        assert!(names(&iperf3).contains("iperf3"));
+        assert!(names(&iperf3).contains("openssl"));
         let ovpn = build(&ctx, "meduza-np-openvpn-pkg", "0.1.0", ts, None).unwrap();
         let ssl = ovpn["components"].as_array().unwrap().iter().find(|c| c["name"] == "openssl").unwrap();
         assert_eq!(ssl["hashes"][0]["alg"], "SHA-256");

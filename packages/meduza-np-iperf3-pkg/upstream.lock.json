@@ -1,0 +1,10 @@
+{
+  "lockVersion":1,"package":"meduza-np-iperf3-pkg",
+  "builder":{"image":"docker.io/library/alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a","apk":["build-base","linux-headers","perl","pkgconf","curl","jq","binutils"]},
+  "sources":[
+    {"name":"iperf3","version":"3.22","url":"https://downloads.es.net/pub/iperf/iperf-3.22.tar.gz","sha256":"1c0d0fb02c52626111d6e132db80edfbf27bbaff8bd9245df2a371dcb0b35a92","license":"BSD-3-Clause","licenseFiles":["LICENSE"]},
+    {"name":"openssl","version":"3.5.9","url":"https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz","sha256":"603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a","license":"Apache-2.0","licenseFiles":["LICENSE.txt"]}
+  ],
+  "verifiedAt":"2026-11-17",
+  "verificationNotes":["Official iperf3 source archive downloaded and SHA-256 computed locally; OpenSSL digest matches the existing verified OpenVPN provider pin.","OpenSSL support is mandatory: HAVE_SSL and the authentication version feature are checked, then RSA-authenticated loopback transfer and wrong-password rejection are exercised. No background server is installed or enabled."]
+}

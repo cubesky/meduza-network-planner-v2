@@ -295,7 +295,7 @@ mod tests {
     fn static_provider_resources_resolve_without_an_adapter_and_report_real_status() {
         let dir = std::env::temp_dir().join(format!("mnp-report-static-providers-{}", std::process::id()));
         let binary = std::env::current_exe().unwrap();
-        for (name, version) in [("mosdns", "v5.3.4"), ("openvpn", "2.7.8")] {
+        for (name, version) in [("mosdns", "v5.3.4"), ("openvpn", "2.7.8"), ("mtr", "0.96"), ("iperf3", "3.22")] {
             let package = format!("meduza-np-{name}-pkg");
             let root = dir.join(&package);
             std::fs::create_dir_all(&root).unwrap();
@@ -315,8 +315,16 @@ mod tests {
         let mut registry = crate::registry::scan(&dir, &meduza_np_plugin_sdk::Platform::default());
         assert_eq!(registry.providers["mosdns.binary"].source, "meduza-np-mosdns-pkg", "standalone resources register their own slots");
         assert_eq!(registry.providers["openvpn.binary"].source, "meduza-np-openvpn-pkg");
+        assert_eq!(registry.providers["mtr.binary"].source, "meduza-np-mtr-pkg");
+        assert_eq!(registry.providers["iperf3.binary"].source, "meduza-np-iperf3-pkg");
         let statuses = binary_provider_statuses(&registry);
-        assert_eq!(statuses.len(), 2);
+        assert_eq!(statuses.len(), 4);
+        let iperf3 = statuses.iter().find(|s| s.kind == "iperf3-provider").unwrap();
+        assert_eq!(iperf3.state, ServiceState::Up);
+        assert_eq!(iperf3.detail["upstreamVersion"], "3.22");
+        let mtr = statuses.iter().find(|s| s.kind == "mtr-provider").unwrap();
+        assert_eq!(mtr.state, ServiceState::Up);
+        assert_eq!(mtr.detail["upstreamVersion"], "0.96");
         let mosdns = statuses.iter().find(|s| s.kind == "mosdns-provider").unwrap();
         assert_eq!(mosdns.state, ServiceState::Up);
         assert_eq!(mosdns.detail["packageVersion"], "0.2.0");

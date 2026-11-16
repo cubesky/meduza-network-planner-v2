@@ -1,4 +1,4 @@
-use meduza_np_plugin_sdk::{run, run_status_command, PlanResult, Plugin, PluginError, PluginRequest, ProbeResult, ValidateResult};
+use meduza_np_plugin_sdk::{run, run_status_command_with_env, PlanResult, Plugin, PluginError, PluginRequest, ProbeResult, ValidateResult};
 use serde_json::{json, Value};
 use std::{net::IpAddr, path::PathBuf, time::Duration};
 mod local;
@@ -65,7 +65,23 @@ fn commands(params: &Value) -> Result<Vec<(String, Vec<String>, u64)>, PluginErr
         };
         return Ok(families
             .iter()
-            .map(|f| ("vtysh".into(), vec!["-N".into(), "meduza".into(), "-c".into(), format!("show bgp {f} unicast {selector}")], 8))
+            .map(|f| {
+                (
+                    "vtysh".into(),
+                    vec![
+                        "-u".into(),
+                        "-N".into(),
+                        "meduza".into(),
+                        "-d".into(),
+                        "bgpd".into(),
+                        "-H".into(),
+                        "/dev/null".into(),
+                        "-c".into(),
+                        format!("show bgp {f} unicast {selector}"),
+                    ],
+                    8,
+                )
+            })
             .collect());
     }
     let ip = ip.ok_or_else(invalid)?;
@@ -86,6 +102,49 @@ fn binary(name: &str) -> Option<PathBuf> {
         .chain(["/usr/bin", "/usr/sbin", "/bin", "/sbin"].map(PathBuf::from))
         .map(|p| p.join(name))
         .find(|p| p.is_file())
+}
+
+fn executable(req: &PluginRequest, name: &str) -> Result<(PathBuf, Option<PathBuf>), PluginError> {
+    if name == "iperf3" {
+        if let Some(provider) = req.providers.get("iperf3.binary") {
+            let path = PathBuf::from(&provider.path);
+            if !path.is_file() {
+                return Err(PluginError::new("unavailable", "iperf3 provider binary is missing; repair meduza-np-iperf3-pkg"));
+            }
+            return Ok((path, None));
+        }
+        if req.context.capabilities.iter().any(|c| c == "iperf3.binary") {
+            return Err(PluginError::new("unavailable", "installed iperf3 provider is unavailable; no system fallback"));
+        }
+    }
+    if name == "mtr" {
+        if let Some(provider) = req.providers.get("mtr.binary") {
+            let path = PathBuf::from(&provider.path);
+            if provider.source != "system" {
+                let helper = path.parent().unwrap_or(std::path::Path::new("/")).join("mtr-packet");
+                if !path.is_file() || !helper.is_file() {
+                    return Err(PluginError::new("unavailable", "packaged mtr or mtr-packet is missing; reinstall meduza-np-mtr-pkg"));
+                }
+                return Ok((path, Some(helper)));
+            }
+            return Ok((path, None));
+        }
+        if req.context.capabilities.iter().any(|c| c == "mtr.binary") {
+            return Err(PluginError::new("unavailable", "installed MTR provider is unavailable; no system fallback"));
+        }
+    }
+    if name == "vtysh" {
+        if let Some(path) = req
+            .providers
+            .get("frr.daemons")
+            .and_then(|p| std::path::Path::new(&p.path).parent())
+            .map(|dir| dir.join("vtysh"))
+            .filter(|p| p.is_file())
+        {
+            return Ok((path, None));
+        }
+    }
+    binary(name).map(|p| (p, None)).ok_or_else(|| PluginError::new("unavailable", format!("install system tool {name} on this node")))
 }
 
 impl Plugin for LookingGlass {
@@ -129,15 +188,40 @@ impl Plugin for LookingGlass {
         }
         let mut results = Vec::new();
         for (name, args, seconds) in commands(&req.params)? {
-            let executable =
-                binary(&name).ok_or_else(|| PluginError::new("unavailable", format!("install system tool {name} on this node")))?;
-            let output = run_status_command(
+            let (executable, helper) = executable(req, &name)?;
+            let helper = helper.map(|p| p.to_string_lossy().into_owned());
+            let env = helper.as_deref().map(|path| vec![("MTR_PACKET", path)]).unwrap_or_default();
+            let output = run_status_command_with_env(
                 &executable.to_string_lossy(),
                 &args.iter().map(String::as_str).collect::<Vec<_>>(),
+                &env,
                 Duration::from_secs(seconds),
                 128 * 1024,
             )
             .map_err(|e| PluginError::new("unavailable", e.to_string()))?;
+            if name == "vtysh" {
+                let diagnostic = format!("{}\n{}", output.stderr, output.stdout).to_ascii_lowercase();
+                if [
+                    "processing failure",
+                    "can't open configuration file",
+                    "failed to connect",
+                    "% unknown command",
+                    "% ambiguous command",
+                    "% command incomplete",
+                ]
+                .iter()
+                .any(|marker| diagnostic.contains(marker))
+                    || (output.status == Some(0) && output.stdout.trim().is_empty() && !output.stderr.trim().is_empty())
+                {
+                    return Err(PluginError::new(
+                        "bgp-query-failed",
+                        format!(
+                            "vtysh failed: {}",
+                            format!("{} {}", output.stderr, output.stdout).trim().chars().take(800).collect::<String>()
+                        ),
+                    ));
+                }
+            }
             results.push(json!({"command":name,"arguments":args,"exitCode":output.status,"timedOut":output.timed_out,
                 "truncated":output.stdout.len() >= 128 * 1024 || output.stderr.len() >= 64 * 1024,"stdout":output.stdout,"stderr":output.stderr}));
         }

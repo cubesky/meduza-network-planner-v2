@@ -1,0 +1,7 @@
+{
+  "lockVersion":1,"package":"meduza-np-mtr-pkg",
+  "builder":{"image":"docker.io/library/alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a","apk":["build-base","linux-headers","pkgconf","curl","jq","binutils"]},
+  "sources":[{"name":"mtr","version":"0.96","url":"https://www.bitwizard.nl/mtr/files/mtr-0.96.tar.gz","sha256":"ffd19a9f8d5f616c1ea2f0da9fbf9d1239bcecdf5a68912e831966d20929037a","license":"GPL-2.0-only","licenseFiles":["COPYING","BSDCOPYING"]}],
+  "verifiedAt":"2026-11-17",
+  "verificationNotes":["Official upstream release tarball downloaded and SHA-256 computed locally; version v0.96 corresponds to upstream Git commit f392168771570b0fdc104c38dea6bbc2ce585710.","Build headless/report-only static musl mtr and its matching mtr-packet; no setuid or file capabilities are installed. Execution uses planner's existing privileges."]
+}

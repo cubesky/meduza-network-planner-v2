@@ -24,6 +24,14 @@ pub async fn query(p: &Arc<Planner>, params: Value) -> Result<Value, (String, St
         .ok_or_else(|| err("not-found", "LookingGlass is not installed and registered".into()))?;
     let program =
         reg.plugin_path(pkg).filter(|path| path.is_file()).ok_or_else(|| err("not-found", "LookingGlass executable unavailable".into()))?;
+    for (operation, package, slot) in [("mtr", "meduza-np-mtr-pkg", "mtr.binary"), ("iperf", "meduza-np-iperf3-pkg", "iperf3.binary")] {
+        if params.get("operation").and_then(Value::as_str) == Some(operation)
+            && reg.get(package).is_some()
+            && (!reg.get(package).is_some_and(|p| p.registered()) || !reg.providers.contains_key(slot))
+        {
+            return Err(err("unavailable", format!("installed provider is unavailable; repair {package} before querying")));
+        }
+    }
     let _permit = SLOT.try_acquire().map_err(|_| err("busy", "another LookingGlass query is running".into()))?;
     {
         let mut last = LAST_QUERY.lock().unwrap();
@@ -42,7 +50,12 @@ pub async fn query(p: &Arc<Planner>, params: Value) -> Result<Value, (String, St
         operation: "action".into(),
         config,
         instance: None,
-        providers: Default::default(),
+        providers: reg
+            .providers
+            .iter()
+            .filter(|(slot, _)| matches!(slot.as_str(), "mtr.binary" | "iperf3.binary" | "frr.daemons"))
+            .map(|(slot, provider)| (slot.clone(), provider.clone()))
+            .collect(),
         context: PluginContext {
             generation_root: p.paths.current_generation_link().to_string_lossy().into_owned(),
             state_dir: p.paths.state.to_string_lossy().into_owned(),
@@ -103,6 +116,21 @@ mod tests {
             serde_json::from_str(include_str!("../../meduza-np-lookingglass/manifest.json")).unwrap();
         manifest.entrypoint = Some(program.to_string_lossy().into_owned());
         let mut registry = Registry::default();
+        for (slot, source) in [
+            ("mtr.binary", "meduza-np-mtr-pkg"),
+            ("iperf3.binary", "meduza-np-iperf3-pkg"),
+            ("frr.daemons", "system"),
+            ("unrelated.binary", "other"),
+        ] {
+            registry.providers.insert(
+                slot.into(),
+                meduza_np_plugin_sdk::ResolvedProvider {
+                    path: program.to_string_lossy().into_owned(),
+                    source: source.into(),
+                    version: None,
+                },
+            );
+        }
         registry.packages.insert(
             "meduza-np-lookingglass".into(),
             Package {
@@ -125,6 +153,29 @@ mod tests {
         assert!(req["config"].get("secrets").is_none());
         assert_eq!(req["config"]["node"]["id"], "lookingglass", "does not forward the node configuration");
         assert_eq!(req["params"], json!({"action":"query","operation":"ping","target":"10.0.0.1"}));
+        assert_eq!(req["providers"]["mtr.binary"]["source"], "meduza-np-mtr-pkg");
+        assert_eq!(req["providers"]["iperf3.binary"]["source"], "meduza-np-iperf3-pkg");
+        assert_eq!(req["providers"]["frr.daemons"]["source"], "system");
+        assert!(req["providers"].get("unrelated.binary").is_none());
+        let mut broken_registry = (*p.registry()).clone();
+        broken_registry.providers.remove("iperf3.binary");
+        broken_registry.packages.insert(
+            "meduza-np-iperf3-pkg".into(),
+            Package {
+                manifest: serde_json::from_str(include_str!("../../meduza-np-iperf3-pkg/manifest.json")).unwrap(),
+                dir: root.clone(),
+                manifest_digest: String::new(),
+                ui_digest: None,
+                state: meduza_np_protocol::report::RegistrationState::Registered,
+                reason_code: None,
+                reason: None,
+            },
+        );
+        assert_eq!(
+            query(&make(broken_registry), json!({"operation":"iperf","target":"10.0.0.1"})).await.unwrap_err().0,
+            "unavailable",
+            "installed but unresolved iperf provider fails before query dispatch"
+        );
         assert_eq!(query(&p, json!({})).await.unwrap_err().0, "busy");
         *LAST_QUERY.lock().unwrap() = None;
         let permit = SLOT.try_acquire().unwrap();

@@ -299,10 +299,31 @@ pub fn run_status_command(program: &str, args: &[&str], timeout: Duration, max_o
     run_plan_command(program, args, timeout, max_output)
 }
 
+/// Read-only command with trusted, operation-specific environment (e.g. a packaged mtr-packet helper).
+pub fn run_status_command_with_env(
+    program: &str,
+    args: &[&str],
+    env: &[(&str, &str)],
+    timeout: Duration,
+    max_output: usize,
+) -> std::io::Result<CommandOutput> {
+    run_command(program, args, env, timeout, max_output)
+}
+
 /// Bounded native command for a runner explicitly launched and owned by a generation plan.
 /// Mutating commands must never be called from plugin validate/plan/probe operations.
 pub fn run_plan_command(program: &str, args: &[&str], timeout: Duration, max_output: usize) -> std::io::Result<CommandOutput> {
-    let mut child = Command::new(program).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn()?;
+    run_command(program, args, &[], timeout, max_output)
+}
+
+fn run_command(program: &str, args: &[&str], env: &[(&str, &str)], timeout: Duration, max_output: usize) -> std::io::Result<CommandOutput> {
+    let mut child = Command::new(program)
+        .args(args)
+        .envs(env.iter().copied())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
     let mut stdout = child.stdout.take().expect("piped");
     let mut stderr = child.stderr.take().expect("piped");
     let out_reader = std::thread::spawn(move || {

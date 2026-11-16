@@ -14,8 +14,13 @@ fn vtysh_result(req: &PluginRequest, cmd: &str) -> Result<Value, String> {
     // vtysh lives in /usr/bin on most systems, next to the daemons on some builds.
     let candidates = [dir.join("vtysh"), "/usr/bin/vtysh".into(), "/usr/sbin/vtysh".into()];
     let vtysh = candidates.iter().find(|p| p.exists()).ok_or("vtysh unavailable")?;
-    let out = run_status_command(&vtysh.to_string_lossy(), &["-N", frr::PATHSPACE, "-c", cmd], Duration::from_secs(5), 4 * 1024 * 1024)
-        .map_err(|e| e.to_string())?;
+    let out = run_status_command(
+        &vtysh.to_string_lossy(),
+        &["-u", "-N", frr::PATHSPACE, "-H", "/dev/null", "-c", cmd],
+        Duration::from_secs(5),
+        4 * 1024 * 1024,
+    )
+    .map_err(|e| e.to_string())?;
     if out.timed_out {
         return Err("query timed out".into());
     }
@@ -232,7 +237,7 @@ mod access_tests {
         let dir = std::env::temp_dir().join(format!("mnp-frr-access-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let program = dir.join("vtysh");
-        std::fs::write(&program, "#!/bin/sh\n[ \"$*\" = '-N meduza -c show ip route json' ] || exit 2\nprintf '%s\\n' '{\"192.0.2.0/24\":[{\"protocol\":\"bgp\",\"selected\":true,\"installed\":true}]}'\n").unwrap();
+        std::fs::write(&program, "#!/bin/sh\n[ \"$*\" = '-u -N meduza -H /dev/null -c show ip route json' ] || exit 2\nprintf '%s\\n' '{\"192.0.2.0/24\":[{\"protocol\":\"bgp\",\"selected\":true,\"installed\":true}]}'\n").unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
         let mut req = meduza_np_plugin_sdk::test_request("action", json!({"services":{"frr":{"localAsn":65001}}}));
         req.params = json!({"action":"access-routes"});

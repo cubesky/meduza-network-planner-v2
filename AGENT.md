@@ -66,13 +66,13 @@ flowchart TB
 
 ### 2.2 进程数量原则
 
-本项目提供 20 种可选分发包，不要求全部安装。只安装的包才参与功能注册；未安装包不加载插件、不执行探测、不启动进程、不生成配置，也不占用对应运行队列/缓存。服务插件和 `-pkg` 包默认不启动自己的常驻控制 daemon：planner 按需调用已注册插件执行校验、生成、探测，再直接监督实际软件进程。额外常驻进程必须有必要性与资源测量。
+本项目提供 22 种可选分发包，不要求全部安装。只安装的包才参与功能注册；未安装包不加载插件、不执行探测、不启动进程、不生成配置，也不占用对应运行队列/缓存。服务插件和 `-pkg` 包默认不启动自己的常驻控制 daemon：planner 按需调用已注册插件执行校验、生成、探测，再直接监督实际软件进程。额外常驻进程必须有必要性与资源测量。
 
 所有节点端任务都必须有超时、取消和并发上限。配置接收、心跳、Access 鉴权、升级协调不能被某个服务等待阻塞。为这些控制通道预留执行容量，不能让日志/规则下载/探测任务耗尽全部 worker。
 
 ## 3. 包清单与边界
 
-下表原有 19 个包加 LookingGlass，共 20 个包，均是独立可分发单位。它们构成可选功能目录，不能将这张表直接变成任何节点/manager 的全量安装依赖。
+下表原有 19 个包加 LookingGlass、MTR provider 和 iperf3 SSL provider，共 22 个包，均是独立可分发单位。它们构成可选功能目录，不能将这张表直接变成任何节点/manager 的全量安装依赖。
 
 | 包 | 职责 | 运行和注册边界 |
 | --- | --- | --- |
@@ -95,7 +95,9 @@ flowchart TB
 | `meduza-np-base-container` | 基于 Alpine Linux 的容器运行基础，默认包含 updater，按环境变量自动获取并启用所选节点组件 | 发布可直接使用的基础 OCI 运行镜像与部署入口；默认 bridge，支持 host；updater 自动下载 planner/选定包，不预装全部业务功能 |
 | `meduza-np-avahi` | mDNS 解析与必要的发现/转发集成 | 默认系统 Avahi，按需系统 D-Bus；不强制安装到每个节点 |
 | `meduza-np-tinc` | 覆盖网络、节点公钥、hosts 与配置生成、Tinc Peer 可达状态 | 默认系统 Tinc；注册后提供覆盖网络能力 |
-| `meduza-np-lookingglass` | 按需 Ping/MTR/iPerf3 客户端测速、按 ASN/IP 查询 FRR BGP 路由 | 独立端口 JSON API，不依赖 Dashboard 或提供网页；通过 services.lookingglass 启停/配置监听，默认 0.0.0.0:18080，planner 监督；API 不限制客户端来源，要求包已注册且无需登录；所有 IP 目标仅允许 RFC1918/RFC4193，HTTP 与执行层均校验并规范化映射 IPv4，保留本地 ASN 查询；固定参数、时限、输出上限及单任务并发 |
+| `meduza-np-lookingglass` | 按需 Ping/MTR/iPerf3 客户端测速、按 ASN/IP 查询 FRR BGP 路由 | 独立端口 JSON API，不依赖 Dashboard 或提供网页；通过 services.lookingglass 启停/配置监听，默认 0.0.0.0:18080，planner 监督；API 不限制客户端来源，要求包已注册且无需登录；所有 IP 目标仅允许 RFC1918/RFC4193，HTTP 与执行层均校验并规范化映射 IPv4，保留本地 ASN 查询；固定参数、时限、输出上限及单任务并发；优先使用已注册 MTR provider，FRR 查询使用只读 vtysh 模式 |
+| `meduza-np-mtr-pkg` | 提供固定版本的静态 MTR 与匹配的 mtr-packet helper | 无常驻进程；注册 mtr.binary，LookingGlass 优先使用并固定 MTR_PACKET 指向同包 helper；不覆盖系统命令，安装但损坏时明确报错而不偷偷回退系统版本 |
+| `meduza-np-iperf3-pkg` | 提供启用 OpenSSL 的静态 iperf3（iperf3-ssl 能力） | 无常驻进程；注册 iperf3.binary，LookingGlass 优先使用；不覆盖系统命令或自动开启测速服务端；强制检查 OpenSSL/RSA 认证能力，安装但损坏时不回退系统版本 |
 
 ### 3.1 服务插件与本体 provider
 

@@ -2673,3 +2673,52 @@ Verify the dedicated executable opens its own configurable port without Dashboar
 served, disabled plans contain no process, and invalid listen values are rejected. The original
 page and its frontend assets/translations are removed. Rust, schema, release, i18n, Clippy and
 Dashboard build checks are recorded in PROGRESS.md.
+
+## D108 — read-only FRR queries and static MTR provider (2026-11-17)
+
+Read-only diagnosis of .9 reproduces LookingGlass BGP exit=0/empty stdout while vtysh reports missing
+/etc/frr/meduza/vtysh.conf and integrated-config processing failure. `-u` skips vtysh configuration
+processing and removes privileged command mode; retain pathspace meduza, restrict LookingGlass to
+bgpd and disable history with -H /dev/null. Apply read-only mode to the existing FRR plugin as well.
+Known ASN65024 yields 53 routes / 241 paths; ASN65001 legitimately has no match. Detect configuration,
+CLI and connection error markers (including zero-exit empty-output errors) as bgp-query-failed.
+
+Add meduza-np-mtr-pkg as package 21, a normal optional static binary provider (mtr.binary), no daemon
+or system command replacement. Lock official MTR 0.96 source by SHA-256; build static musl mtr and
+the matching mtr-packet, without GTK/curses/jansson/IP-info dependencies. Ship both binaries, licenses
+and source/build metadata through generic/OCI/ipk/apk distribution and the provider Actions matrix.
+Never add upstream install-hook setuid/file capabilities. Runtime root/CAP_NET_RAW remains required.
+
+Planner passes only the relevant MTR/FRR provider entries to LookingGlass actions. Prefer packaged
+MTR and set trusted MTR_PACKET per command; a broken installed package/helper cannot silently select
+system MTR. Retain system fallback only without an installed provider. Find vtysh beside a resolved
+FRR provider before standard paths. Keep source-unrestricted/private-target API policy and all bounds.
+Extend the SDK bounded command runner with explicit trusted environment entries, preserving existing
+call behavior. Container dependency selection skips the system mtr package when this provider exists.
+
+Tests cover actual plugin argv/provider/helper environment, no fallback on helper loss, zero-exit FRR
+errors versus legitimate empty matches, forwarding/provider resource status, pinned recipes, build
+and release/SBOM/native layouts, plus translations. Local static musl compilation passes; the isolated
+build environment cannot open raw sockets and .45 is offline, so functional packet smoke remains a
+runtime acceptance item. No changes or new package deployment on .9; live queries were read-only.
+
+## D109 — static OpenSSL-enabled iperf3 provider (2026-11-17)
+
+Add optional package 22, meduza-np-iperf3-pkg, providing iperf3.binary without a daemon or system
+command replacement. Pin official iperf3 3.22 and OpenSSL 3.5.9 sources by SHA-256. Build static
+musl with mandatory OpenSSL authentication support, equivalent to the iperf3-ssl variant. Check
+HAVE_SSL, version authentication feature, ELF architecture and absence of dynamic dependencies.
+The build smoke uses throwaway RSA keys and a 128 KiB loopback UDP transfer over an authenticated
+control connection, verifying actual server authentication success and wrong-password rejection.
+Do not ship the build-only OpenSSL CLI, credentials or keys. Include licenses and build metadata.
+
+Planner forwards the resolved iperf3 provider to LookingGlass and reports its resource/version status.
+LookingGlass prefers that provider; installed but unresolved or missing binaries fail explicitly
+instead of falling back to a system binary. System fallback remains available without the package.
+Keep existing API/private-target restrictions and bounded execution unchanged. OpenSSL support does
+not change the standalone HTTP API into HTTPS or add credentials to its fixed client operation.
+
+Integrate the package into translated resource management, recipe validation, generic archives,
+distribution OCI, native OpenWrt ipk/apk, SBOM and the three-platform provider build matrix. Base
+container dependency selection skips system iperf3 when this provider is selected. Installing the
+provider does not start an iperf3 server or force LookingGlass installation.

@@ -65,13 +65,15 @@ pub const ARCHIVE_PACKAGES: &[&str] = &[
     "meduza-np-mihomo-pkg",
     "meduza-np-avahi",
     "meduza-np-lookingglass",
+    "meduza-np-mtr-pkg",
+    "meduza-np-iperf3-pkg",
     "meduza-np-dashboard",
 ];
 
 pub const PLATFORMS: &[&str] = &["linux/amd64", "linux/arm64", "linux/arm/v7"];
 
 /// Packages recipes build (not cargo).
-pub const PROVIDER_RECIPES: &[&str] = &["meduza-np-openvpn-pkg", "meduza-np-mosdns-pkg"];
+pub const PROVIDER_RECIPES: &[&str] = &["meduza-np-openvpn-pkg", "meduza-np-mosdns-pkg", "meduza-np-mtr-pkg", "meduza-np-iperf3-pkg"];
 
 /// Every package with a release artifact: generic archives, OpenWrt packages and runtime images.
 pub fn distributed() -> Vec<&'static str> {

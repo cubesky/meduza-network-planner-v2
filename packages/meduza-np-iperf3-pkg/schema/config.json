@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"iperf3 SSL binary package","type":"object","properties":{"enabled":{"type":"boolean","default":true}},"additionalProperties":false}

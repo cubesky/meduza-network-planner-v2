@@ -39,6 +39,8 @@ pub const OPENWRT_PACKAGES: &[&str] = &[
     "meduza-np-mihomo-openwrt",
     "meduza-np-avahi",
     "meduza-np-lookingglass",
+    "meduza-np-mtr-pkg",
+    "meduza-np-iperf3-pkg",
     "meduza-np-dashboard-openwrt",
 ];
 

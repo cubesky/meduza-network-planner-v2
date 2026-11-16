@@ -36,7 +36,15 @@ fn built_providers() -> Vec<(PathBuf, PackageManifest)> {
 fn built_provider_packages_exist() {
     let mut names: Vec<String> = built_providers().into_iter().map(|(_, m)| m.package).collect();
     names.sort();
-    assert_eq!(names, vec!["meduza-np-mosdns-pkg".to_string(), "meduza-np-openvpn-pkg".to_string()]);
+    assert_eq!(
+        names,
+        vec![
+            "meduza-np-iperf3-pkg".to_string(),
+            "meduza-np-mosdns-pkg".to_string(),
+            "meduza-np-mtr-pkg".to_string(),
+            "meduza-np-openvpn-pkg".to_string()
+        ]
+    );
 }
 
 #[test]

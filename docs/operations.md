@@ -815,11 +815,44 @@ this package does not install/configure a BGP daemon or change routes. iPerf is 
 mode: the target must run a server on TCP 5201; one stream runs for five seconds. It measures
 node-to-target throughput, not browser-to-node throughput, and never starts an iperf server.
 
-Use the system's `ping` (iputils), `mtr`, `iperf3`, and, for BGP, `vtysh` from the existing FRR
-installation. Missing tools are reported per query instead of disabling the whole package. Native
-OpenWrt users can install `iputils-ping mtr iperf3` through their own opkg/apk repositories as needed;
-these tools are not bundled into project archives or forcibly installed as a full FRR dependency.
-The base container adds Alpine `iputils mtr iperf3` only when LookingGlass is selected/installed.
+Use system `ping` (iputils) and `vtysh` from the existing FRR installation. Install the
+optional `meduza-np-mtr-pkg` for a static MTR with its matching packet helper. Update planner and
+LookingGlass together: planner passes the registered `mtr.binary` and `frr.daemons` providers to
+queries. LookingGlass prefers packaged MTR and sets `MTR_PACKET` to its sibling `mtr-packet`; it
+does not overwrite `/usr/bin/mtr`. Missing/damaged packaged executables or an unresolved installed
+provider produce an error rather than silently falling back. Without this package, system `mtr`
+remains supported. Native OpenWrt users supply system tools through their own repositories as needed.
+The base container adds `iputils mtr iperf3` for LookingGlass, skipping system `mtr`/`iperf3`
+dependencies when the corresponding project provider package is installed. Packaged MTR still
+needs root/CAP_NET_RAW at runtime.
+
+Install optional `meduza-np-iperf3-pkg` for static iperf3 3.22 with pinned OpenSSL 3.5.9, equivalent
+to the OpenSSL-enabled `iperf3-ssl` variant. It registers `iperf3.binary` at
+`/usr/lib/meduza-np/providers/iperf3/bin/iperf3`. Update planner and LookingGlass together to use the
+provider automatically; a missing/broken installed provider fails explicitly without system fallback.
+Without the package, system iperf3 remains supported. The installation-request/resource UI shows
+its actual provider, version and path. It does not replace `/usr/bin/iperf3` or start a server.
+
+The package includes OpenSSL/RSA authentication support and licenses, not a new LookingGlass
+authentication API or HTTPS transport. LookingGlass keeps its existing fixed client arguments;
+use the standalone binary for iperf3 authentication options. Build gates require HAVE_SSL, the
+authentication feature, a real RSA-authenticated loopback transfer and wrong-password rejection.
+Only the static iperf3 executable is shipped, without runtime shared OpenSSL libraries or the
+build-only OpenSSL CLI. Source archives and the Alpine builder are pinned; generic/OCI and native
+OpenWrt packages use the normal provider release matrix.
+
+MTR 0.96 and its helper are built statically from the SHA-256-pinned official source, without GTK,
+curses, JSON libraries or IP-info lookups; standard report mode remains available. Its package has
+an installation-request setting and reports its provider/version/path as a binary resource. Source,
+licenses, build info, generic archives/OCI and native OpenWrt packages use the normal release pipeline.
+
+If BGP returns exitCode=0 with empty stdout and `Configuration file ... processing failure` in
+stderr, update LookingGlass with D108. Queries now run `vtysh -u -N meduza -d bgpd -H /dev/null -c ...`:
+user mode avoids parsing a nonexistent integrated configuration and history is disabled. The FRR
+plugin uses the same read-only mode for its status/route queries. A configuration/CLI/connect error
+is reported as `bgp-query-failed` (HTTP 502) even when vtysh exits zero. Empty stdout without errors
+can still mean no matching ASN: read-only live validation on .9 found no AS65001 match, while
+AS65024 returned 53 routes / 241 paths. No configuration file creation or BGP restart is needed.
 
 One query at a time per node, with at least two seconds between starts. Ping is capped at four
 packets/10 seconds; MTR at three cycles, 16 hops/20 seconds; iperf at 12 seconds including connect;

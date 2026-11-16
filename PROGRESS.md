@@ -10,6 +10,72 @@ scheduled "continue" task) must:
 
 Design decisions live in `docs/DECISIONS.md`.
 
+### 2026-11-17 — D109: OpenSSL-enabled iperf3 provider
+
+Add optional package 22, meduza-np-iperf3-pkg: static musl iperf3 3.22 with pinned OpenSSL 3.5.9
+(iperf3-ssl capability), iperf3.binary registration, translated installation-request/resource UI,
+licenses and build metadata. Integrate package lists, provider build/release matrix, generic/OCI,
+native ipk/apk, recipe validation and SBOM. Base-container dependency selection skips system iperf3
+when the provider is selected. No daemon, system binary replacement or automatic iperf3 server.
+
+Planner forwards the relevant provider to LookingGlass and reports its real version/resource state.
+LookingGlass prefers the package; broken installed/unresolved providers fail explicitly, with system
+fallback only without that package. Preserve private-target validation, existing fixed client args,
+API bounds and HTTP transport. OpenSSL/RSA support does not add API credentials or HTTPS.
+
+Protocol/manifests/recipes/schemas, LookingGlass runner/API, release/SBOM and planner provider-flow/
+resource regressions pass, along with 53 Python release tests, three translation tests and relevant
+warnings-denied Clippy. Actual amd64 static build passes using the official SHA-verified Alpine root
+and signature-verified offline APK dependencies; local Docker is stopped and WSL DNS unavailable,
+so the exact OCI builder and ARM variants remain CI acceptance. HAVE_SSL, authentication version
+feature, ELF architecture and no interpreter/NEEDED dependencies verified. Build-only OpenSSL CLI
+generates temporary RSA keys; authenticated 128 KiB loopback UDP transfer succeeds and wrong password
+is explicitly rejected in server logs. Local WSL lacks the TCP_INFO socket support used by iperf3,
+so use UDP for this authentication smoke rather than relaxing its success conditions.
+
+Produce and inspect real generic tar.gz and OpenWrt ipk/apk; apk verifies successfully. Binary is
+5,802,528 bytes, generic archive 2,122,577 bytes and ipk 2,098,669 bytes. Verify 0755, expected provider
+path, SSL features, licenses and absence of test credentials/private keys/build-only OpenSSL CLI.
+Evidence: target/check-iperf3-{static-build,provider-tests,provider-flow,clippy,i18n,release-python,
+release-build,packages,artifacts,exec}.log and target/iperf3-release-smoke/.
+Update AGENT package catalog/count, operations and D109. No deployment, publication or Git staging/commit.
+
+### 2026-11-17 — D108: FRR read-only queries and MTR provider package
+
+Read-only SSH diagnosis of .9 reproduces the user's zero-exit/empty BGP result with vtysh.conf missing
+and frr.conf processing failure. User mode (-u), meduza pathspace, bgpd selection and disabled history
+successfully query the live daemon without touching config: ASN65024 yields 53 routes / 241 paths;
+ASN65001 has no match. Update LookingGlass and FRR query argv accordingly. Detect startup/CLI/connect
+failures even when vtysh exits zero; legitimate empty results remain successful. Resolve vtysh beside
+the FRR provider before PATH. No production config changes, service restarts or deployments.
+
+Add package 21, meduza-np-mtr-pkg: MTR 0.96 and matching mtr-packet, SHA-256-pinned official tarball,
+static musl, no GTK/curses/jansson/IP-info or setuid/file-capability install hooks. Provide mtr.binary
+and translated installation-request/resource status schema/descriptor. Extend package lists, recipe
+matrix, generic/OCI/native release classification, provider validation and SBOM coverage. Base-image
+dependency selection skips system mtr when the provider is installed. Planner forwards only MTR/FRR
+provider entries to LookingGlass; prefer the packaged binary, set trusted MTR_PACKET to its sibling
+helper using the SDK bounded-command environment API, and fail explicitly for broken installed
+providers/helpers instead of selecting a system binary. System fallback remains without the package.
+
+Rust plugin/FRR/SDK/protocol and provider/manifest/schema tests, planner provider-flow/resource status
+regressions, release/SBOM tests, all 53 Python release tests, three i18n tests, relevant warnings-denied
+Clippy, Rust formatting and diff checks pass. Actual amd64 static musl build succeeds using official
+SHA-verified Alpine minirootfs and signature-verified offline APK dependencies because local Docker
+is stopped and WSL DNS is unavailable. Build recipe is validated in an isolated Alpine root rather
+than the exact pinned OCI builder. Both ELFs have no interpreter/NEEDED entries; package includes
+174,264-byte mtr and 72,072-byte helper as 0755, source licenses and build metadata. Actual generic
+archive (~128 KiB), ipk and apk are produced; apk verifies successfully. Other architectures remain
+CI acceptance. Original-socket smoke cannot run here (raw sockets denied), namespace creation is
+unsupported, and previously authorized test .45 is offline. Recipe explicitly allows only this known
+socket-permission smoke skip; MTR_REQUIRE_SOCKET_SMOKE=1 makes it strict. Runtime CAP_NET_RAW and
+real packet forwarding remain live acceptance items; do not claim functional MTR probing passed.
+
+Evidence: target/check-{frr-live-query,mtr-static-build,lookingglass-frr-mtr,mtr-provider-flow,mtr-clippy,
+mtr-release,mtr-release-clippy,mtr-release-python,mtr-i18n,mtr-apk}.log and target/mtr-release-smoke/.
+Update AGENT package catalog/count, operations and D108. No external diagnostic probes, publication,
+production package deployment or Git staging/commit.
+
 ### 2026-11-17 — D107 policy revision: private targets, unrestricted sources
 
 Per the user, remove all client source/peer restrictions from the standalone LookingGlass API. TCP
@@ -606,6 +672,18 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   namespace, host LAN not announced → new `frr/main/origination` status, routerId pre-check, capability warning)
 
 ## Session log
+
+- 2026-11-17 (D109): Add static OpenSSL-enabled iperf3 provider, translated resource UI, LookingGlass
+  priority/broken-provider handling and complete release/SBOM integration. Targeted Rust/Clippy,
+  release Python and i18n checks pass; actual amd64 static build, RSA success/rejection smoke and
+  tar/ipk/apk content/integrity validation pass. ARM/exact OCI builds remain CI acceptance.
+  No deployment, publication or Git staging/commit.
+
+- 2026-11-17 (D108): Reproduce .9 vtysh configuration-read/zero-exit issue read-only; fix read-only
+  query mode and error handling, distinguish actual absent ASN65001 from confirmed ASN65024 paths.
+  Add static MTR+packet provider, explicit priority/helper environment, release pipeline and resource
+  UI. Rust/release/Python/i18n/Clippy and actual amd64 static/tar/ipk/apk checks pass. Functional raw
+  packet smoke remains pending a suitable runtime; no production mutations or Git staging/commit.
 
 - 2026-11-17 (D107 target policy): Remove source ACL; accept all client sources while restricting
   IP destinations to RFC1918/RFC4193 at HTTP and command execution, including mapped-IP handling.
