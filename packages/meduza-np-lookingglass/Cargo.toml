@@ -1,0 +1,11 @@
+[package]
+name = "meduza-np-lookingglass"
+version = "0.1.0"
+description = "On-demand bounded LookingGlass network diagnostics"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+meduza-np-plugin-sdk.workspace = true
+serde_json.workspace = true

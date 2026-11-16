@@ -38,6 +38,7 @@ pub const OPENWRT_PACKAGES: &[&str] = &[
     "meduza-np-mihomo-pkg",
     "meduza-np-mihomo-openwrt",
     "meduza-np-avahi",
+    "meduza-np-lookingglass",
     "meduza-np-dashboard-openwrt",
 ];
 
@@ -523,6 +524,15 @@ mod tests {
         let c = control(&repo, "meduza-np-wireguard", "0.3.0", "aarch64_cortex-a53", &data).unwrap();
         assert_eq!(c.depends, vec!["meduza-np-planner"]);
         assert!(c.postinst.contains("meduza-np rescan") && c.prerm.is_empty());
+
+        std::fs::write(bins.join("meduza-np-lookingglass"), b"\x7fELF fake").unwrap();
+        let lg = entries(&repo, "meduza-np-lookingglass", "0.3.0", Some(&bins), None, None).unwrap();
+        assert!(lg["usr/libexec/meduza-np/plugins/lookingglass"].1);
+        assert!(lg.contains_key("usr/share/meduza-np/packages/meduza-np-lookingglass/ui/descriptor.json"));
+        assert_eq!(
+            control(&repo, "meduza-np-lookingglass", "0.3.0", "aarch64_cortex-a53", &lg).unwrap().depends,
+            vec!["meduza-np-planner"]
+        );
 
         let ui = entries(&repo, "meduza-np-dashboard-openwrt", "0.3.0", None, None, None).unwrap();
         assert!(ui.contains_key("www/luci-static/resources/view/meduza-np/overview.js"));

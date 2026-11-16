@@ -15,6 +15,7 @@ async function call<T>(method: "GET" | "POST", path: string, body?: unknown): Pr
   if (method === "POST") {
     headers["content-type"] = "application/json";
     if (path === "/api/mihomo/panel") headers["x-meduza-panel"] = "open";
+    if (path === "/api/ilg/query") headers["x-meduza-lookingglass"] = "query";
     if (csrf) headers["x-csrf-token"] = csrf;
   }
   const res = await fetch(path, { method, headers, credentials: "same-origin", body: method === "POST" ? JSON.stringify(body ?? {}) : undefined });

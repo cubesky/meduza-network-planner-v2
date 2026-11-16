@@ -141,6 +141,11 @@ pub async fn dispatch(p: &Arc<Planner>, req: LocalRequest, authorized: bool) -> 
             ok(json!(crate::log::tail(n)))
         }
         "doctor" => ok(doctor(p)),
+        "lookingglass.status" => ok(json!({"available":crate::lookingglass::available(p)})),
+        "lookingglass.query" => match crate::lookingglass::query(p, req.params).await {
+            Ok(v) => ok(v),
+            Err((code, message)) => LocalResponse::err(id, &code, message),
+        },
         "support.bundle" => ok(crate::support::bundle(p).await),
         "validate" | "plan.preview" => {
             let lg = match crate::state::load_last_good(&p.paths) {

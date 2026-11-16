@@ -8,6 +8,7 @@ import { errorText, get, post, setCsrf, type Report, type Session } from "./api.
 import { LanguageSelect, effectiveLocale } from "./language.tsx";
 import "./messages.ts";
 import { ConfigPage, DiagnosticsPage, FeaturesPage, InstancesPage, MihomoPanelCard, OverviewPage, PackagesPage, UpdatesPage } from "./pages.tsx";
+import { LookingGlassPage } from "./lookingglass.tsx";
 
 const NAV: Array<[string, string]> = [
   ["/overview", msg("Overview")],
@@ -125,7 +126,7 @@ setLocale(effectiveLocale());
 
 render(
   <>
-    <App />
+    {location.pathname === "/ilg" || location.pathname === "/ilg/" ? <LookingGlassPage /> : <App />}
     <ToastHost />
   </>,
   document.getElementById("app")!,

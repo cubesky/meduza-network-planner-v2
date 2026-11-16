@@ -10,6 +10,40 @@ scheduled "continue" task) must:
 
 Design decisions live in `docs/DECISIONS.md`.
 
+### 2026-11-17 — D107: optional private-network LookingGlass
+
+Add meduza-np-lookingglass as the twentieth package/workspace member, protocol catalog entry and
+generic archive/OCI/native OpenWrt release target. Short-lived plugin executes fixed Ping/MTR/iperf3
+client commands or meduza-pathspace FRR IPv4/IPv6 BGP ASN/IP queries. No daemon, arbitrary shell/CLI,
+hostname or port; bounded command output/time, packet/cycle/hop counts and explicit exit/timeout/
+truncation results. Base-container apk-deps installs iputils/mtr/iperf3 only for this component;
+native hosts supply tools independently and receive specific errors when a tool is absent.
+
+Planner adds live registered-package/executable availability and privileged query methods with one
+in-flight query/two-second start interval. Synthetic empty context avoids reading or forwarding node
+configuration/secrets and works before the first applied configuration. Ordinary Dashboard serves
+login-free /ilg and a fixed /api/ilg API only while the package remains registered and executable.
+Check actual TCP peer for RFC1918/RFC4193, normalize mapped IPv4, reject other/missing peers and
+ignore forwarded address claims. Query submissions require same-origin custom header, 1 KiB body
+and three-second read limit. Existing login/role/CSRF controls on other APIs remain intact.
+
+New translated Vite/Preact page offers all four tools, numeric address/ASN input, busy state, text
+results and error/timeout/truncation details. Update AGENT package count/catalog, D107 and operations
+with tool requirements, reverse-proxy ACL responsibility, fixed iperf client port/duration and limits.
+
+Validation: plugin argv/injection and real-executable integration, planner registration/authorization/
+missing executable/no-secret/rate/concurrency regression, Dashboard private-range/package-removal/
+body/header/socket tests, protocol manifests/schemas/provider tests, 51 existing planner library
+tests, 21 release Rust tests, 53 release Python tests, three i18n tests, typecheck, Dashboard build,
+Clippy with warnings denied and rustfmt/diff checks pass. Actual Chrome verifies unauthenticated
+/ilg, four query types, AS path output, loading, missing-tool and missing-package states. Actual
+plugin Ping to local WSL loopback succeeds with four replies under root; ordinary-user socket
+permission failure is also returned as a diagnostic result. MTR/iperf/FRR native argv exercised with
+fixture executables; live external target/FRR/throughput acceptance remains after deployment.
+Evidence: target/check-lookingglass-{rust-final,planner,dashboard-final,release,release-python,final,
+clippy,i18n,ping}.log, check-lookingglass-browser.mjs and lookingglass-page.png. Local changes only;
+no production mutations, deployment, external probes, Git staging/commit or publication.
+
 ### 2026-11-15 — Modal text selection and roaming presence
 
 Require both pointer press and release on the shared modal backdrop before click dismissal, clearing
@@ -530,6 +564,11 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   namespace, host LAN not announced → new `frr/main/origination` status, routerId pre-check, capability warning)
 
 ## Session log
+
+- 2026-11-17 (D107): Add optional LookingGlass plugin/release package, narrowly scoped planner API
+  and private-source/login-free ordinary Dashboard /ilg. Bound execution and require live package
+  presence for page and API. Rust/release/i18n/type/build/Clippy/Chrome and real loopback Ping checks
+  pass; no production deployment or Git staging/commit. See detailed entry and operations.
 
 - 2026-11-15 (modal and roaming UI): Fix shared modal text-selection dismissal and neutral Manager
   roaming absence; add offline count/filter consistency while retaining explicit health failures.

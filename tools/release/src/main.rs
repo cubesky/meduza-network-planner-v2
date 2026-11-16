@@ -64,6 +64,7 @@ pub const ARCHIVE_PACKAGES: &[&str] = &[
     "meduza-np-mihomo",
     "meduza-np-mihomo-pkg",
     "meduza-np-avahi",
+    "meduza-np-lookingglass",
     "meduza-np-dashboard",
 ];
 

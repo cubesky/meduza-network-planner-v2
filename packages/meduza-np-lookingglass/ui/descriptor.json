@@ -1,0 +1,11 @@
+{
+  "uiVersion": 1,
+  "package": "meduza-np-lookingglass",
+  "requiresCapability": "diagnostics.lookingglass",
+  "title": "LookingGlass",
+  "status": [{"title":"LookingGlass","instanceKind":"lookingglass","columns":["state"]}],
+  "i18n": {
+    "zh-Hans": {"text": {"LookingGlass": "LookingGlass"},"fields":{"state":"状态"}},
+    "zh-Hant": {"text": {"LookingGlass": "LookingGlass"},"fields":{"state":"狀態"}}
+  }
+}

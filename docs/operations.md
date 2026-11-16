@@ -762,3 +762,39 @@ FRR hook flag. Update planner with the D106 context fix, reapply the configurati
 clients. OpenVPN declares `services.frr` as consumed context. The diagnosed xuzhou-b1 v0.4.2 FRR
 plugin exports 61 eligible routes successfully; changing client pull options or restarting the old
 Access configuration does not repair the planner validation error.
+
+### LookingGlass (`/ilg`, D107)
+
+Install `meduza-np-lookingglass` on a node and update its planner and ordinary Dashboard together.
+The package is an on-demand plugin, with no listener or background daemon. Once registered, open
+`https://<node-dashboard>/ilg` without signing in. Both the page and `/api/ilg/*` require the live
+registered package/executable; removing it makes these endpoints unavailable. Other Dashboard APIs
+still require their normal login, role and CSRF checks. The LuCI Dashboard is not this HTTP server.
+
+Only the actual TCP peer in RFC1918 (`10/8`, `172.16/12`, `192.168/16`) or RFC4193 (`fc00::/7`)
+may access the page or its API. IPv4-mapped IPv6 peers use the IPv4 rule. Public, loopback,
+link-local and CGNAT source addresses are rejected; signing in does not override this. Forwarded
+and X-Forwarded-For headers do not grant access. A reverse proxy must independently enforce this
+client-address ACL or omit `/ilg` and `/api/ilg/` from its public routes: the Dashboard sees the
+proxy's TCP address, not its original client. Direct private-network access is the normal deployment.
+
+Ping and MTR accept numeric IPv4/IPv6 addresses, never DNS names. BGP accepts a numeric ASN,
+`AS65000`, or an IP lookup; ASN queries cover both FRR IPv4 and IPv6 unicast paths containing that
+ASN, including non-best paths retained by FRR. Queries use the existing `meduza` FRR pathspace;
+this package does not install/configure a BGP daemon or change routes. iPerf is **iperf3 client**
+mode: the target must run a server on TCP 5201; one stream runs for five seconds. It measures
+node-to-target throughput, not browser-to-node throughput, and never starts an iperf server.
+
+Use the system's `ping` (iputils), `mtr`, `iperf3`, and, for BGP, `vtysh` from the existing FRR
+installation. Missing tools are reported per query instead of disabling the whole package. Native
+OpenWrt users can install `iputils-ping mtr iperf3` through their own opkg/apk repositories as needed;
+these tools are not bundled into project archives or forcibly installed as a full FRR dependency.
+The base container adds Alpine `iputils mtr iperf3` only when LookingGlass is selected/installed.
+
+One query at a time per node, with at least two seconds between starts. Ping is capped at four
+packets/10 seconds; MTR at three cycles, 16 hops/20 seconds; iperf at 12 seconds including connect;
+BGP at eight seconds per family. Each command keeps at most 128 KiB stdout and 64 KiB stderr;
+timeout, exit status and truncation are explicit results. Targets cannot specify ports, CLI options,
+shell fragments or arbitrary FRR regular expressions. Browser queries require a same-origin custom
+header and bodies are limited to 1 KiB. No diagnostic request reads or forwards node configuration
+or secrets; a first applied configuration is not required.

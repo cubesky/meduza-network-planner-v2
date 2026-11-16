@@ -12,6 +12,7 @@ pub mod identity;
 pub mod jobs;
 pub mod keystore;
 pub mod local_api;
+pub mod lookingglass;
 pub mod manager;
 pub mod netbackend;
 pub mod netplan;

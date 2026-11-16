@@ -95,6 +95,8 @@ pub const PLANNER_METHODS: &[(&str, bool)] = &[
     // Discloses the current Mihomo controller credential; privileged even though it does not change config.
     ("mihomo.panel", true),
     ("mihomo.panel.status", false),
+    ("lookingglass.status", false),
+    ("lookingglass.query", true),
 ];
 
 pub const UPDATER_METHODS: &[(&str, bool)] = &[

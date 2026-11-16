@@ -2632,3 +2632,33 @@ are read-only; no config edits, service restarts, package deployment, authentica
 connection or Git staging/commit. Release the planner fix, reapply and reconnect clients for live
 acceptance. The node's existing OpenVPN/FRR 0.4.2 implementations already provide the required hook
 and export; no replacement OpenVPN/FRR system binary is required for this correction.
+
+## D107 — optional private-network LookingGlass (2026-11-17)
+
+Add `meduza-np-lookingglass` as the twentieth optional package: a short-lived service-adapter plugin,
+not a diagnostic daemon. Generic archive/OCI distribution and native ipk/apk packaging use the existing
+release pipeline. Keep tool availability independent: ping, MTR and iperf3 remain usable without FRR,
+and a missing tool returns an explicit query error instead of failing all package registration.
+Base-container component dependencies include iputils/mtr/iperf3 only for installed LookingGlass.
+
+Planner exposes fixed `lookingglass.status` (read) and privileged `lookingglass.query` methods. Both
+require live registration/executable presence. Queries use a synthetic empty configuration, never the
+node snapshot or secrets; one semaphore/rate gate bounds work independently of service probe slots.
+Native commands receive validated numeric IPs/ASNs and fixed argv, no shell, free-form FRR CLI, user
+regex or port. FRR queries select paths through an ASN in IPv4/IPv6 unicast or perform an IP lookup
+inside the existing meduza pathspace. iPerf means iperf3 client, five seconds/one stream/TCP 5201.
+Output, execution time and packet/hop counts are bounded; network failures are diagnostic results.
+
+Ordinary Dashboard serves the login-free `/ilg` and a narrowly scoped `/api/ilg/` API only if the
+package is registered and executable exists. A server-side ACL independently protects both using
+actual TCP peer addresses in RFC1918/RFC4193 (including normalized IPv4-mapped addresses). No login,
+client-side check, or forwarded header can expand these ranges. Public/loopback/link-local/CGNAT
+sources fail closed, including a missing peer extension. Reverse proxies must enforce original-client
+ACLs themselves. A same-origin request marker and body cap guard public browser probe submissions;
+other Dashboard authentication remains unchanged. See operations for limits and system dependencies.
+
+Regression coverage includes private-range boundaries, spoofed headers over actual TCP, page/API
+installation/removal gating without cookies, request limits, real plugin argv/exit reporting, planner
+authorization, no configuration/secret forwarding, rate/concurrency limits and missing executables.
+Actual Chrome checks all four tools, busy state, AS-path output, system-tool errors and absent-package
+UI. Rust, schema, release, i18n, Clippy and Dashboard build checks are recorded in PROGRESS.md.

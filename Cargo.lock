@@ -573,6 +573,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "meduza-np-lookingglass"
+version = "0.1.0"
+dependencies = [
+ "meduza-np-plugin-sdk",
+ "serde_json",
+]
+
+[[package]]
 name = "meduza-np-mihomo"
 version = "0.1.0"
 dependencies = [

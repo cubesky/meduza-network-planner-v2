@@ -18,6 +18,7 @@ members = [
   "packages/meduza-np-avahi",
   "packages/meduza-np-updater",
   "packages/meduza-np-dashboard",
+  "packages/meduza-np-lookingglass",
   "tools/release",
 ]
 
