@@ -95,7 +95,7 @@ flowchart TB
 | `meduza-np-base-container` | 基于 Alpine Linux 的容器运行基础，默认包含 updater，按环境变量自动获取并启用所选节点组件 | 发布可直接使用的基础 OCI 运行镜像与部署入口；默认 bridge，支持 host；updater 自动下载 planner/选定包，不预装全部业务功能 |
 | `meduza-np-avahi` | mDNS 解析与必要的发现/转发集成 | 默认系统 Avahi，按需系统 D-Bus；不强制安装到每个节点 |
 | `meduza-np-tinc` | 覆盖网络、节点公钥、hosts 与配置生成、Tinc Peer 可达状态 | 默认系统 Tinc；注册后提供覆盖网络能力 |
-| `meduza-np-lookingglass` | 按需 Ping/MTR/iPerf3 客户端测速、按 ASN/IP 查询 FRR BGP 路由 | 独立端口 JSON API，不依赖 Dashboard 或提供网页；通过 services.lookingglass 启停/配置监听，默认 0.0.0.0:18080，planner 监督；API 不限制客户端来源，要求包已注册且无需登录；所有 IP 目标仅允许 RFC1918/RFC4193，HTTP 与执行层均校验并规范化映射 IPv4，保留本地 ASN 查询；固定参数、时限、输出上限及单任务并发；优先使用已注册 MTR provider，FRR 查询使用只读 vtysh 模式 |
+| `meduza-np-lookingglass` | 按需 Ping/MTR/TCPing/iPerf3 客户端测速、按 ASN/IP 查询 FRR BGP 路由 | 独立端口 JSON API，不依赖 Dashboard 或提供网页；通过 services.lookingglass 启停/配置监听，默认 0.0.0.0:18080，planner 监督；API 不限制客户端来源，要求包已注册且无需登录；所有 IP 目标仅允许 RFC1918/RFC4193，HTTP 与执行层均校验并规范化映射 IPv4，保留本地 ASN 查询；TCPing/iPerf 的 target 另接受 IPv4:port 或 [IPv6]:port，端口 1..65535，省略端口分别默认 80/5201；TCPing 内置四次 TCP 连接探测，每次最多两秒、间隔一秒，返回每次结果及汇总，无额外命令依赖；固定参数、时限、输出上限及单任务并发；优先使用已注册 MTR/iperf3 provider，FRR 查询使用只读 vtysh 模式 |
 | `meduza-np-mtr-pkg` | 提供固定版本的静态 MTR 与匹配的 mtr-packet helper | 无常驻进程；注册 mtr.binary，LookingGlass 优先使用并固定 MTR_PACKET 指向同包 helper；不覆盖系统命令，安装但损坏时明确报错而不偷偷回退系统版本 |
 | `meduza-np-iperf3-pkg` | 提供启用 OpenSSL 的静态 iperf3（iperf3-ssl 能力） | 无常驻进程；注册 iperf3.binary，LookingGlass 优先使用；不覆盖系统命令或自动开启测速服务端；强制检查 OpenSSL/RSA 认证能力，安装但损坏时不回退系统版本 |
 
@@ -636,7 +636,7 @@ WireGuard / OpenVPN 以实例为应用和故障隔离边界：单个实例缺失
 
 Access 是 OpenVPN server 实例类型，不再固定只能有一个名为 access 的服务。支持端口、协议、设备、客户端 IPv4 池、服务器证书、可选客户端证书策略、CRL、允许人数、keepalive、DNS、路由推送、认证/授权策略。
 
-路由推送可选择已批准的内部 LAN/private LAN、映射发布网段、额外前缀；需显式排除自身池并规范化去重。目标网段变化必须使 Access 配置失效重生成。Access pool 可关联 FRR 发布，不以“有 pool”就擅自打开 BGP。
+路由推送可选择已批准的内部 LAN/private LAN、映射发布网段、额外前缀；需显式排除自身池并规范化去重。目标网段变化必须使 Access 配置失效重生成。Access pool 可关联 FRR 发布，不以“有 pool”就擅自打开 BGP。通过节点“设置 → 网络”的单一开关统一发布本节点所有已启用 OpenVPN Access 地址池到 BGP，供对端建立客户端回程路由；不在每个 OpenVPN/WireGuard BGP 连接上提供此选项。Manager 的 routing.originate.access 默认关闭，编译为原有 accessPools 实例 ID 列表及各对端导出策略；禁用实例或服务不得发布，关闭开关撤销发布。此功能与向 Access 客户端推送 FRR 路由分开。
 
 `access.pushRoutes.frr` 默认关闭；启用后在已鉴权客户端连接时，从本节点 FRR 的 meduza pathspace 获取已选中并安装的 IPv4 BGP/OSPF/static 转发路由，规范化、合并被覆盖前缀，排除默认路由、特殊地址、黑洞及已启用 Access 池内的路由。要求本节点已有启用的 FRR 配置和已注册插件/provider，不为 Access 擅自创建 ASN 或邻居。快照按配置摘要缓存 5 秒，路由变化由客户端重连获取，不强制中断已有会话。查询有超时与大小上限，最多推送 256 条动态路由；查询失败或超限明确拒绝本次连接，不推送截断或陈旧列表，不中止整次配置应用。Manager/Dashboard 的 OpenVPN 状态与配置列表始终将 Access 放在 Site2Site 前，包括禁用条目；只改显示顺序，保留原配置下标与稳定 ID（D103）。
 

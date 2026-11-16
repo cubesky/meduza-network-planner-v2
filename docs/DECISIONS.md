@@ -2722,3 +2722,42 @@ Integrate the package into translated resource management, recipe validation, ge
 distribution OCI, native OpenWrt ipk/apk, SBOM and the three-platform provider build matrix. Base
 container dependency selection skips system iperf3 when this provider is selected. Installing the
 provider does not start an iperf3 server or force LookingGlass installation.
+
+## D110 — node-wide OpenVPN Access return-route advertisement (2026-11-17)
+
+The Network tab of node Settings owns one "Advertise OpenVPN Access routes to BGP" switch.
+Its meaning is advertising local VPN client address pools so BGP peers can route back to clients;
+it is independent of routes pushed to Access clients. Remove the per-connection exportAccessPools
+fields from OpenVPN/WireGuard forms. Default off; do not infer permission from the presence of a pool.
+
+Store the intent as the manager-only nodes.<id>.routing.originate.access boolean. Expand it into
+the existing node routing.originate.accessPools list of enabled OpenVPN Access server IDs and
+set every external BGP neighbor's exportPolicy.accessPools consistently, including raw FRR neighbors.
+This works with the existing node protocol. Added/disabled/removed servers automatically follow
+the switch on the next apply. FRR also rejects disabled services/instances and non-Access entries
+when resolving explicitly selected pools; retain the existing origin tagging and prefix policies.
+
+Normalize historical per-connection requests and explicit pool selections into the node-wide intent
+when reading/editing/publishing documents. An explicit new false wins over all legacy requests.
+Remove old fields from editable documents, without rewriting historical revisions or snapshots.
+Normalize draft rebase bases consistently. Validate the boolean before dropping manager-only fields.
+Tests cover migration, explicit off, default off, added/disabled servers, both BGP transports,
+published snapshots and actual FRR origin/export/withdrawal configuration.
+
+## D111 — LookingGlass TCPing and explicit TCP target ports (2026-11-17)
+
+Add tcping to the independent LookingGlass query API. Implement TCP connect probes in the existing
+Rust plugin, without a new system dependency or raw sockets. Four sequential attempts, a two-second
+connect timeout and one-second gaps bound one query to roughly eleven seconds. Close each connection
+without sending application data. Preserve common diagnostic result fields; add per-sample outcomes,
+target/port and connection-success/loss/latency statistics. Refusals and timeouts are diagnostics;
+latencies exclude failed attempts, and no success yields null statistics rather than zero latency.
+
+Only tcping and iperf accept numeric IPv4:port or [IPv6]:port targets, with ports 1..65535. Bare IPs
+keep iperf's port 5201 and default tcping to 80. Use one parser for HTTP validation and plugin plans,
+normalize mapped IPv4 before checking RFC1918/RFC4193 destinations, and reject hostnames, URLs,
+scope IDs, invalid/zero ports and command fragments. Ping/MTR/BGP keep their existing target grammar.
+Explicit iperf ports become a separate fixed -p argument; retain five-second, single-stream limits
+and provider precedence. Keep source-unrestricted access, request marker, package gate and planner
+concurrency/rate controls. Tests cover real local TCP connects, failure bounds/statistics, HTTP
+rejections before RPC, IPv4/IPv6/mapped targets and actual iperf command argument separation.

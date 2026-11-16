@@ -163,6 +163,8 @@ function NetworkEditor(props: { spec: Record<string, any>; onChange: (s: Record<
         <h3>{t("Originate into routing (only these sets are ever advertised)")}</h3>
         <div class="toggle-grid">
           {["lan", "privateLan", "mappings"].map((k) => <ToggleField label={t(k)} checked={!!origin[k]} onChange={(v) => setOrigin(k, v)} />)}
+          <ToggleField label={t("Advertise OpenVPN Access routes to BGP")} checked={origin.access === true} onChange={(v) => setOrigin("access", v)}
+            help={t("Advertise the address pools of all enabled OpenVPN Access servers to BGP peers so they can route back to VPN clients.")} />
         </div>
       </Card>
       <RoutingCard spec={props.spec} onChange={props.onChange} problems={props.problems} internalAsn={props.internalAsn} />

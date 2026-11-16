@@ -81,6 +81,15 @@ fn real_plugin_executes_only_fixed_tool_arguments_and_returns_diagnostic_failure
         serde_json::from_slice::<Value>(&output.stdout).unwrap()
     };
     let invoke = |operation: &str, target: &str| invoke_with(operation, target, json!({}));
+    for (target, family, ip, port) in [("10.0.0.1:5202", "-4", "10.0.0.1", "5202"), ("[fd42::1]:5203", "-6", "fd42::1", "5203")] {
+        let result = invoke("iperf", target);
+        assert_eq!(result["ok"], true, "{result}");
+        let output = &result["result"]["results"][0];
+        let args = output["arguments"].as_array().unwrap();
+        assert_eq!(args[0], family);
+        assert_eq!(&args[args.len() - 4..], &[json!("-p"), json!(port), json!("-c"), json!(ip)]);
+        assert!(output["stdout"].as_str().unwrap().ends_with(&format!("-p\n{port}\n-c\n{ip}\n")));
+    }
     for operation in ["ping", "mtr", "iperf", "bgp"] {
         let target = if operation == "bgp" { "AS65000" } else { "10.0.0.1" };
         let result = invoke(operation, target);
@@ -92,6 +101,11 @@ fn real_plugin_executes_only_fixed_tool_arguments_and_returns_diagnostic_failure
             assert_eq!(output["stderr"], "diagnostic stderr");
             assert_eq!(output["timedOut"], false);
             assert!(output["stdout"].as_str().unwrap().contains(if operation == "bgp" { "regexp _65000_" } else { target }));
+        }
+    }
+    for operation in ["tcping", "iperf"] {
+        for target in ["8.8.8.8:443", "[::ffff:8.8.8.8]:5202", "127.0.0.1:80", "10.0.0.1:0", "10.0.0.1:5202;id"] {
+            assert_eq!(invoke(operation, target)["error"]["code"], "invalid-params", "{operation} {target}");
         }
     }
     let provider = root.join("packaged");
@@ -133,7 +147,7 @@ fn real_plugin_executes_only_fixed_tool_arguments_and_returns_diagnostic_failure
     std::fs::write(root.join("vtysh"), "#!/bin/sh\nexit 0\n").unwrap();
     assert_eq!(invoke("bgp", "AS65000")["ok"], true, "no matching routes is valid if no diagnostic error occurred");
     assert_eq!(invoke("ping", "10.0.0.1;touch /tmp/not-allowed")["error"]["code"], "invalid-params");
-    for operation in ["ping", "mtr", "iperf", "bgp"] {
+    for operation in ["ping", "mtr", "tcping", "iperf", "bgp"] {
         for target in ["8.8.8.8", "2001:db8::1", "127.0.0.1", "::ffff:8.8.8.8"] {
             assert_eq!(invoke(operation, target)["error"]["code"], "invalid-params", "{operation} {target}");
         }

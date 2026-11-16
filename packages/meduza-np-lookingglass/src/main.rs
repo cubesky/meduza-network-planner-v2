@@ -1,8 +1,13 @@
 use meduza_np_plugin_sdk::{run, run_status_command_with_env, PlanResult, Plugin, PluginError, PluginRequest, ProbeResult, ValidateResult};
 use serde_json::{json, Value};
-use std::{net::IpAddr, path::PathBuf, time::Duration};
+use std::{
+    net::{IpAddr, SocketAddr},
+    path::PathBuf,
+    time::Duration,
+};
 mod local;
 mod server;
+mod tcping;
 
 struct LookingGlass;
 
@@ -25,7 +30,7 @@ fn settings(req: &PluginRequest) -> Result<(bool, std::net::SocketAddr), PluginE
 fn invalid() -> PluginError {
     PluginError::new(
         "invalid-params",
-        "target IP must be RFC1918 private or RFC4193 ULA; bgp also accepts an ASN; no hostnames or extra arguments",
+        "target IP must be RFC1918 private or RFC4193 ULA; tcping/iperf also accept IPv4:port or [IPv6]:port (1..65535); bgp also accepts an ASN; no hostnames or extra arguments",
     )
 }
 
@@ -42,7 +47,23 @@ fn private_target(ip: IpAddr) -> Option<IpAddr> {
     }
 }
 
-/// Never invoke a shell or accept a CLI fragment, hostname, port, regex or arbitrary FRR command.
+/// Numeric IP with an optional explicit TCP port. Normalize mapped IPv4 before enforcing the target ACL.
+fn endpoint(target: &str, default_port: u16) -> Result<SocketAddr, PluginError> {
+    let address = if let Ok(ip) = target.parse::<IpAddr>() {
+        SocketAddr::new(ip, default_port)
+    } else {
+        if target.contains('%') {
+            return Err(invalid());
+        }
+        target.parse::<SocketAddr>().map_err(|_| invalid())?
+    };
+    if address.port() == 0 {
+        return Err(invalid());
+    }
+    Ok(SocketAddr::new(private_target(address.ip()).ok_or_else(invalid)?, address.port()))
+}
+
+/// Never invoke a shell or accept a CLI fragment, hostname, regex or arbitrary FRR command.
 fn commands(params: &Value) -> Result<Vec<(String, Vec<String>, u64)>, PluginError> {
     let operation = params.get("operation").and_then(Value::as_str).ok_or_else(invalid)?;
     let target = params.get("target").and_then(Value::as_str).ok_or_else(invalid)?.trim();
@@ -84,15 +105,26 @@ fn commands(params: &Value) -> Result<Vec<(String, Vec<String>, u64)>, PluginErr
             })
             .collect());
     }
-    let ip = ip.ok_or_else(invalid)?;
+    let address = match operation {
+        "tcping" => Some(endpoint(target, 80)?),
+        "iperf" => Some(endpoint(target, 5201)?),
+        _ => None,
+    };
+    let ip = address.map(|a| a.ip()).or(ip).ok_or_else(invalid)?;
+    if operation == "tcping" {
+        return Ok(vec![("tcping".into(), vec![ip.to_string(), address.unwrap().port().to_string()], 12)]);
+    }
     let family = if ip.is_ipv4() { "-4" } else { "-6" };
     let (program, args, seconds): (&str, Vec<&str>, u64) = match operation {
         "ping" => ("ping", vec![family, "-n", "-c", "4", "-W", "2"], 10),
         "mtr" => ("mtr", vec![family, "-n", "-r", "-w", "-c", "3", "-m", "16"], 20),
-        "iperf" => ("iperf3", vec![family, "-J", "-t", "5", "-P", "1", "--connect-timeout", "3000", "-c"], 12),
+        "iperf" => ("iperf3", vec![family, "-J", "-t", "5", "-P", "1", "--connect-timeout", "3000"], 12),
         _ => return Err(invalid()),
     };
     let mut args: Vec<String> = args.into_iter().map(String::from).collect();
+    if let Some(address) = address {
+        args.extend(["-p".into(), address.port().to_string(), "-c".into()]);
+    }
     args.push(ip.to_string());
     Ok(vec![(program.into(), args, seconds)])
 }
@@ -188,6 +220,11 @@ impl Plugin for LookingGlass {
         }
         let mut results = Vec::new();
         for (name, args, seconds) in commands(&req.params)? {
+            if name == "tcping" {
+                let address = SocketAddr::new(args[0].parse().map_err(|_| invalid())?, args[1].parse().map_err(|_| invalid())?);
+                results.push(tcping::probe(address));
+                continue;
+            }
             let (executable, helper) = executable(req, &name)?;
             let helper = helper.map(|p| p.to_string_lossy().into_owned());
             let env = helper.as_deref().map(|path| vec![("MTR_PACKET", path)]).unwrap_or_default();
@@ -254,7 +291,7 @@ mod tests {
     use super::*;
     #[test]
     fn target_acl_applies_to_all_ip_operations_and_normalizes_mapped_ipv4() {
-        for operation in ["ping", "mtr", "iperf", "bgp"] {
+        for operation in ["ping", "mtr", "tcping", "iperf", "bgp"] {
             for target in
                 ["10.0.0.1", "10.255.255.254", "172.16.0.1", "172.31.255.254", "192.168.0.1", "192.168.255.254", "fc00::1", "fdff::1"]
             {
@@ -282,7 +319,7 @@ mod tests {
                 assert!(commands(&json!({"operation":operation,"target":target})).is_err(), "{operation} {target}");
             }
             let cmds = commands(&json!({"operation":operation,"target":"::ffff:10.0.0.1"})).unwrap();
-            let last = cmds[0].1.last().unwrap();
+            let last = if operation == "tcping" { &cmds[0].1[0] } else { cmds[0].1.last().unwrap() };
             assert!(last.ends_with("10.0.0.1"));
             assert!(!last.contains("ffff"));
         }
@@ -308,7 +345,7 @@ mod tests {
     }
     #[test]
     fn rejects_command_injection_and_ambiguous_targets() {
-        for operation in ["ping", "mtr", "iperf", "bgp"] {
+        for operation in ["ping", "mtr", "tcping", "iperf", "bgp"] {
             for target in [
                 "--help",
                 "1.1.1.1;id",
@@ -325,6 +362,58 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn tcp_targets_accept_strict_numeric_ports_and_keep_private_address_policy() {
+        for operation in ["tcping", "iperf"] {
+            for (target, ip, port) in [
+                ("10.42.10.1:443", "10.42.10.1", "443"),
+                ("172.16.0.1:1", "172.16.0.1", "1"),
+                ("[fd42::1]:65535", "fd42::1", "65535"),
+                ("[::ffff:192.168.0.1]:5202", "192.168.0.1", "5202"),
+            ] {
+                let cmds = commands(&json!({"operation":operation,"target":target})).unwrap();
+                let (program, args, timeout) = &cmds[0];
+                assert!(*timeout <= 12);
+                if operation == "tcping" {
+                    assert_eq!(program, "tcping");
+                    assert_eq!(args, &[ip, port]);
+                } else {
+                    assert_eq!(program, "iperf3");
+                    assert_eq!(&args[args.len() - 4..], &["-p", port, "-c", ip]);
+                    assert_eq!(args[0], if ip.contains(':') { "-6" } else { "-4" });
+                }
+            }
+            let default = commands(&json!({"operation":operation,"target":"10.0.0.1"})).unwrap();
+            let port = if operation == "tcping" { &default[0].1[1] } else { &default[0].1[default[0].1.len() - 3] };
+            assert_eq!(port, if operation == "tcping" { "80" } else { "5201" });
+            for target in [
+                "8.8.8.8:443",
+                "127.0.0.1:80",
+                "[2001:db8::1]:443",
+                "[::ffff:8.8.8.8]:443",
+                "[::1]:80",
+                "[fe80::1%1]:443",
+                "[fd42::1%1]:443",
+                "example.com:443",
+                "10.0.0.1:0",
+                "10.0.0.1:65536",
+                "10.0.0.1:-1",
+                "10.0.0.1:+80",
+                "10.0.0.1:1.5",
+                "10.0.0.1:",
+                "10.0.0.1:443 --reverse",
+                "10.0.0.1:443;id",
+                "http://10.0.0.1:443",
+                "[fd42::1]:0",
+            ] {
+                assert!(commands(&json!({"operation":operation,"target":target})).is_err(), "{operation} {target}");
+            }
+        }
+        for operation in ["ping", "mtr", "bgp"] {
+            assert!(commands(&json!({"operation":operation,"target":"10.0.0.1:443"})).is_err(), "ports are only valid for TCP operations");
+        }
+    }
+
     #[test]
     fn bounds_probes_and_as_path_queries() {
         for operation in ["ping", "mtr", "iperf"] {

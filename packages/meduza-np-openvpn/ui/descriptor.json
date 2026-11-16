@@ -105,7 +105,6 @@
             "bgp.exportLan",
             "bgp.exportInternal",
             "bgp.exportMappings",
-            "bgp.exportAccessPools",
             "bgp.exportDefaultRoute",
             "bgp.exportExtra",
             "bgp.noTransit",

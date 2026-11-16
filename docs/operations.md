@@ -727,6 +727,24 @@ the corresponding staticKeyDirection before upgrading only one side, or coordina
 configuration. Previously imported explicit static key directions under tls.keyDirection must be
 moved to staticKeyDirection. This release does not reinterpret the TLS field in static mode.
 
+### Advertise OpenVPN Access return routes to BGP peers
+
+In the node's **Settings → Network** tab, enable **Advertise OpenVPN Access routes to BGP**.
+This advertises the client address pools of all enabled OpenVPN Access servers on that node so
+BGP peers can route back to VPN clients. It defaults to off and requires the node's BGP routing
+and peering to be configured. Save/apply; added or disabled Access servers follow the setting
+automatically on subsequent applies. Disabling the switch withdraws those originated pools.
+
+The Manager document stores `nodes.<id>.routing.originate.access`. Manager expands it to the
+existing `routing.originate.accessPools` instance list and each peer's export policy, so the
+feature uses the existing node protocol. The updated FRR package additionally excludes disabled
+or non-Access entries when resolving manually written instance lists. The control is removed
+from individual WireGuard/OpenVPN BGP forms. Earlier connection switches or explicit pool lists
+migrate to the node setting; an explicitly disabled new setting takes precedence.
+
+This setting advertises Access pools to BGP peers; the following setting sends FRR routes to
+VPN clients. Select them independently for the required traffic direction.
+
 ### Push FRR routes to OpenVPN Access clients
 
 In Manager or Dashboard, edit the Access instance, open its Access tab and enable
@@ -781,7 +799,16 @@ Endpoints on the LookingGlass port (not the Dashboard port):
 
 - `GET /api/ilg/status` — package availability.
 - `POST /api/ilg/query` — JSON `{ "operation": "ping", "target": "10.0.0.1" }`.
-  Operations are `ping`, `mtr`, `iperf`, `bgp`; BGP also accepts e.g. `AS65000`.
+  Operations are `ping`, `mtr`, `tcping`, `iperf`, `bgp`; BGP also accepts e.g. `AS65000`.
+  TCPing and iPerf accept `IPv4:port` or `[IPv6]:port`; ports must be 1..65535. Bare IPs use
+  TCPing port 80 or iPerf port 5201. IPv6 with an explicit port always needs brackets.
+
+| Operation | Example target | Meaning |
+| --- | --- | --- |
+| `tcping` | `10.42.10.1:443` | TCP connect probes to port 443 |
+| `tcping` | `[fd42::1]:8443` | TCP connect probes over IPv6 |
+| `iperf` | `10.42.10.45:5202` | iperf3 client using server port 5202 |
+| `iperf` | `[fd42::45]:5203` | iperf3 client over IPv6 using port 5203 |
 
 Example API request:
 
@@ -790,6 +817,16 @@ curl http://NODE:18080/api/ilg/query \
   -H 'Content-Type: application/json' \
   -H 'X-Meduza-LookingGlass: query' \
   -d '{"operation":"bgp","target":"AS65000"}'
+
+curl http://NODE:18080/api/ilg/query \
+  -H 'Content-Type: application/json' \
+  -H 'X-Meduza-LookingGlass: query' \
+  -d '{"operation":"tcping","target":"10.42.10.1:443"}'
+
+curl http://NODE:18080/api/ilg/query \
+  -H 'Content-Type: application/json' \
+  -H 'X-Meduza-LookingGlass: query' \
+  -d '{"operation":"iperf","target":"10.42.10.45:5202"}'
 ```
 
 The response has `results`, each containing `command`, `arguments`, `stdout`, `stderr`, `exitCode`,
@@ -798,6 +835,17 @@ parameters or non-private IP targets are 400, busy/rate-limited is 429, and unav
 is a diagnostic result. When bridge networking is used, expose/publish this additional port explicitly;
 macvlan/host deployments use the configured node listener directly.
 
+TCPing uses built-in Rust TCP connections and needs no `tcping` executable or raw-socket capability.
+It makes four connections, closes each immediately without application data, waits one second
+between attempts and allows two seconds per connect (at most roughly eleven seconds total).
+Its result also includes `target`, numeric `port`, `durationMs`, `samples` and `statistics`.
+Each sample has `sequence`, `connected`, `latencyMs`, `error` and `timedOut`. Statistics contain
+`sent`, `received`, `lossPercent` (failed connection percentage), `minMs`, `avgMs` and `maxMs`.
+Only successful connects contribute latency; with no success all latency statistics are null.
+The common `stdout` contains readable probe lines and a summary; `exitCode` is 0 if any connect
+succeeds, otherwise 1. A refused or timed-out connection is a diagnostic result, not an HTTP error;
+sample timeouts do not set the overall execution `timedOut` field.
+
 Client source addresses are unrestricted: public, private, loopback and proxied clients may use the
 API without signing in. The restriction applies to **destination IPs**, checked both at the HTTP
 entry point and before the plugin executes a command. Only RFC1918 (`10/8`, `172.16/12`,
@@ -805,14 +853,14 @@ entry point and before the plugin executes a command. Only RFC1918 (`10/8`, `172
 to IPv4 before validation and execution; e.g. `::ffff:10.0.0.1` becomes `10.0.0.1`, while
 `::ffff:8.8.8.8` is rejected. Public, loopback, link-local, CGNAT, unspecified and multicast targets
 are rejected. Forwarded headers cannot change the target policy. The same rule applies to Ping,
-MTR, iperf3 and BGP IP lookups. Numeric/AS-prefixed ASN queries read the local BGP table only and
+MTR, TCPing, iperf3 and BGP IP lookups. Numeric/AS-prefixed ASN queries read the local BGP table only and
 remain available; their returned paths may include public prefixes without probing those prefixes.
 
 Ping and MTR accept numeric IPv4/IPv6 addresses, never DNS names. BGP accepts a numeric ASN,
 `AS65000`, or an IP lookup; ASN queries cover both FRR IPv4 and IPv6 unicast paths containing that
 ASN, including non-best paths retained by FRR. Queries use the existing `meduza` FRR pathspace;
 this package does not install/configure a BGP daemon or change routes. iPerf is **iperf3 client**
-mode: the target must run a server on TCP 5201; one stream runs for five seconds. It measures
+mode: the target must run a server on TCP 5201, or the explicit target port; one stream runs for five seconds. It measures
 node-to-target throughput, not browser-to-node throughput, and never starts an iperf server.
 
 Use system `ping` (iputils) and `vtysh` from the existing FRR installation. Install the

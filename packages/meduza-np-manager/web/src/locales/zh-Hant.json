@@ -120,6 +120,8 @@
   "Name": "名稱",
   "Name (CN)": "名稱（CN）",
   "Network": "網路",
+  "Advertise OpenVPN Access routes to BGP": "發佈 OpenVPN Access 路由至 BGP",
+  "Advertise the address pools of all enabled OpenVPN Access servers to BGP peers so they can route back to VPN clients.": "向 BGP 對端通告本節點所有已啟用 OpenVPN Access 伺服器的位址池，使對端能夠路由回 VPN 用戶端。",
   "New CA": "新增 CA",
   "New certificate authority": "新增憑證授權單位",
   "New invite": "新邀請",

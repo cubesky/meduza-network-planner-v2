@@ -45,7 +45,6 @@ export interface BgpSession {
   exportLan?: boolean;
   exportInternal?: boolean;
   exportMappings?: boolean;
-  exportAccessPools?: boolean;
   exportDefaultRoute?: boolean;
   exportExtra?: string[];
   noTransit?: boolean;
@@ -187,7 +186,7 @@ function prefixRule(filter: string): { prefix: string; le?: number } | null {
 }
 
 /** FRR external neighbor for a session (address and checks are the caller's). */
-function neighborOf(src: SessionSource, address: string): Record<string, unknown> & { id: string; address: string; roaming?: boolean } {
+function neighborOf(src: SessionSource, address: string, exportAccess: boolean): Record<string, unknown> & { id: string; address: string; roaming?: boolean } {
   const b = src.bgp;
   return {
     id: src.id,
@@ -199,7 +198,7 @@ function neighborOf(src: SessionSource, address: string): Record<string, unknown
       lan: b.exportLan !== false,
       internal: !!b.exportInternal,
       mappings: !!b.exportMappings,
-      accessPools: !!b.exportAccessPools,
+      accessPools: exportAccess,
       defaultRoute: !!b.exportDefaultRoute,
       extra: b.exportExtra ?? [],
     },
@@ -259,6 +258,10 @@ export function routingProblems(doc: ClusterDocument): Problem[] {
     }
   }
   for (const [id, spec] of Object.entries(doc.nodes)) {
+    const access = spec.routing?.originate?.access;
+    if (access !== undefined && typeof access !== "boolean") {
+      problems.push({ path: `/nodes/${id}/routing/originate/access`, node: id, message: "must be boolean" });
+    }
     const asn = spec.routing?.asn;
     if (asn === undefined) continue;
     if (!int(asn, 1, 4294967294)) problems.push({ path: `/nodes/${id}/routing/asn`, node: id, message: "ASN must be 1..4294967294" });
@@ -415,12 +418,17 @@ export function compileFrr(nodeId: string, service: Record<string, unknown>, ctx
     if (src.subnets && !src.subnets.some((c) => inSubnet(address, c))) {
       ctx.problems.push({ path: `${src.path}/address`, node: nodeId, message: `${address} is not on ${src.transport} (${src.subnets.join(", ") || "no addresses"})` });
     }
-    const n = neighborOf(src, address);
+    const n = neighborOf(src, address, ctx.doc.nodes[nodeId]?.routing?.originate?.access === true);
     if (roamingPeers.has(address)) n.roaming = true;
     if (src.bgp.bfd && (roamingNode || n.roaming)) {
       ctx.problems.push({ path: `${src.path}/bfd`, node: nodeId, message: "BFD is not used on sessions with a roaming node (it costs bandwidth)" });
     }
     (out.externalNeighbors ??= []).push(n);
+  }
+
+  // Access return routes have one node-wide policy, including explicitly written FRR neighbors.
+  for (const n of out.externalNeighbors ?? []) {
+    n.exportPolicy = { ...(n.exportPolicy as Record<string, unknown> | undefined), accessPools: ctx.doc.nodes[nodeId]?.routing?.originate?.access === true };
   }
 
   // The cluster's prefix filters (D58) apply to every eBGP session that has none of its own.

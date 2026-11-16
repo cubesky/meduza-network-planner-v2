@@ -10,6 +10,52 @@ scheduled "continue" task) must:
 
 Design decisions live in `docs/DECISIONS.md`.
 
+### 2026-11-17 — D111: LookingGlass TCPing and configurable target ports
+
+Add tcping operation using built-in Rust TCP connections, without a tool dependency or raw sockets.
+Four attempts, two-second connect deadlines and one-second gaps keep each query bounded; immediately
+close connections without application data. Preserve common results fields and add per-attempt
+outcomes, target/port/duration and success/loss/min/avg/max statistics. Failures are diagnostics;
+failed connects do not contribute latency, and all-failure statistics use null latency values.
+
+TCPing and iperf accept IPv4:port or [IPv6]:port targets, 1..65535. Bare numeric addresses default to
+80 for TCPing or 5201 for iperf. Shared HTTP/plugin validation normalizes mapped IPv4 and enforces
+RFC1918/RFC4193 destination rules after parsing the port; reject public/loopback targets, hostnames,
+URLs, scope IDs, invalid ports and command fragments. Ping/MTR/BGP keep their existing grammar.
+Pass iperf ports as separate -p arguments; preserve provider priority, five-second/single-stream
+limits and API/planner registration/concurrency/rate gates. No planner or protocol changes needed.
+
+All 12 LookingGlass tests pass (10 unit/API and two executable integration tests), including real
+local TCP connections, all-failure and partial-success statistics/bounds, HTTP rejection before RPC,
+accepted IPv4/IPv6/mapped target forwarding and actual iperf argument separation. Warnings-denied
+Clippy, formatting and diff checks pass. Evidence: target/check-lookingglass-tcping.log and
+target/check-lookingglass-tcping-clippy.log. Update AGENT, operations API examples and D111.
+No deployment, publication or Git staging/commit; preserve preceding D110 changes.
+
+### 2026-11-17 — D110: Access return routes in node Network settings
+
+Move Access BGP advertisement from individual OpenVPN/WireGuard BGP forms to one toggle in the
+node's Settings → Network tab. It advertises local enabled OpenVPN Access client pools for peer
+return routing, separately from pushing FRR routes to VPN clients. Default off. Manager-only
+routing.originate.access expands to the existing node accessPools ID list plus every external
+neighbor's export policy; no new node protocol is required. Added/disabled servers follow the
+switch on apply, and off withdraws the pools. FRR also skips disabled services/instances and
+non-Access entries when resolving explicit pool IDs.
+
+Normalize legacy per-connection switches and pool selections on document/draft reads, draft writes,
+publish and compilation. Explicit new false wins. Keep historical documents/snapshots unchanged;
+normalize draft rebase bases. Validate boolean input before dropping the manager-only field.
+Add Simplified/Traditional Chinese labels and update AGENT, operations and D110.
+
+Manager suite: 107 pass / 3 pre-existing skips / 0 failures, including three new migration/selection/
+publication regressions. Tests verify both BGP transports, new/disabled Access servers, explicit off,
+legacy document reads without history writes, schema-compatible snapshots and invalid flag types.
+FRR: 23 tests pass, including actual network/export/withdrawal rendering and exclusion of client-push
+prefixes. Manager server/web typechecks and production build, translation/descriptor checks, protocol
+manifest/schema tests, warnings-denied FRR Clippy, formatting and diff checks pass.
+Evidence: target/check-access-network-{manager-suite,manager,frr,clippy,protocol,web,tsc}.log.
+No deployment, publication or Git staging/commit.
+
 ### 2026-11-17 — D109: OpenSSL-enabled iperf3 provider
 
 Add optional package 22, meduza-np-iperf3-pkg: static musl iperf3 3.22 with pinned OpenSSL 3.5.9
@@ -672,6 +718,17 @@ Legend: `[ ]` todo, `[~]` in progress, `[x]` done.
   namespace, host LAN not announced → new `frr/main/origination` status, routerId pre-check, capability warning)
 
 ## Session log
+
+- 2026-11-17 (D111): Add native bounded TCPing and IPv4:port/[IPv6]:port targets for TCPing/iperf,
+  with private-target validation at HTTP and execution layers. Add per-sample/connect statistics,
+  port/API documentation and regressions. All 12 LookingGlass tests, Clippy and formatting pass.
+  No deployment or Git staging/commit; retain D110 work.
+
+- 2026-11-17 (D110): Add node Settings → Network toggle for originating all enabled local OpenVPN
+  Access pools and exporting them to BGP peers. Remove per-connection UI controls; migrate legacy
+  requests, respect explicit off and disabled servers, preserve historical data. Manager 107 pass /
+  3 skips, FRR 23 pass, web build, schemas, translations, Clippy and formatting pass. No deployment
+  or Git staging/commit.
 
 - 2026-11-17 (D109): Add static OpenSSL-enabled iperf3 provider, translated resource UI, LookingGlass
   priority/broken-provider handling and complete release/SBOM integration. Targeted Rust/Clippy,

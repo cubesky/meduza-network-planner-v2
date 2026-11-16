@@ -691,13 +691,23 @@ fn origin_sets(cfg: &FrrConfig, req: &PluginRequest) -> Sets {
     }
     public.extend(originate.extra.iter().copied());
     let private = if originate.private_lan { nets.private_lan.clone() } else { Vec::new() };
-    // Access pools by instance id, looked up in the OpenVPN service (only those explicitly listed).
+    // Only explicitly selected, enabled Access servers may originate their client pools.
     let mut access_pools = Vec::new();
-    if let Some(ovpn) = req.config.services.get("openvpn").and_then(|o| o.get("instances")).and_then(Value::as_array) {
+    if let Some(ovpn) = req
+        .config
+        .services
+        .get("openvpn")
+        .filter(|s| s.get("enabled").and_then(Value::as_bool) != Some(false))
+        .and_then(|o| o.get("instances"))
+        .and_then(Value::as_array)
+    {
         for id in &originate.access_pools {
             if let Some(pool) = ovpn
                 .iter()
                 .find(|i| i.get("id").and_then(Value::as_str) == Some(id.as_str()))
+                .filter(|i| {
+                    i.get("enabled").and_then(Value::as_bool) != Some(false) && i.get("kind").and_then(Value::as_str) == Some("access")
+                })
                 .and_then(|i| i.pointer("/access/pool"))
                 .and_then(Value::as_str)
             {
@@ -1669,6 +1679,34 @@ mod tests {
         assert_eq!(procs[0].id, "frr/zebra", "zebra starts first");
         assert!(procs[0].bound_to.is_none());
         assert!(procs[1..].iter().all(|p| p.bound_to.as_deref() == Some("frr/zebra")), "daemons restart with zebra");
+    }
+
+    #[test]
+    fn access_return_routes_are_originated_and_exported_only_for_selected_active_servers() {
+        let mut frr = base();
+        frr["externalNeighbors"][0]["exportPolicy"]["accessPools"] = json!(true);
+        let mut r = req(frr);
+        r.config.routing.as_mut().unwrap().originate.access_pools = serde_json::from_value(json!(["vpn", "off", "site"])).unwrap();
+        r.config.services.insert(
+            "openvpn".into(),
+            json!({"instances":[
+                {"id":"vpn","kind":"access","access":{"pool":"10.88.0.0/24","pushRoutes":{"extra":["10.77.0.0/24"]}}},
+                {"id":"off","kind":"access","enabled":false,"access":{"pool":"10.89.0.0/24"}},
+                {"id":"site","kind":"site2site","access":{"pool":"10.90.0.0/24"}}
+            ]}),
+        );
+        let cfg = load(&r).unwrap();
+        let b = &render(&cfg, &r).unwrap()["bgpd"];
+        assert!(b.contains("network 10.88.0.0/24 route-map MNP_ORIG_PUBLIC"));
+        assert!(b.lines().any(|l| l.starts_with("ip prefix-list MNP_EXT_ISP_EXPORT ") && l.ends_with("permit 10.88.0.0/24")));
+        for prefix in ["10.89.0.0/24", "10.90.0.0/24", "10.77.0.0/24"] {
+            assert!(!b.contains(prefix), "not an enabled Access client pool: {prefix}");
+        }
+        r.config.services.get_mut("openvpn").unwrap()["enabled"] = json!(false);
+        assert!(!render(&cfg, &r).unwrap()["bgpd"].contains("10.88.0.0/24"));
+        r.config.services.get_mut("openvpn").unwrap()["enabled"] = json!(true);
+        r.config.routing.as_mut().unwrap().originate.access_pools.clear();
+        assert!(!render(&cfg, &r).unwrap()["bgpd"].contains("10.88.0.0/24"), "off withdraws origin and export");
     }
 
     #[test]

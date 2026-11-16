@@ -247,11 +247,23 @@ mod tests {
             route(&app, request("/api/ilg/query", Some("10.0.0.1"), Method::POST, "[]", true)).await.status(),
             StatusCode::BAD_REQUEST
         );
-        for operation in ["ping", "mtr", "iperf", "bgp"] {
+        for operation in ["ping", "mtr", "tcping", "iperf", "bgp"] {
             for target in ["8.8.8.8", "2001:4860:4860::8888", "::ffff:8.8.8.8", "127.0.0.1", "fe80::1", "example.com"] {
                 let body = json!({"operation":operation,"target":target}).to_string();
                 let response = route(&app, request("/api/ilg/query", Some("8.8.8.8"), Method::POST, &body, true)).await;
                 assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{operation} {target}");
+            }
+        }
+        for operation in ["tcping", "iperf"] {
+            for target in
+                ["8.8.8.8:443", "[::ffff:8.8.8.8]:443", "[::1]:80", "example.com:443", "10.0.0.1:0", "10.0.0.1:65536", "10.0.0.1:443;id"]
+            {
+                let body = json!({"operation":operation,"target":target}).to_string();
+                assert_eq!(
+                    route(&app, request("/api/ilg/query", None, Method::POST, &body, true)).await.status(),
+                    StatusCode::BAD_REQUEST,
+                    "{operation} {target}"
+                );
             }
         }
         assert_eq!(queries.load(Ordering::SeqCst), 0, "rejected targets never reach planner");
@@ -267,12 +279,22 @@ mod tests {
             StatusCode::OK
         );
         assert_eq!(queries.load(Ordering::SeqCst), 2);
+        for (operation, target) in
+            [("tcping", "10.0.0.1:443"), ("tcping", "[fd42::1]:8443"), ("iperf", "10.0.0.1:5202"), ("iperf", "[::ffff:10.0.0.1]:5203")]
+        {
+            let body = json!({"operation":operation,"target":target}).to_string();
+            let response = route(&app, request("/api/ilg/query", None, Method::POST, &body, true)).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            let response: Value = serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+            assert_eq!(response["target"], target, "forward target and port intact for plugin validation");
+        }
+        assert_eq!(queries.load(Ordering::SeqCst), 6);
         installed.store(false, Ordering::SeqCst);
         assert_eq!(
             route(&app, request("/api/ilg/query", Some("10.0.0.1"), Method::POST, "{}", true)).await.status(),
             StatusCode::NOT_FOUND
         );
-        assert_eq!(queries.load(Ordering::SeqCst), 2);
+        assert_eq!(queries.load(Ordering::SeqCst), 6);
         mock.abort();
         let _ = mock.await;
         let _ = std::fs::remove_dir_all(root);

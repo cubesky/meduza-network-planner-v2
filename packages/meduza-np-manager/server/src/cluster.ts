@@ -12,6 +12,7 @@ import { connectionPolicy } from "./compilers/policy.js";
 import { anycastProblems, frrOf, routingProblems, type AnycastCatalog, type BfdTimers } from "./compilers/frr.js";
 import { mihomoProblems, type MihomoCatalog } from "./compilers/mihomo.js";
 import { dnsLoopProblems } from "./compilers/dns.js";
+import { accessPoolIds, normalizeAccessRouting } from "./access-routing.js";
 
 export const CONFIG_SCHEMA_VERSION = 1;
 
@@ -41,6 +42,7 @@ export interface NodeSpec {
   /**
    * `asn`: the node's own AS, only for nodes outside the internal network (Tinc members are in the internal AS);
    * `anycast`: the Anycast services this node runs (ids of the cluster's routing.anycast.services).
+   * `originate.access`: node-wide OpenVPN Access return-route intent; compiled into the node's accessPools list.
    */
   routing?: { originate?: Record<string, unknown>; asn?: number; anycast?: string[] };
   dns?: { hosts?: Array<{ hostname: string; ips: string[] }> };
@@ -265,6 +267,7 @@ export function compileCluster(
   secrets: SecretSource,
   catalog: PackageCatalog,
 ): CompileResult {
+  doc = normalizeAccessRouting(doc);
   const problems: Problem[] = [];
   if (doc.schemaVersion !== CONFIG_SCHEMA_VERSION) {
     problems.push({ path: "/schemaVersion", message: `unsupported schemaVersion ${doc.schemaVersion}` });
@@ -359,6 +362,7 @@ export function compileCluster(
     problems.push(...containerCapabilityWarnings(nodeId, services, caps));
 
     const updatePolicy = spec.updatePolicy ?? doc.defaults?.updatePolicy;
+    const { access: _access, ...originate } = spec.routing?.originate ?? {};
     const config: Record<string, unknown> = {
       schemaVersion: CONFIG_SCHEMA_VERSION,
       revision: "rev-000000", // replaced at publish time
@@ -373,7 +377,7 @@ export function compileCluster(
       networks: { lan: [], privateLan: [], mappings: [], portForwards: [], healthPorts: [], ...spec.networks },
       services,
       ...(spec.routing || asn !== undefined
-        ? { routing: { ...(asn !== undefined ? { internalAsn: asn } : {}), originate: { lan: false, privateLan: false, mappings: false, ...spec.routing?.originate } } }
+        ? { routing: { ...(asn !== undefined ? { internalAsn: asn } : {}), originate: { lan: false, privateLan: false, mappings: false, ...originate, accessPools: accessPoolIds(spec) } } }
         : {}),
       ...(spec.dns || doc.dns?.hosts?.length ? { dns: { hosts: mergeHosts(doc.dns?.hosts ?? [], spec.dns?.hosts ?? []) } } : {}),
       ...(updatePolicy ? { updatePolicy } : {}),

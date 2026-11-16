@@ -7,6 +7,7 @@ import type { PackageCatalog } from "./packages.js";
 import type { Audit } from "./audit.js";
 import { randomId } from "./audit.js";
 import { canonicalDigest } from "./canonical.js";
+import { normalizeAccessRouting } from "./access-routing.js";
 import {
   compileCluster,
   emptyDocument,
@@ -97,7 +98,7 @@ export class ConfigService {
       "SELECT number, revision, document FROM cluster_revisions ORDER BY number DESC LIMIT 1",
     );
     return row
-      ? { revision: row.revision, number: row.number, document: JSON.parse(row.document) as ClusterDocument }
+      ? { revision: row.revision, number: row.number, document: normalizeAccessRouting(JSON.parse(row.document) as ClusterDocument) }
       : { revision: null, number: null, document: emptyDocument() };
   }
 
@@ -114,7 +115,7 @@ export class ConfigService {
     const now = nowIso();
     this.db.run(
       "INSERT INTO drafts (id, base_revision, document, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-      id, current.number, JSON.stringify(document ?? current.document), actor, now, now,
+      id, current.number, JSON.stringify(normalizeAccessRouting(document ?? current.document)), actor, now, now,
     );
     this.audit.record(actor, "draft.create", id);
     return { id, baseRevision: current.number };
@@ -122,7 +123,7 @@ export class ConfigService {
 
   getDraft(id: string): { id: string; baseRevision: number | null; document: ClusterDocument; status: string; updatedAt: string } | undefined {
     const r = this.db.get<{ id: string; base_revision: number | null; document: string; status: string; updated_at: string }>("SELECT * FROM drafts WHERE id = ?", id);
-    return r ? { id: r.id, baseRevision: r.base_revision, document: JSON.parse(r.document) as ClusterDocument, status: r.status, updatedAt: r.updated_at } : undefined;
+    return r ? { id: r.id, baseRevision: r.base_revision, document: normalizeAccessRouting(JSON.parse(r.document) as ClusterDocument), status: r.status, updatedAt: r.updated_at } : undefined;
   }
 
   listDrafts() {
@@ -130,7 +131,7 @@ export class ConfigService {
   }
 
   updateDraft(id: string, document: ClusterDocument, actor: string): void {
-    const r = this.db.run("UPDATE drafts SET document = ?, updated_at = ? WHERE id = ? AND status = 'open'", JSON.stringify(document), nowIso(), id);
+    const r = this.db.run("UPDATE drafts SET document = ?, updated_at = ? WHERE id = ? AND status = 'open'", JSON.stringify(normalizeAccessRouting(document)), nowIso(), id);
     if (r.changes === 0) throw new Error("draft not found or not open");
     this.audit.record(actor, "draft.update", id);
   }
@@ -155,7 +156,7 @@ export class ConfigService {
     const d = this.getDraft(id);
     if (!d || d.status !== "open") throw new Error("draft not found or not open");
     const baseRow = d.baseRevision === null ? undefined : this.db.get<{ document: string }>("SELECT document FROM cluster_revisions WHERE number = ?", d.baseRevision);
-    const base = baseRow ? (JSON.parse(baseRow.document) as ClusterDocument) : emptyDocument();
+    const base = baseRow ? normalizeAccessRouting(JSON.parse(baseRow.document) as ClusterDocument) : emptyDocument();
     const current = this.currentDocument();
     const merged = rebaseDocument(base, d.document, current.document);
     this.db.run("UPDATE drafts SET document = ?, base_revision = ?, updated_at = ? WHERE id = ?", JSON.stringify(merged.document), current.number, nowIso(), id);
@@ -261,6 +262,7 @@ export class ConfigService {
   // ---- publishing -------------------------------------------------------------------------------------
 
   publish(doc: ClusterDocument, actor: string, opts: { message?: string; draftId?: string; rollbackOf?: string } = {}): PublishOutcome {
+    doc = normalizeAccessRouting(doc);
     const notify: Array<[string, string, string, number]> = [];
     const outcome = this.db.tx(() => {
       const result = this.compile(doc);
